@@ -128,6 +128,7 @@ class RetrievalService:
         remaining_ms = (deadline - perf_counter()) * 1000
         can_rerank = (
             self.settings.rerank_enabled
+            and self.settings.reranker_configured
             and path != "exact"
             and self.model is not None
             and len(rerank_head) > 1
@@ -156,8 +157,17 @@ class RetrievalService:
                 degraded.append("rerank_unavailable")
                 skipped.append({"stage": "rerank", "reason": "model_unavailable_or_timeout"})
         else:
-            reason = "exact_path" if path == "exact" else "disabled_or_not_enough_candidates"
-            if can_rerank and remaining_ms < self.settings.rerank_min_remaining_ms:
+            if path == "exact":
+                reason = "exact_path"
+            elif not self.settings.reranker_configured:
+                reason = "reranker_service_unconfigured"
+            elif not self.settings.rerank_enabled:
+                reason = "rerank_disabled"
+            elif self.model is None:
+                reason = "model_client_unconfigured"
+            elif len(rerank_head) <= 1:
+                reason = "not_enough_candidates"
+            else:
                 reason = "insufficient_remaining_budget"
             skipped.append({"stage": "rerank", "reason": reason})
 

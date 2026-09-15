@@ -44,6 +44,67 @@ class InMemoryRepository:
     def get_knowledge_base(self, kb_id: UUID) -> KnowledgeBase | None:
         return self.knowledge_bases.get(kb_id)
 
+    def list_knowledge_bases(self, _principal=None) -> list[dict]:
+        return [
+            {**kb.model_dump(), "role": "admin"}
+            for kb in sorted(self.knowledge_bases.values(), key=lambda item: item.name.lower())
+        ]
+
+    def list_documents(self, kb_id: UUID, limit: int, offset: int) -> list[dict]:
+        documents = sorted(
+            (
+                document
+                for document in self.documents.values()
+                if document.kb_id == kb_id and document.deleted_at is None
+            ),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )[offset : offset + limit]
+        result = []
+        for document in documents:
+            versions = sorted(
+                (v for v in self.versions.values() if v.document_id == document.id),
+                key=lambda item: item.created_at,
+                reverse=True,
+            )
+            latest = versions[0] if versions else None
+            active = next((v for v in versions if v.status == VersionStatus.PUBLISHED), None)
+            result.append(
+                {
+                    **document.model_dump(exclude={"deleted_at"}),
+                    "version_count": len(versions),
+                    "latest_version_id": latest.id if latest else None,
+                    "latest_version_status": latest.status if latest else None,
+                    "active_version_id": active.id if active else None,
+                    "active_business_version": active.business_version if active else None,
+                }
+            )
+        return result
+
+    def get_document_detail(self, document_id: UUID) -> dict | None:
+        document = self.documents.get(document_id)
+        if document is None or document.deleted_at is not None:
+            return None
+        versions = sorted(
+            (v for v in self.versions.values() if v.document_id == document.id),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+        active = next((v for v in versions if v.status == VersionStatus.PUBLISHED), None)
+        return {
+            **document.model_dump(exclude={"deleted_at"}),
+            "active_version_id": active.id if active else None,
+            "versions": [
+                {
+                    **version.model_dump(),
+                    "original_filename": None,
+                    "media_type": None,
+                    "is_active": active is not None and version.id == active.id,
+                }
+                for version in versions
+            ],
+        }
+
     def create_document(self, document: Document, version: DocumentVersion, job: Job) -> None:
         with self._lock:
             self.documents[document.id] = document

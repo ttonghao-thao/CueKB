@@ -28,11 +28,13 @@ class Models:
         embedding_path = snapshot_download(
             settings.embedding_model, revision=settings.embedding_revision
         )
-        reranker_path = snapshot_download(
-            settings.reranker_model, revision=settings.reranker_revision
-        )
         self.embedding = BGEM3FlagModel(embedding_path, use_fp16=settings.model_use_fp16)
-        self.reranker = FlagReranker(reranker_path, use_fp16=settings.model_use_fp16)
+        self.reranker = None
+        if settings.reranker_configured and settings.reranker_revision:
+            reranker_path = snapshot_download(
+                settings.reranker_model, revision=settings.reranker_revision
+            )
+            self.reranker = FlagReranker(reranker_path, use_fp16=settings.model_use_fp16)
         self.lock = Lock()
 
 
@@ -58,7 +60,8 @@ def health() -> dict:
     return {
         "status": "ok",
         "embedding_revision": settings.embedding_revision,
-        "reranker_revision": settings.reranker_revision,
+        "reranker_revision": settings.reranker_revision or None,
+        "reranker_loaded": models().reranker is not None,
     }
 
 
@@ -84,11 +87,14 @@ def embed(request: EmbedRequest) -> dict:
 
 @app.post("/rerank")
 def rerank(request: RerankRequest) -> dict:
+    reranker = models().reranker
+    if reranker is None:
+        raise HTTPException(503, "reranker_not_configured")
     if not slots.acquire(blocking=False):
         raise HTTPException(429, "model_overloaded")
     try:
         with models().lock:
-            values = models().reranker.compute_score(
+            values = reranker.compute_score(
                 [[request.query, passage] for passage in request.passages], normalize=True
             )
         scores = (

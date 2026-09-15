@@ -8,7 +8,7 @@ from cuekb.config import Settings
 from cuekb.security import hash_api_key
 
 
-def test_production_api_requires_auth_secrets_and_pinned_models() -> None:
+def test_production_api_requires_auth_secrets_and_pinned_embedding() -> None:
     with pytest.raises(ValidationError):
         Settings(backend="production", process_role="api")
 
@@ -18,9 +18,28 @@ def test_production_api_requires_auth_secrets_and_pinned_models() -> None:
         api_key_pepper="p" * 32,
         bootstrap_api_key="k" * 24,
         embedding_revision="embedding-commit",
-        reranker_revision="reranker-commit",
     )
     assert settings.backend == "production"
+    assert not settings.reranker_configured
+
+
+def test_production_requires_reranker_revision_only_when_service_is_configured() -> None:
+    with pytest.raises(ValidationError, match="pinned reranker revision"):
+        Settings(
+            backend="production",
+            process_role="worker",
+            embedding_revision="embedding-commit",
+            reranker_service_url="http://reranker:8090",
+        )
+
+    settings = Settings(
+        backend="production",
+        process_role="worker",
+        embedding_revision="embedding-commit",
+        reranker_service_url="http://reranker:8090",
+        reranker_revision="reranker-commit",
+    )
+    assert settings.reranker_configured
 
 
 def test_api_key_hash_is_peppered_and_does_not_contain_secret() -> None:

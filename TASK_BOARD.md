@@ -2,7 +2,7 @@
 
 版本：v0.1。更新时间：2026-09-15。
 
-当前编码状态：**M0、M1、M2已完成；M3、M4待开始；M5待确认。**
+当前编码状态：**M0、M1、M2及首期管理门户已完成；M3、M4待开始；生成式回答待确认。**
 
 ## 状态口径
 
@@ -29,8 +29,9 @@
 | 关键词检索 | OpenSearch CJK BM25、知识库/文档/产品/版本过滤和有界候选 | `adapters/opensearch.py`、`services/retrieval.py` |
 | 语义检索 | 固定修订BGE-M3、文档向量、查询向量、OpenSearch k-NN、模型和索引维度校验 | `model_server.py`、`model_client.py`、`adapters/opensearch.py` |
 | 检索编排 | `auto`/`exact`/`hybrid`/`related`路由、BM25与向量并行召回、RRF、PG最终过滤和版本切换重试 | `services/retrieval.py` |
-| 重排与降级 | 固定修订reranker、有界候选、deadline和负载门禁、模型故障降级、执行阶段返回字段 | `model_server.py`、`model_client.py`、`services/retrieval.py` |
+| 重排与降级 | 独立重排地址；未配置时默认跳过；配置后执行固定revision、有界候选、deadline/负载门禁和故障降级 | `model_server.py`、`model_client.py`、`services/retrieval.py` |
 | 对外接口 | 知识库、API Key、ACL、文件/文本导入、任务、发布、原文、删除、检索和健康接口 | `api/routes.py`、`schemas.py`、`docs/API_GUIDE.md` |
+| 管理门户 | API Key连接、知识库选择、批量文件导入、任务轮询、文档与版本管理、原文下载、删除和检索验证 | `portal/`、`api/routes.py`、`adapters/postgres.py` |
 | 自动化检查 | API/检索/解析/路径选择/配置门禁/密钥/文件边界测试及生产验收脚本 | `tests/`、`scripts/acceptance-production.py` |
 
 ## 待开始
@@ -53,7 +54,6 @@
 
 | 候选能力 | 需要确认的范围 |
 | --- | --- |
-| Web门户 | 搜索、导入、原文和版本管理页面的首期页面范围 |
 | 生成式回答 | 是否提供回答API、模型部署方式、引用格式和客服系统责任边界 |
 | OIDC身份适配 | 生产身份提供方、issuer、audience、角色和知识库映射 |
 | 对象存储适配 | 目标对象存储产品、凭据方式、加密、保留和备份策略 |
@@ -73,7 +73,7 @@
 | M2 混合检索 | **已完成** | Embedding、向量召回、RRF、重排、deadline路由和降级 |
 | M3 轻量关系与上下文 | **待开始** | 关系写入、一跳扩展和完整上下文预算 |
 | M4 质量与运行能力 | **待开始** | 证据判定、评测工具、统一错误和运行指标 |
-| M5 门户与可选回答 | **待确认** | 门户、生成式回答及其部署边界 |
+| M5 门户与可选回答 | **部分完成** | 首期门户已完成；生成式回答及其部署边界待确认 |
 
 ## 验证活动
 
@@ -81,7 +81,7 @@
 
 | 验证活动 | 状态 | 当前记录 |
 | --- | --- | --- |
-| 本地单元/API/静态检查 | **已完成** | 13项Pytest、Ruff、Pyright、compileall、Compose schema、YAML、SQL解析、OpenAPI和文档示例通过 |
+| 本地单元/API/静态检查 | **已完成** | 17项Pytest、Ruff、Pyright、compileall、Compose schema、YAML、SQL解析、OpenAPI和文档示例通过；门户浏览器渲染、知识库/文档列表及检索调用通过且控制台无错误 |
 | 冻结依赖安全审计 | **已完成** | `pip-audit`检查全部extras，未发现已知漏洞 |
 | Docker目标环境启动 | **待开始** | 执行Compose构建、迁移、健康检查和生产验收脚本 |
 | 真实语料质量评测 | **待开始** | 中文扫描件、复杂表格、型号/版本、无答案和多证据样本 |
@@ -92,7 +92,7 @@
 ## 当前检查点
 
 - P1至P4以及M0至M2的编码状态均为**已完成**。
-- `exact`路径跳过Embedding和重排；`hybrid`执行BM25与向量召回；重排受配置、deadline、候选数和模型负载控制。
+- `exact`路径跳过Embedding和重排；`hybrid`执行BM25与向量召回；未配置重排地址时默认跳过重排，配置后继续受开关、deadline、候选数和模型负载控制。
 - 生产模式强制使用PostgreSQL、OpenSearch、固定模型revision和API密钥，不会回退内存模式。
-- 下一项编码工作从M3开始；门户、生成式回答、OIDC、对象存储、多`scope`和高可用拓扑保持**待确认**。
+- 首期门户编码已完成；下一项核心编码工作从M3开始；生成式回答、OIDC、对象存储、多`scope`和高可用拓扑保持**待确认**。
 - 本轮修改尚未提交或推送远程。

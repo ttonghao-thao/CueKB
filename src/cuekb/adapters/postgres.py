@@ -182,6 +182,81 @@ class PostgreSQLRepository:
             )
         return KnowledgeBase(**row) if row else None
 
+    def list_knowledge_bases(self, principal: Principal | None) -> list[dict]:
+        if principal is None:
+            raise PermissionError("authentication_required")
+        with self.engine.connect() as conn:
+            if principal.is_system_admin:
+                rows = conn.execute(
+                    text(
+                        "SELECT kb.*, 'admin' role FROM knowledge_bases kb ORDER BY lower(kb.name),kb.id"
+                    )
+                ).mappings()
+            else:
+                rows = conn.execute(
+                    text(
+                        "SELECT kb.*,g.role::text role FROM knowledge_bases kb JOIN kb_grants g ON g.kb_id=kb.id WHERE g.principal_id=:p ORDER BY lower(kb.name),kb.id"
+                    ),
+                    {"p": principal.id},
+                ).mappings()
+            return [dict(row) for row in rows]
+
+    def list_documents(self, kb_id: UUID, limit: int, offset: int) -> list[dict]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT d.id,d.kb_id,d.name,d.created_at,
+                           count(v.id)::integer version_count,
+                           latest.id latest_version_id,
+                           latest.status::text latest_version_status,
+                           publication.active_version_id,
+                           active.business_version active_business_version
+                    FROM documents d
+                    LEFT JOIN document_versions v ON v.document_id=d.id
+                    LEFT JOIN LATERAL (
+                        SELECT id,status FROM document_versions
+                        WHERE document_id=d.id ORDER BY created_at DESC,id DESC LIMIT 1
+                    ) latest ON true
+                    LEFT JOIN document_publications publication
+                      ON publication.document_id=d.id AND publication.scope_key='default'
+                    LEFT JOIN document_versions active ON active.id=publication.active_version_id
+                    WHERE d.kb_id=:kb AND d.deleted_at IS NULL
+                    GROUP BY d.id,latest.id,latest.status,publication.active_version_id,
+                             active.business_version
+                    ORDER BY d.created_at DESC,d.id DESC LIMIT :limit OFFSET :offset
+                    """
+                ),
+                {"kb": kb_id, "limit": limit, "offset": offset},
+            ).mappings()
+            return [dict(row) for row in rows]
+
+    def get_document_detail(self, document_id: UUID) -> dict | None:
+        with self.engine.connect() as conn:
+            document = (
+                conn.execute(
+                    text(
+                        "SELECT d.id,d.kb_id,d.name,d.created_at,p.active_version_id FROM documents d LEFT JOIN document_publications p ON p.document_id=d.id AND p.scope_key='default' WHERE d.id=:id AND d.deleted_at IS NULL"
+                    ),
+                    {"id": document_id},
+                )
+                .mappings()
+                .first()
+            )
+            if document is None:
+                return None
+            rows = conn.execute(
+                text(
+                    "SELECT id,content_sha256,business_version,scope,status::text status,original_filename,media_type,created_at FROM document_versions WHERE document_id=:id ORDER BY created_at DESC,id DESC"
+                ),
+                {"id": document_id},
+            ).mappings()
+            active_id = document["active_version_id"]
+            return {
+                **dict(document),
+                "versions": [{**dict(row), "is_active": row["id"] == active_id} for row in rows],
+            }
+
     def create_ingestion_job(
         self,
         *,

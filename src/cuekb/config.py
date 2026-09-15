@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     api_key_pepper: str = ""
     bootstrap_api_key: str = ""
     model_service_url: str = "http://localhost:8090"
+    reranker_service_url: str = ""
     embedding_model: str = "BAAI/bge-m3"
     embedding_revision: str = ""
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
@@ -42,6 +43,10 @@ class Settings(BaseSettings):
     exact_identifier_pattern: str = (
         r"^(?:[A-Za-z][A-Za-z0-9_.:/+-]*\d[A-Za-z0-9_.:/+-]*|[A-Z][A-Z0-9_./:-]{2,})$"
     )
+
+    @property
+    def reranker_configured(self) -> bool:
+        return bool(self.reranker_service_url.strip())
 
     @model_validator(mode="after")
     def validate_production(self) -> "Settings":
@@ -58,10 +63,12 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "production requires CUEKB_BOOTSTRAP_API_KEY with at least 24 characters"
                 )
-        if self.backend == "production" and (
-            not self.embedding_revision or not self.reranker_revision
-        ):
-            raise ValueError("production requires pinned embedding and reranker revisions")
+        if self.backend == "production" and not self.embedding_revision:
+            raise ValueError("production requires a pinned embedding revision")
+        if self.backend == "production" and self.reranker_configured and not self.reranker_revision:
+            raise ValueError(
+                "production requires a pinned reranker revision when reranker service is configured"
+            )
         return self
 
 

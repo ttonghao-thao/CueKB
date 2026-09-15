@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>CueKB 管理门户</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23176b4d'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-family='sans-serif' font-size='36' font-weight='700' fill='white'%3EC%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/portal/assets/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/portal/"><span class="brand-mark">C</span><span>CueKB</span></a>
+      <p class="brand-subtitle">知识库管理门户</p>
+      <nav aria-label="主要导航">
+        <button class="nav-item active" data-view="documents">文档管理</button>
+        <button class="nav-item" data-view="upload">导入文档</button>
+        <button class="nav-item" data-view="search">检索验证</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="connection-state" class="connection-state">尚未连接</span>
+        <button id="change-key" class="text-button">更换 API Key</button>
+        <a href="/docs" target="_blank" rel="noreferrer">API 文档 ↗</a>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">当前知识库</p>
+          <select id="kb-select" aria-label="当前知识库" disabled>
+            <option>请先连接</option>
+          </select>
+        </div>
+        <div id="kb-role" class="role-badge" hidden></div>
+      </header>
+
+      <section id="view-documents" class="view active">
+        <div class="page-heading">
+          <div><p class="eyebrow">内容资产</p><h1>文档管理</h1><p>查看当前文档、发布版本和处理状态。</p></div>
+          <button class="primary" data-go="upload">＋ 导入文档</button>
+        </div>
+        <div class="toolbar">
+          <label class="search-field"><span>搜索</span><input id="document-filter" type="search" placeholder="按文档名称筛选"></label>
+          <button id="refresh-documents" class="secondary">刷新</button>
+        </div>
+        <div id="document-list" class="panel table-panel"></div>
+      </section>
+
+      <section id="view-upload" class="view">
+        <div class="page-heading"><div><p class="eyebrow">语料入库</p><h1>导入文档</h1><p>支持 PDF、DOCX、Markdown 和 TXT，单文件大小受服务端配置限制。</p></div></div>
+        <form id="upload-form" class="panel form-panel">
+          <div id="drop-zone" class="drop-zone" tabindex="0">
+            <input id="file-input" type="file" multiple accept=".pdf,.docx,.md,.markdown,.txt" hidden>
+            <div class="upload-icon">⇧</div>
+            <strong>拖拽文件到这里，或点击选择</strong>
+            <span>可以一次选择多个文件</span>
+          </div>
+          <div id="selected-files" class="selected-files"></div>
+          <div class="field-grid">
+            <label><span>业务版本（可选）</span><input id="business-version" maxlength="100" placeholder="例如 2026.09"></label>
+            <label><span>新版本所属文档 ID（可选）</span><input id="existing-document-id" placeholder="留空则创建新文档"></label>
+          </div>
+          <label class="check-row"><input id="auto-publish" type="checkbox" checked><span>处理成功后自动发布</span></label>
+          <div class="form-actions"><button id="upload-button" class="primary" type="submit">开始导入</button></div>
+        </form>
+        <div id="upload-jobs" class="job-list"></div>
+      </section>
+
+      <section id="view-search" class="view">
+        <div class="page-heading"><div><p class="eyebrow">上线前检查</p><h1>检索验证</h1><p>直接查看知识库返回的原文证据和检索路径。</p></div></div>
+        <form id="search-form" class="panel search-panel">
+          <textarea id="query" maxlength="2000" placeholder="输入客服问题或关键词…" required></textarea>
+          <div class="search-options">
+            <label><span>检索模式</span><select id="search-mode"><option value="auto">自动</option><option value="exact">精确</option><option value="hybrid">混合</option></select></label>
+            <label><span>返回数量</span><select id="top-k"><option>5</option><option selected>8</option><option>10</option><option>20</option></select></label>
+            <button class="primary" type="submit">开始检索</button>
+          </div>
+        </form>
+        <div id="search-summary"></div>
+        <div id="search-results" class="results"></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="key-dialog">
+    <form id="key-form" method="dialog">
+      <p class="eyebrow">安全连接</p><h2>连接 CueKB</h2>
+      <p>请输入有权访问知识库的 API Key。密钥仅保存在当前浏览器标签页。</p>
+      <label><span>API Key</span><input id="api-key" type="password" autocomplete="off" placeholder="ck_…" required></label>
+      <p id="key-error" class="error-text" role="alert"></p>
+      <div class="dialog-actions"><button class="primary" type="submit">连接</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="document-dialog" class="wide-dialog">
+    <div id="document-detail"></div>
+    <div class="dialog-actions"><button class="secondary" data-close-dialog>关闭</button></div>
+  </dialog>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  <script src="/portal/assets/app.js" defer></script>
+</body>
+</html>

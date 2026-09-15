@@ -43,6 +43,7 @@ def runtime() -> Runtime:
         models=HttpModelClient(
             settings.model_service_url,
             settings.embedding_revision,
+            settings.reranker_service_url,
             settings.reranker_revision,
         ),
         storage=LocalFileStorage(settings.storage_path),

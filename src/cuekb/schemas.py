@@ -1,9 +1,16 @@
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from cuekb.domain.models import EvidenceStatus, RetrievalMode, RetrievalStatus, SourceAnchor
+from cuekb.domain.models import (
+    EvidenceStatus,
+    RetrievalMode,
+    RetrievalStatus,
+    SourceAnchor,
+    VersionStatus,
+)
 
 
 class KnowledgeBaseCreate(BaseModel):
@@ -100,3 +107,46 @@ class ApiKeyCreated(BaseModel):
 class GrantCreate(BaseModel):
     principal_id: UUID
     role: str = Field(pattern="^(read|write|admin)$")
+
+
+class KnowledgeBaseAccess(BaseModel):
+    id: UUID
+    name: str
+    description: str
+    content_revision: int
+    acl_revision: int
+    role: Literal["read", "write", "admin"]
+    created_at: datetime
+
+
+class DocumentSummary(BaseModel):
+    id: UUID
+    kb_id: UUID
+    name: str
+    created_at: datetime
+    version_count: int
+    latest_version_id: UUID | None = None
+    latest_version_status: VersionStatus | None = None
+    active_version_id: UUID | None = None
+    active_business_version: str | None = None
+
+
+class DocumentVersionInfo(BaseModel):
+    id: UUID
+    content_sha256: str
+    business_version: str | None = None
+    scope: dict[str, Any]
+    status: VersionStatus
+    original_filename: str | None = None
+    media_type: str | None = None
+    created_at: datetime
+    is_active: bool = False
+
+
+class DocumentDetail(BaseModel):
+    id: UUID
+    kb_id: UUID
+    name: str
+    created_at: datetime
+    active_version_id: UUID | None = None
+    versions: list[DocumentVersionInfo]

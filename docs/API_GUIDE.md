@@ -56,6 +56,18 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 
 `POST /v1/documents/text`保留给直接提交UTF-8文本的系统。生产模式同样必须提供`Idempotency-Key`，成功后由Worker自动发布。
 
+## 管理查询接口
+
+管理门户使用下列只读接口；它们与导入、检索接口使用相同的Bearer API Key和知识库ACL。
+
+| 接口 | 返回内容 | 最低权限 |
+| --- | --- | --- |
+| `GET /v1/knowledge-bases` | 当前API Key可访问的知识库及其`read/write/admin`角色 | 已认证 |
+| `GET /v1/documents?kb_id=<UUID>&limit=100&offset=0` | 未删除文档、最新状态、当前发布版本和版本数量 | `read` |
+| `GET /v1/documents/{document_id}` | 文档信息、全部版本、状态和当前发布版本 | `read` |
+
+内置管理门户位于`/portal/`。API Key仅进入当前标签页的`sessionStorage`，浏览器请求仍直接调用本章接口，不建立额外Cookie会话。
+
 ```json
 {
   "kb_id": "替换为UUID",
@@ -87,7 +99,7 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 | --- | --- |
 | `mode=auto` | 明确标识符走exact短路径，其他问题走hybrid |
 | `mode=exact` | BM25关键词路径，明确跳过Embedding和重排 |
-| `mode=hybrid` | BM25与查询Embedding/向量召回并行，RRF融合；在剩余预算足够时重排 |
+| `mode=hybrid` | BM25与查询Embedding/向量召回并行并用RRF融合；仅在服务端配置重排地址后才可能重排 |
 | `mode=related` | 当前使用hybrid主链路并标记范围受限；关系扩展代码状态为**待开始** |
 | `top_k` | 1–20，默认8；合法结果不足时不会放松权限或版本约束凑满 |
 
@@ -101,10 +113,13 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
   "degraded_reasons": [],
   "scope_limited": false,
   "content_revisions": {"知识库UUID": 3},
-  "timings_ms": {"keyword": 8.1, "embedding": 21.4, "vector": 13.8, "rerank": 90.4, "total": 151.0},
+  "timings_ms": {"keyword": 8.1, "embedding": 21.4, "vector": 13.8, "total": 60.0},
   "retrieval_path": "hybrid",
-  "executed_stages": ["keyword", "embedding", "vector", "rrf", "rerank"],
-  "skipped_stages": [{"stage": "route", "reason": "auto_natural_language"}],
+  "executed_stages": ["keyword", "embedding", "vector", "rrf"],
+  "skipped_stages": [
+    {"stage": "route", "reason": "auto_natural_language"},
+    {"stage": "rerank", "reason": "reranker_service_unconfigured"}
+  ],
   "hits": [{
     "chunk_id": "内容块UUID", "document_id": "文档UUID", "version_id": "版本UUID",
     "rank": 1, "source_text": "原文证据", "context": "必要上下文",
@@ -118,9 +133,9 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 
 `retrieval_status=degraded`时仍可使用已经通过PG权限/删除/发布版本校验的`hits`，同时必须保留`degraded_reasons`；常见值为`vector_unavailable`和`rerank_unavailable`。`not_found`表示合法候选为空，不等于知识事实不存在。`evidence_status=unassessed`表示系统尚未判定证据充分性，排名和模型分数不是事实真实性概率。
 
-`retrieval_path`、`executed_stages`和`skipped_stages`说明本次真实执行路径。例如exact请求的`executed_stages`不应包含`embedding`；重排因候选不足、关闭或剩余预算不足时会记录跳过原因。
+`retrieval_path`、`executed_stages`和`skipped_stages`说明本次真实执行路径。例如exact请求的`executed_stages`不应包含`embedding`；未配置重排地址时记录`reranker_service_unconfigured`，其他跳过原因包括显式关闭、候选不足和剩余预算不足。
 
-这些选择不是调用模型临时猜测，也不是只能改源码的硬编码。调用方可用`mode`明确选择exact或hybrid；auto根据服务端可配置的标识符规则确定路径。重排还同时检查`CUEKB_RERANK_ENABLED`、候选数量、`CUEKB_RERANK_MIN_REMAINING_MS`和请求总deadline。模型服务繁忙时会快速返回429，检索服务保留已经通过权威校验的RRF结果并标记`rerank_unavailable`。
+这些选择不是调用模型临时猜测，也不是只能改源码的硬编码。调用方可用`mode`明确选择exact或hybrid；auto根据服务端可配置的标识符规则确定路径。Embedding始终使用`CUEKB_MODEL_SERVICE_URL`。重排默认不执行；服务端配置`CUEKB_RERANKER_SERVICE_URL`后，还会检查`CUEKB_RERANK_ENABLED`、候选数量、`CUEKB_RERANK_MIN_REMAINING_MS`和请求总deadline。重排模型繁忙时会快速返回429，检索服务保留已经通过权威校验的RRF结果并标记`rerank_unavailable`。
 
 原件可通过`GET /v1/documents/{document_id}/source`下载当前发布版本；指定历史版本可附`?version_id=<UUID>`，仍执行知识库读权限和删除状态检查。
 

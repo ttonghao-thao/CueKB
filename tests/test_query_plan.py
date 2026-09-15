@@ -53,7 +53,7 @@ def test_auto_exact_identifier_skips_embedding_and_rerank() -> None:
 
 
 def test_hybrid_uses_embedding_and_bounded_rerank() -> None:
-    kb, model, retrieval = build()
+    kb, model, retrieval = build(Settings(reranker_service_url="http://reranker:8090"))
     result = retrieval.search_evidence(
         SearchRequest(query="链路为什么异常", kb_ids=[kb.id], mode=RetrievalMode.HYBRID)
     )
@@ -63,8 +63,24 @@ def test_hybrid_uses_embedding_and_bounded_rerank() -> None:
     assert result.executed_stages == ["keyword", "embedding", "vector", "rrf", "rerank"]
 
 
+def test_hybrid_skips_rerank_when_service_is_unconfigured() -> None:
+    kb, model, retrieval = build()
+    result = retrieval.search_evidence(
+        SearchRequest(query="链路为什么异常", kb_ids=[kb.id], mode=RetrievalMode.HYBRID)
+    )
+    assert model.embed_calls == 1
+    assert model.rerank_calls == 0
+    assert {item["reason"] for item in result.skipped_stages} >= {"reranker_service_unconfigured"}
+
+
 def test_hybrid_skips_rerank_when_deadline_budget_is_too_small() -> None:
-    kb, model, retrieval = build(Settings(search_deadline_ms=100, rerank_min_remaining_ms=500))
+    kb, model, retrieval = build(
+        Settings(
+            reranker_service_url="http://reranker:8090",
+            search_deadline_ms=100,
+            rerank_min_remaining_ms=500,
+        )
+    )
     result = retrieval.search_evidence(
         SearchRequest(query="链路为什么异常", kb_ids=[kb.id], mode=RetrievalMode.HYBRID)
     )

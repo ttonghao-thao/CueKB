@@ -22,9 +22,12 @@ from cuekb.schemas import (
     ApiKeyCreate,
     ApiKeyCreated,
     DocumentCreate,
+    DocumentDetail,
     DocumentMetadata,
+    DocumentSummary,
     GrantCreate,
     HealthResponse,
+    KnowledgeBaseAccess,
     KnowledgeBaseCreate,
     PublishRequest,
     SearchRequest,
@@ -62,6 +65,13 @@ def create_knowledge_base(
             raise HTTPException(403, "system_admin_required")
         return repo.create_knowledge_base(KnowledgeBase(**request.model_dump()), principal)
     return IngestionService(repo, search_backend()).create_knowledge_base(request)
+
+
+@router.get("/knowledge-bases", response_model=list[KnowledgeBaseAccess], tags=["knowledge-bases"])
+def list_knowledge_bases(
+    principal: Principal | None = Depends(current_principal),
+) -> list[KnowledgeBaseAccess]:
+    return [KnowledgeBaseAccess(**row) for row in repository().list_knowledge_bases(principal)]
 
 
 def _queue(
@@ -181,6 +191,39 @@ def get_job(job_id: UUID, principal: Principal | None = Depends(current_principa
     if isinstance(repo, PostgreSQLRepository):
         repo.require_role(principal, [job.kb_id], "read")
     return job
+
+
+@router.get("/documents", response_model=list[DocumentSummary], tags=["documents"])
+def list_documents(
+    kb_id: UUID,
+    limit: int = 100,
+    offset: int = 0,
+    principal: Principal | None = Depends(current_principal),
+) -> list[DocumentSummary]:
+    if not 1 <= limit <= 200 or offset < 0:
+        raise HTTPException(422, "invalid_pagination")
+    repo = repository()
+    if isinstance(repo, PostgreSQLRepository):
+        repo.require_role(principal, [kb_id], "read")
+    elif repo.get_knowledge_base(kb_id) is None:
+        raise HTTPException(404, "knowledge_base_not_found")
+    return [DocumentSummary(**row) for row in repo.list_documents(kb_id, limit, offset)]
+
+
+@router.get("/documents/{document_id}", response_model=DocumentDetail, tags=["documents"])
+def get_document(
+    document_id: UUID, principal: Principal | None = Depends(current_principal)
+) -> DocumentDetail:
+    repo = repository()
+    if isinstance(repo, PostgreSQLRepository):
+        try:
+            repo.require_role(principal, [repo.get_document_kb(document_id)], "read")
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+    detail = repo.get_document_detail(document_id)
+    if detail is None:
+        raise HTTPException(404, "document_not_found")
+    return DocumentDetail(**detail)
 
 
 @router.post("/documents/{document_id}/publish", status_code=204, tags=["documents"])

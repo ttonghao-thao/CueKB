@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 import uuid
 
@@ -59,12 +60,21 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:8080")
     parser.add_argument("--bootstrap-key", required=True)
+    parser.add_argument(
+        "--expect-rerank",
+        action="store_true",
+        default=bool(os.getenv("CUEKB_RERANKER_SERVICE_URL", "").strip()),
+        help="require the configured reranker to execute during hybrid search",
+    )
     args = parser.parse_args()
     run = uuid.uuid4().hex
     with httpx.Client(
         base_url=args.url, headers={"Authorization": f"Bearer {args.bootstrap_key}"}, timeout=30
     ) as admin:
         admin.get("/v1/ready").raise_for_status()
+        portal = admin.get("/portal/")
+        portal.raise_for_status()
+        assert "CueKB 管理门户" in portal.text
         kb = admin.post("/v1/knowledge-bases", json={"name": f"acceptance-{run}"}).json()
         created = admin.post(
             "/v1/api-keys", json={"principal_name": f"acceptance-{run}", "label": "acceptance"}
@@ -80,6 +90,11 @@ def main() -> None:
             headers={"Authorization": f"Bearer {credentials['api_key']}"},
             timeout=30,
         ) as client:
+            accessible = client.get("/v1/knowledge-bases")
+            accessible.raise_for_status()
+            assert any(
+                item["id"] == kb["id"] and item["role"] == "write" for item in accessible.json()
+            )
             first = upload(
                 client,
                 kb["id"],
@@ -96,6 +111,12 @@ def main() -> None:
             )
             assert duplicate["id"] == first["id"], "idempotency did not return original job"
             wait_job(client, first["id"])
+            documents = client.get("/v1/documents", params={"kb_id": kb["id"]})
+            documents.raise_for_status()
+            assert documents.json()[0]["id"] == first["document_id"]
+            detail = client.get(f"/v1/documents/{first['document_id']}")
+            detail.raise_for_status()
+            assert detail.json()["active_version_id"] == first["version_id"]
             source = client.get(f"/v1/documents/{first['document_id']}/source")
             source.raise_for_status()
             assert b"E102" in source.content
@@ -106,7 +127,14 @@ def main() -> None:
             hybrid.raise_for_status()
             hybrid_body = hybrid.json()
             assert "embedding" in hybrid_body["executed_stages"] and hybrid_body["hits"]
-            assert "rerank" in hybrid_body["executed_stages"], hybrid_body
+            if args.expect_rerank:
+                assert "rerank" in hybrid_body["executed_stages"], hybrid_body
+            else:
+                assert "rerank" not in hybrid_body["executed_stages"], hybrid_body
+                assert any(
+                    item["stage"] == "rerank" and item["reason"] == "reranker_service_unconfigured"
+                    for item in hybrid_body["skipped_stages"]
+                ), hybrid_body
             exact = client.post(
                 "/v1/search", json={"query": "E102", "kb_ids": [kb["id"]], "mode": "exact"}
             )
@@ -154,7 +182,10 @@ def main() -> None:
         )
         assert revoked.status_code == 401
     print(
-        "PASS: production auth, ACL, idempotent upload, worker, source, exact/hybrid, embedding, rerank, version switch, revoke and delete"
+        "PASS: production auth, ACL, idempotent upload, worker, source, exact/hybrid, "
+        "embedding, portal management API, "
+        f"rerank={'enabled' if args.expect_rerank else 'disabled'}, version switch, "
+        "revoke and delete"
     )
 
 

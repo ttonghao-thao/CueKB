@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from opensearchpy.exceptions import OpenSearchException
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -14,6 +17,29 @@ def create_app() -> FastAPI:
         description="Cue-driven evidence retrieval service",
     )
     application.include_router(router)
+    portal_dir = Path(__file__).with_name("portal")
+    application.mount("/portal/assets", StaticFiles(directory=portal_dir), name="portal-assets")
+
+    @application.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        return RedirectResponse("/portal/", status_code=307)
+
+    @application.get("/portal/", include_in_schema=False)
+    def portal() -> FileResponse:
+        return FileResponse(portal_dir / "index.html")
+
+    @application.middleware("http")
+    async def portal_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/portal"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+                "form-action 'self'; frame-ancestors 'none'"
+            )
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @application.exception_handler(PermissionError)
     async def permission_error(_: Request, exc: PermissionError) -> JSONResponse:
