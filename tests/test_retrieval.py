@@ -3,7 +3,7 @@ from uuid import uuid4
 from cuekb.adapters.memory import InMemoryRepository, InMemorySearchBackend
 from cuekb.config import Settings
 from cuekb.domain.models import RetrievalStatus
-from cuekb.schemas import DocumentCreate, KnowledgeBaseCreate, SearchRequest
+from cuekb.schemas import DocumentCreate, KnowledgeBaseCreate, SearchFilters, SearchRequest
 from cuekb.services.ingestion import IngestionService
 from cuekb.services.retrieval import RetrievalService, rrf
 
@@ -60,7 +60,7 @@ def test_filter_excludes_wrong_product_context() -> None:
     request = SearchRequest(
         query="E102",
         kb_ids=[kb.id],
-        filters={"product_model": "MODEL_X"},
+        filters=SearchFilters(product_model="MODEL_X"),
     )
     result = retrieval.search_evidence(request)
     assert result.hits

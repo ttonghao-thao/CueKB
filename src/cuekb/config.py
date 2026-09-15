@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,14 +11,58 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8080
     log_level: str = "INFO"
+    backend: str = "memory"
+    process_role: str = "api"
     database_url: str = "postgresql+psycopg://cuekb:cuekb@localhost:5432/cuekb"
     opensearch_url: str = "http://localhost:9200"
     opensearch_index_prefix: str = "cuekb"
-    default_top_k: int = Field(default=8, ge=1, le=20)
-    max_top_k: int = Field(default=20, ge=1, le=100)
+    opensearch_timeout_ms: int = Field(default=500, ge=20, le=5000)
     keyword_candidates: int = Field(default=50, ge=1, le=500)
     vector_candidates: int = Field(default=50, ge=1, le=500)
     rerank_candidates: int = Field(default=30, ge=1, le=100)
+    storage_path: str = "data/originals"
+    max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1024)
+    worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=60)
+    worker_lease_seconds: int = Field(default=300, ge=30, le=3600)
+    worker_max_attempts: int = Field(default=3, ge=1, le=20)
+    api_key_pepper: str = ""
+    bootstrap_api_key: str = ""
+    model_service_url: str = "http://localhost:8090"
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_revision: str = ""
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_revision: str = ""
+    vector_dimension: int = Field(default=1024, ge=1)
+    search_deadline_ms: int = Field(default=900, ge=100, le=10000)
+    model_timeout_ms: int = Field(default=400, ge=20, le=5000)
+    worker_model_timeout_ms: int = Field(default=120000, ge=1000, le=600000)
+    model_use_fp16: bool = False
+    rerank_min_remaining_ms: int = Field(default=180, ge=10, le=5000)
+    rerank_enabled: bool = True
+    exact_identifier_pattern: str = (
+        r"^(?:[A-Za-z][A-Za-z0-9_.:/+-]*\d[A-Za-z0-9_.:/+-]*|[A-Z][A-Z0-9_./:-]{2,})$"
+    )
+
+    @model_validator(mode="after")
+    def validate_production(self) -> "Settings":
+        if self.backend not in {"memory", "production"}:
+            raise ValueError("backend must be memory or production")
+        if self.process_role not in {"api", "worker", "model"}:
+            raise ValueError("process_role must be api, worker, or model")
+        if self.backend == "production" and self.process_role == "api":
+            if not self.api_key_pepper or len(self.api_key_pepper) < 32:
+                raise ValueError(
+                    "production requires CUEKB_API_KEY_PEPPER with at least 32 characters"
+                )
+            if not self.bootstrap_api_key or len(self.bootstrap_api_key) < 24:
+                raise ValueError(
+                    "production requires CUEKB_BOOTSTRAP_API_KEY with at least 24 characters"
+                )
+        if self.backend == "production" and (
+            not self.embedding_revision or not self.reranker_revision
+        ):
+            raise ValueError("production requires pinned embedding and reranker revisions")
+        return self
 
 
 @lru_cache

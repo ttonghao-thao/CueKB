@@ -1,0 +1,15 @@
+**
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!README.md
+!alembic.ini
+!src/
+!src/**
+!migrations/
+!migrations/**
+!db/
+!db/**
+**/__pycache__/
+**/*.py[cod]
+**/.DS_Store

@@ -1,36 +1,144 @@
+---
+x-app-env: &app-env
+  CUEKB_ENV: production
+  CUEKB_BACKEND: production
+  CUEKB_DATABASE_URL: postgresql+psycopg://cuekb:${CUEKB_POSTGRES_PASSWORD:?set CUEKB_POSTGRES_PASSWORD}@postgres:5432/cuekb
+  CUEKB_OPENSEARCH_URL: http://opensearch:9200
+  CUEKB_OPENSEARCH_INDEX_PREFIX: cuekb
+  CUEKB_OPENSEARCH_TIMEOUT_MS: ${CUEKB_OPENSEARCH_TIMEOUT_MS:-500}
+  CUEKB_STORAGE_PATH: /data/originals
+  CUEKB_MAX_UPLOAD_BYTES: ${CUEKB_MAX_UPLOAD_BYTES:-52428800}
+  CUEKB_KEYWORD_CANDIDATES: ${CUEKB_KEYWORD_CANDIDATES:-50}
+  CUEKB_VECTOR_CANDIDATES: ${CUEKB_VECTOR_CANDIDATES:-50}
+  CUEKB_RERANK_CANDIDATES: ${CUEKB_RERANK_CANDIDATES:-30}
+  CUEKB_WORKER_POLL_SECONDS: ${CUEKB_WORKER_POLL_SECONDS:-1}
+  CUEKB_WORKER_LEASE_SECONDS: ${CUEKB_WORKER_LEASE_SECONDS:-300}
+  CUEKB_WORKER_MAX_ATTEMPTS: ${CUEKB_WORKER_MAX_ATTEMPTS:-3}
+  CUEKB_MODEL_SERVICE_URL: http://model:8090
+  CUEKB_EMBEDDING_MODEL: BAAI/bge-m3
+  CUEKB_EMBEDDING_REVISION: ${CUEKB_EMBEDDING_REVISION:?set pinned embedding revision}
+  CUEKB_RERANKER_MODEL: BAAI/bge-reranker-v2-m3
+  CUEKB_RERANKER_REVISION: ${CUEKB_RERANKER_REVISION:?set pinned reranker revision}
+  CUEKB_VECTOR_DIMENSION: ${CUEKB_VECTOR_DIMENSION:-1024}
+  CUEKB_SEARCH_DEADLINE_MS: ${CUEKB_SEARCH_DEADLINE_MS:-900}
+  CUEKB_MODEL_TIMEOUT_MS: ${CUEKB_MODEL_TIMEOUT_MS:-400}
+  CUEKB_WORKER_MODEL_TIMEOUT_MS: ${CUEKB_WORKER_MODEL_TIMEOUT_MS:-120000}
+  CUEKB_RERANK_MIN_REMAINING_MS: ${CUEKB_RERANK_MIN_REMAINING_MS:-180}
+  CUEKB_RERANK_ENABLED: ${CUEKB_RERANK_ENABLED:-true}
+
+x-model-env: &model-env
+  CUEKB_ENV: production
+  CUEKB_BACKEND: production
+  CUEKB_PROCESS_ROLE: model
+  CUEKB_HOST: 0.0.0.0
+  CUEKB_PORT: 8090
+  CUEKB_EMBEDDING_MODEL: BAAI/bge-m3
+  CUEKB_EMBEDDING_REVISION: ${CUEKB_EMBEDDING_REVISION:?set pinned embedding revision}
+  CUEKB_RERANKER_MODEL: BAAI/bge-reranker-v2-m3
+  CUEKB_RERANKER_REVISION: ${CUEKB_RERANKER_REVISION:?set pinned reranker revision}
+  CUEKB_VECTOR_DIMENSION: ${CUEKB_VECTOR_DIMENSION:-1024}
+  CUEKB_MODEL_USE_FP16: ${CUEKB_MODEL_USE_FP16:-false}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17.6-alpine
     environment:
       POSTGRES_DB: cuekb
       POSTGRES_USER: cuekb
-      POSTGRES_PASSWORD: cuekb
-    ports:
-      - "5432:5432"
-    volumes:
-      - cuekb_pg:/var/lib/postgresql/data
+      POSTGRES_PASSWORD: ${CUEKB_POSTGRES_PASSWORD}
+    volumes: [cuekb_pg:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cuekb -d cuekb"]
       interval: 5s
       timeout: 3s
-      retries: 20
+      retries: 30
+    restart: unless-stopped
+    logging: *default-logging
 
   opensearch:
     image: opensearchproject/opensearch:3.0.0
     environment:
       discovery.type: single-node
       plugins.security.disabled: "true"
-      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
-    ports:
-      - "9200:9200"
-    volumes:
-      - cuekb_search:/usr/share/opensearch/data
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+    volumes: [cuekb_search:/usr/share/opensearch/data]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 30
+    restart: unless-stopped
+    logging: *default-logging
+
+  migrate:
+    build: {context: ., target: api}
+    environment:
+      <<: *app-env
+      CUEKB_PROCESS_ROLE: worker
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+    logging: *default-logging
+
+  model:
+    build: {context: ., target: model}
+    environment:
+      <<: *model-env
+    volumes: [cuekb_models:/home/cuekb/.cache/huggingface]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 60
+      start_period: 120s
+    restart: unless-stopped
+    logging: *default-logging
+
+  worker:
+    build: {context: ., target: worker}
+    environment:
+      <<: *app-env
+      CUEKB_PROCESS_ROLE: worker
+    volumes:
+      - cuekb_files:/data/originals
+      - cuekb_worker_cache:/home/cuekb/.cache
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      opensearch: {condition: service_healthy}
+      model: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *default-logging
+
+  api:
+    build: {context: ., target: api}
+    environment:
+      <<: *app-env
+      CUEKB_PROCESS_ROLE: api
+      CUEKB_API_KEY_PEPPER: ${CUEKB_API_KEY_PEPPER:?set CUEKB_API_KEY_PEPPER}
+      CUEKB_BOOTSTRAP_API_KEY: ${CUEKB_BOOTSTRAP_API_KEY:?set CUEKB_BOOTSTRAP_API_KEY}
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: [cuekb_files:/data/originals]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      opensearch: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/v1/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   cuekb_pg:
   cuekb_search:
+  cuekb_files:
+  cuekb_models:
+  cuekb_worker_cache:

@@ -36,7 +36,9 @@ class IngestionService:
 
     @staticmethod
     def _chunk_text(request: DocumentCreate, document_id: UUID, version_id: UUID) -> list[Chunk]:
-        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", request.content) if part.strip()]
+        paragraphs = [
+            part.strip() for part in re.split(r"\n\s*\n", request.content) if part.strip()
+        ]
         chunks: list[Chunk] = []
         offset = 0
         for ordinal, paragraph in enumerate(paragraphs):

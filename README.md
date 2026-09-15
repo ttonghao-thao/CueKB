@@ -1,47 +1,74 @@
 # CueKB · 线索知识库
 
-从多个线索，快速找到正确证据。
+CueKB接收PDF、DOCX、Markdown和TXT语料，向客服或其他第三方系统返回可定位的原文证据。普通检索不生成答案。
 
-英文名称：CueKB（Cue + Knowledge Base）；代码仓库与目录名：`cuekb`；中文名称：线索知识库。名称为项目工作名，未进行商标或包名唯一性核验。
+## 当前编码状态
 
-## 当前状态
+- **已完成**：M0工程与版本基线、M1文档与关键词检索、M2混合检索。
+- **待开始**：M3轻量关系与上下文、M4质量与运行能力。
+- **待确认**：M5门户与可选回答，以及OIDC、对象存储、多`scope`和高可用拓扑。
 
-**项目版本：v0.1｜状态：IMPLEMENTATION_STARTED｜日期：2026-09-09**
+生产环境运行和性能测试单独记录，不改变上述编码状态。完整清单见[任务板](TASK_BOARD.md)。
 
-设计已获用户确认并开始编码。当前提供开发用内存适配器，可运行最小API纵切；PostgreSQL、OpenSearch、Docling、向量与重排的生产适配器仍按任务板实施。开发实现会明确报告降级，不把关键词结果标成完整混合检索。
+## 阅读入口
 
-核心目标：快速、准确检索出适用范围正确、上下文完整且可追溯的证据。生产客服与个人知识库共用核心技术栈，独立部署、独立数据。
-
-## 阅读顺序
-
-| 文件 | 用途 |
+| 读者 | 文档 |
 | --- | --- |
-| [PROJECT_CORE.md](PROJECT_CORE.md) | 项目目标、范围、技术基线和约束 |
-| [系统设计方案](docs/SYSTEM_DESIGN.md) | 架构、数据、入库、检索、接口、部署与验收 |
-| [DECISIONS.md](DECISIONS.md) | 架构决策与尚待确认的假设 |
-| [TASK_BOARD.md](TASK_BOARD.md) | 确认后按顺序执行的开发计划 |
-| [AGENTS.md](AGENTS.md) | 后续编码智能体的工作约定 |
+| 第三方接入人员 | [语料导入与检索API](docs/API_GUIDE.md) |
+| 开发人员 | [架构、组件职责与数据流](docs/SYSTEM_DESIGN.md#2-内部开发视图架构组件与数据流) |
+| 项目负责人 | [已完成、待开始与待确认清单](TASK_BOARD.md) |
 
-## 本期设计概要
+## 生产组件
 
-- FastAPI 提供检索和文档管理接口；独立Worker执行入库。
-- PostgreSQL保存权威内容、版本、权限、关系与任务；OpenSearch保存可重建的关键词和向量索引。
-- 普通查询采用关键词与向量并行召回、RRF融合、有限候选重排。
-- 精确查询走短路径，关联查询按需进行一跳扩展。
-- BGE-M3与bge-reranker-v2-m3作为初始质量基线，性能和效果需评测。
-- 原文定位、版本正确性和权限贯穿整个流程；大模型生成回答不属于检索的必经路径。
-- 首期交付API与评测闭环；轻量Web门户列为后续阶段，避免在检索质量未验证前扩大范围。
+单机Compose部署包含PostgreSQL、OpenSearch、迁移任务、API、入库Worker和本地BGE模型服务。PostgreSQL保存权威内容/权限/发布版本；OpenSearch保存BM25和向量索引；Embedding计算文档与查询向量；重排按查询路径和剩余时间选择执行。原文件、数据库、索引和模型缓存使用独立命名卷。
 
-## 当前运行方式
+生产模式有以下强制门禁：API Key密钥材料不能为空；Embedding和重排模型必须固定到具体提交；Python依赖由`uv.lock`冻结；迁移成功后API/Worker才启动；API不会回退到内存后端；PG和OpenSearch不暴露宿主机端口。API只绑定`127.0.0.1:8080`，应由同机TLS反向代理对外发布。
+
+### 部署
+
+需要Docker Engine及Compose v2。模型首次启动需要下载约数GB权重，并需要能够承载BGE-M3和reranker的CPU/GPU及内存；具体容量必须在目标主机实测。
 
 ```bash
-cd /Users/snowking/Documents/CueKB
-python3 -m venv .venv
+cp deploy/production.env.example .env.production
+# 替换数据库密码、API Key pepper和bootstrap key，并核对固定模型修订
+chmod 600 .env.production
+./scripts/deploy-production.sh .env.production
+docker compose --env-file .env.production logs -f api worker model
+```
+
+部署脚本校验Compose、构建镜像、启动服务，等待固定修订模型加载和Worker运行，再用bootstrap key检查`/v1/ready`。停止服务但保留数据：
+
+```bash
+docker compose --env-file .env.production down
+```
+
+不要在没有备份确认的情况下增加`--volumes`。升级前备份PostgreSQL和原文件卷；OpenSearch是可重建投影。模型修订变化时必须使用新索引generation并重建全部向量，不能直接复用旧索引。
+
+### 生产验收
+
+只在专用验收实例执行以下脚本；它会创建并删除自己的测试文档、授权和API Key：
+
+```bash
+set -a
+. ./.env.production
+set +a
+.venv/bin/python scripts/acceptance-production.py \
+  --bootstrap-key "$CUEKB_BOOTSTRAP_API_KEY"
+```
+
+验收覆盖API Key、ACL、幂等上传、Worker处理、原文下载、exact跳过Embedding和重排、hybrid执行Embedding和重排、版本切换、撤权和删除。实际执行记录独立维护在[任务板的验证活动](TASK_BOARD.md#验证活动)，不改变功能编码状态。
+
+## 本地开发
+
+本地默认使用进程内存适配器，便于快速运行测试；重启会清空数据，也不执行API鉴权、PDF/DOCX解析或真实向量检索。它不能代表生产行为。
+
+```bash
+/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest
+.venv/bin/pytest -q
 .venv/bin/uvicorn cuekb.main:app --reload --host 127.0.0.1 --port 8080
 ```
 
-访问`http://127.0.0.1:8080/docs`查看OpenAPI。当前`POST /v1/documents/text`用于开发验证；正式文件上传、后台Worker与持久化将在M1完成。
+健康入口：`GET /v1/health`只检查进程存活；`GET /v1/ready`在生产模式检查PostgreSQL和OpenSearch。交互契约位于`http://127.0.0.1:8080/docs`。
 
-项目已创建在用户指定目录，并发布到 GitHub：[`ttonghao-thao/CueKB`](https://github.com/ttonghao-thao/CueKB)。本项目不包含原始业务资料、模型权重或凭据。
+项目目标和约束见[PROJECT_CORE.md](PROJECT_CORE.md)，决策见[DECISIONS.md](DECISIONS.md)，协作约定见[AGENTS.md](AGENTS.md)。

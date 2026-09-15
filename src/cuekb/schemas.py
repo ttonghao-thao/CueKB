@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -61,9 +61,42 @@ class SearchResponse(BaseModel):
     scope_limited: bool = False
     content_revisions: dict[str, int]
     timings_ms: dict[str, float]
+    retrieval_path: str = "keyword"
+    executed_stages: list[str] = Field(default_factory=list)
+    skipped_stages: list[dict[str, str]] = Field(default_factory=list)
     hits: list[SearchHit]
 
 
 class HealthResponse(BaseModel):
     status: str
     version: str
+
+
+class PublishRequest(BaseModel):
+    version_id: UUID
+    scope_key: Literal["default"] = "default"
+
+
+class DocumentMetadata(BaseModel):
+    kb_id: UUID
+    name: str = Field(min_length=1, max_length=500)
+    business_version: str | None = Field(default=None, max_length=100)
+    scope: dict[str, Any] = Field(default_factory=dict)
+    document_id: UUID | None = None
+    auto_publish: bool = False
+
+
+class ApiKeyCreate(BaseModel):
+    principal_name: str = Field(min_length=1, max_length=200)
+    label: str = Field(min_length=1, max_length=200)
+
+
+class ApiKeyCreated(BaseModel):
+    id: UUID
+    principal_id: UUID
+    api_key: str
+
+
+class GrantCreate(BaseModel):
+    principal_id: UUID
+    role: str = Field(pattern="^(read|write|admin)$")

@@ -83,6 +83,7 @@ class SourceAnchor(BaseModel):
     heading_path: list[str] = Field(default_factory=list)
     start_offset: int | None = Field(default=None, ge=0)
     end_offset: int | None = Field(default=None, ge=0)
+    bbox: dict[str, float | str] | None = None
 
 
 class Chunk(BaseModel):
@@ -110,3 +111,17 @@ class Job(BaseModel):
     error_message: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class Principal(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    name: str
+    is_system_admin: bool = False
+    api_key_id: UUID | None = None
+
+
+class RetrievalPlan(BaseModel):
+    path: str
+    use_embedding: bool
+    use_rerank: bool
+    reasons: list[str] = Field(default_factory=list)

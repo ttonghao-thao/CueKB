@@ -7,8 +7,16 @@ from collections.abc import Sequence
 from threading import RLock
 from uuid import UUID
 
-from cuekb.domain.models import Chunk, Document, DocumentVersion, Job, JobStatus, KnowledgeBase, VersionStatus, utc_now
-
+from cuekb.domain.models import (
+    Chunk,
+    Document,
+    DocumentVersion,
+    Job,
+    JobStatus,
+    KnowledgeBase,
+    VersionStatus,
+    utc_now,
+)
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_.:/+-]+|[\u4e00-\u9fff]")
 
@@ -18,7 +26,7 @@ def tokens(text: str) -> list[str]:
 
 
 class InMemoryRepository:
-    """Development adapter. Production adapters will preserve the same port."""
+    """Process-local development adapter for deterministic tests."""
 
     def __init__(self) -> None:
         self._lock = RLock()
@@ -51,13 +59,20 @@ class InMemoryRepository:
             version = self.versions[job.version_id]
             for chunk in chunks:
                 self.chunks[chunk.id] = chunk
-            self.versions[version.id] = version.model_copy(update={"status": VersionStatus.PUBLISHED})
+            self.versions[version.id] = version.model_copy(
+                update={"status": VersionStatus.PUBLISHED}
+            )
             kb = self.knowledge_bases[job.kb_id]
             self.knowledge_bases[kb.id] = kb.model_copy(
                 update={"content_revision": kb.content_revision + 1}
             )
             finished = job.model_copy(
-                update={"status": JobStatus.SUCCEEDED, "stage": "published", "progress": 100, "updated_at": utc_now()}
+                update={
+                    "status": JobStatus.SUCCEEDED,
+                    "stage": "published",
+                    "progress": 100,
+                    "updated_at": utc_now(),
+                }
             )
             self.jobs[job.id] = finished
             return finished
@@ -72,27 +87,64 @@ class InMemoryRepository:
             and self.versions[chunk.version_id].status == VersionStatus.PUBLISHED
         ]
 
+    def load_chunks(self, ids: Sequence[UUID], kb_ids: Sequence[UUID]) -> list[Chunk]:
+        allowed_ids, allowed_kbs = set(ids), set(kb_ids)
+        return [
+            chunk
+            for chunk in self.visible_chunks(kb_ids)
+            if chunk.id in allowed_ids and chunk.kb_id in allowed_kbs
+        ]
+
 
 class InMemorySearchBackend:
     """Deterministic test/dev retrieval; not the production OpenSearch adapter."""
 
-    def index(self, chunks: Sequence[Chunk]) -> None:
-        return None
+    def __init__(self) -> None:
+        self._chunks: dict[UUID, Chunk] = {}
 
-    def keyword_search(self, query: str, chunks: Sequence[Chunk], limit: int) -> list[tuple[Chunk, float]]:
+    def index(
+        self, chunks: Sequence[Chunk], vectors: Sequence[Sequence[float]] | None = None
+    ) -> None:
+        self._chunks.update({chunk.id: chunk for chunk in chunks})
+
+    def keyword_search(
+        self, query: str, kb_ids: Sequence[UUID], filters: dict, limit: int
+    ) -> list[tuple[UUID, float]]:
         query_tokens = tokens(query)
         if not query_tokens:
             return []
         query_counts = Counter(query_tokens)
-        scored: list[tuple[Chunk, float]] = []
-        for chunk in chunks:
+        scored: list[tuple[UUID, float]] = []
+        allowed = set(kb_ids)
+        for chunk in self._chunks.values():
+            if chunk.kb_id not in allowed or not _matches(chunk, filters):
+                continue
             document_tokens = tokens(chunk.search_text)
             counts = Counter(document_tokens)
-            score = sum((1 + math.log(counts[token])) * weight for token, weight in query_counts.items() if counts[token])
+            score = sum(
+                (1 + math.log(counts[token])) * weight
+                for token, weight in query_counts.items()
+                if counts[token]
+            )
             if score > 0:
-                scored.append((chunk, score))
-        return sorted(scored, key=lambda item: (-item[1], str(item[0].id)))[:limit]
+                scored.append((chunk.id, score))
+        return sorted(scored, key=lambda item: (-item[1], str(item[0])))[:limit]
 
-    def vector_search(self, query: str, chunks: Sequence[Chunk], limit: int) -> list[tuple[Chunk, float]]:
-        # Explicitly unavailable until the BGE/OpenSearch adapter is implemented.
+    def vector_search(
+        self, vector: Sequence[float], kb_ids: Sequence[UUID], filters: dict, limit: int
+    ) -> list[tuple[UUID, float]]:
+        # Vector search is deliberately unavailable in memory development mode.
         raise NotImplementedError("vector search adapter is not configured")
+
+    def delete_document(self, document_id: UUID) -> None:
+        self._chunks = {
+            key: value for key, value in self._chunks.items() if value.document_id != document_id
+        }
+
+
+def _matches(chunk: Chunk, filters: dict) -> bool:
+    document_ids = filters.get("document_ids") or []
+    return (not document_ids or chunk.document_id in set(document_ids)) and all(
+        not filters.get(key) or chunk.metadata.get(key) == filters[key]
+        for key in ("product_model", "software_version")
+    )

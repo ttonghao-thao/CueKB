@@ -4,6 +4,22 @@ CREATE TYPE document_version_status AS ENUM (
   'uploaded', 'parsing', 'needs_review', 'indexing', 'ready', 'published', 'superseded', 'failed'
 );
 CREATE TYPE job_status AS ENUM ('queued', 'running', 'succeeded', 'failed');
+CREATE TYPE grant_role AS ENUM ('read', 'write', 'admin');
+
+CREATE TABLE principals (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  is_system_admin boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE api_keys (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  principal_id uuid NOT NULL REFERENCES principals(id),
+  key_hash char(64) NOT NULL UNIQUE,
+  label text NOT NULL,
+  revoked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
 CREATE TABLE knowledge_bases (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -12,6 +28,13 @@ CREATE TABLE knowledge_bases (
   content_revision bigint NOT NULL DEFAULT 0 CHECK (content_revision >= 0),
   acl_revision bigint NOT NULL DEFAULT 0 CHECK (acl_revision >= 0),
   created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE kb_grants (
+  principal_id uuid NOT NULL REFERENCES principals(id),
+  kb_id uuid NOT NULL REFERENCES knowledge_bases(id),
+  role grant_role NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(principal_id, kb_id)
 );
 
 CREATE TABLE documents (
@@ -29,17 +52,24 @@ CREATE TABLE document_versions (
   content_sha256 char(64) NOT NULL,
   business_version text,
   scope jsonb NOT NULL DEFAULT '{}'::jsonb,
+  source_uri text,
+  media_type text,
+  original_filename text,
+  auto_publish boolean NOT NULL DEFAULT false,
   status document_version_status NOT NULL DEFAULT 'uploaded',
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE(document_id, content_sha256)
+  UNIQUE(document_id, content_sha256),
+  UNIQUE(id, document_id)
 );
 
 CREATE TABLE document_publications (
   document_id uuid NOT NULL REFERENCES documents(id),
   scope_key text NOT NULL,
-  active_version_id uuid NOT NULL REFERENCES document_versions(id),
+  active_version_id uuid NOT NULL,
   published_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY(document_id, scope_key)
+  PRIMARY KEY(document_id, scope_key),
+  FOREIGN KEY(active_version_id, document_id) REFERENCES document_versions(id, document_id),
+  CHECK(scope_key = 'default')
 );
 
 CREATE TABLE sections (
@@ -70,6 +100,7 @@ CREATE INDEX chunks_kb_document_idx ON chunks(kb_id, document_id, version_id);
 
 CREATE TABLE ingestion_jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  principal_id uuid NOT NULL REFERENCES principals(id),
   kb_id uuid NOT NULL REFERENCES knowledge_bases(id),
   document_id uuid NOT NULL REFERENCES documents(id),
   version_id uuid NOT NULL REFERENCES document_versions(id),
@@ -83,9 +114,10 @@ CREATE TABLE ingestion_jobs (
   attempt_count integer NOT NULL DEFAULT 0,
   error_code text,
   error_message text,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE(kb_id, idempotency_key)
+  UNIQUE(principal_id, kb_id, idempotency_key)
 );
 
 CREATE TABLE outbox_events (
@@ -94,7 +126,13 @@ CREATE TABLE outbox_events (
   aggregate_id uuid NOT NULL,
   event_type text NOT NULL,
   payload jsonb NOT NULL,
+  lease_owner text,
+  lease_until timestamptz,
+  attempt_count integer NOT NULL DEFAULT 0,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  last_error text,
   created_at timestamptz NOT NULL DEFAULT now(),
   processed_at timestamptz
 );
-CREATE INDEX outbox_unprocessed_idx ON outbox_events(created_at) WHERE processed_at IS NULL;
+CREATE INDEX outbox_unprocessed_idx ON outbox_events(next_attempt_at, created_at)
+  WHERE processed_at IS NULL;
