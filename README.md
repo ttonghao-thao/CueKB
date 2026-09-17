@@ -20,9 +20,9 @@ CueKB接收PDF、DOCX、Markdown和TXT语料，向客服或其他第三方系统
 
 ## 生产组件
 
-单机Compose部署包含PostgreSQL、OpenSearch、迁移任务、API、入库Worker和本地BGE模型服务。PostgreSQL保存权威内容/权限/发布版本；OpenSearch保存BM25和向量索引；Embedding计算文档与查询向量。重排默认关闭，只有配置`CUEKB_RERANKER_SERVICE_URL`后才按查询路径和剩余时间选择执行。原文件、数据库、索引和模型缓存使用独立命名卷。
+单机Compose部署包含PostgreSQL、OpenSearch、迁移任务、API和入库Worker。PostgreSQL保存权威内容/权限/发布版本；OpenSearch保存BM25和向量索引；Embedding与重排均通过外部HTTP API调用，模型部署、权重缓存、容量和可用性不属于本项目。Embedding地址必配；重排默认关闭，只有配置`CUEKB_RERANKER_SERVICE_URL`后才按查询路径和剩余时间选择执行。原文件、数据库和索引使用独立命名卷。
 
-生产模式有以下强制门禁：API Key密钥材料不能为空；Embedding模型必须固定到具体提交；配置重排地址时也必须固定reranker revision；Python依赖由`uv.lock`冻结；迁移成功后API/Worker才启动；API不会回退到内存后端；PG和OpenSearch不暴露宿主机端口。API只绑定`127.0.0.1:8080`，应由同机TLS反向代理对外发布。
+生产模式有以下强制门禁：API Key密钥材料不能为空；必须配置`CUEKB_EMBEDDING_SERVICE_URL`并固定Embedding revision；配置重排地址时也必须固定reranker revision；Python依赖由`uv.lock`冻结；迁移成功后API/Worker才启动；API不会回退到内存后端；PG和OpenSearch不暴露宿主机端口。API只绑定`127.0.0.1:8080`，应由同机TLS反向代理对外发布。
 
 ### 部署
 
@@ -30,13 +30,13 @@ CueKB接收PDF、DOCX、Markdown和TXT语料，向客服或其他第三方系统
 
 ```bash
 cp deploy/production.env.example .env.production
-# 替换数据库密码、API Key pepper和bootstrap key；按需配置重排地址
+# 替换数据库密码、API Key pepper和bootstrap key；配置外部Embedding地址，并按需配置重排地址
 chmod 600 .env.production
 ./scripts/deploy-production.sh .env.production
-docker compose --env-file .env.production logs -f api worker model
+docker compose --env-file .env.production logs -f api worker
 ```
 
-部署脚本校验Compose、构建镜像、启动服务，等待固定修订模型加载和Worker运行，再用bootstrap key检查`/v1/ready`。停止服务但保留数据：
+部署脚本校验Compose、构建镜像、启动服务并等待Worker运行，再用bootstrap key检查`/v1/ready`。外部Embedding/Reranker API由运行方单独健康检查。停止服务但保留数据：
 
 ```bash
 docker compose --env-file .env.production down

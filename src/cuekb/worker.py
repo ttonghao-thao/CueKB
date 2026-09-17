@@ -41,7 +41,7 @@ def runtime() -> Runtime:
             settings.opensearch_timeout_ms,
         ),
         models=HttpModelClient(
-            settings.model_service_url,
+            settings.embedding_service_url,
             settings.embedding_revision,
             settings.reranker_service_url,
             settings.reranker_revision,

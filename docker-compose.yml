@@ -14,11 +14,9 @@ x-app-env: &app-env
   CUEKB_WORKER_POLL_SECONDS: ${CUEKB_WORKER_POLL_SECONDS:-1}
   CUEKB_WORKER_LEASE_SECONDS: ${CUEKB_WORKER_LEASE_SECONDS:-300}
   CUEKB_WORKER_MAX_ATTEMPTS: ${CUEKB_WORKER_MAX_ATTEMPTS:-3}
-  CUEKB_MODEL_SERVICE_URL: http://model:8090
+  CUEKB_EMBEDDING_SERVICE_URL: ${CUEKB_EMBEDDING_SERVICE_URL:?set external embedding service URL}
   CUEKB_RERANKER_SERVICE_URL: ${CUEKB_RERANKER_SERVICE_URL:-}
-  CUEKB_EMBEDDING_MODEL: BAAI/bge-m3
   CUEKB_EMBEDDING_REVISION: ${CUEKB_EMBEDDING_REVISION:?set pinned embedding revision}
-  CUEKB_RERANKER_MODEL: BAAI/bge-reranker-v2-m3
   CUEKB_RERANKER_REVISION: ${CUEKB_RERANKER_REVISION:-}
   CUEKB_VECTOR_DIMENSION: ${CUEKB_VECTOR_DIMENSION:-1024}
   CUEKB_SEARCH_DEADLINE_MS: ${CUEKB_SEARCH_DEADLINE_MS:-900}
@@ -26,20 +24,6 @@ x-app-env: &app-env
   CUEKB_WORKER_MODEL_TIMEOUT_MS: ${CUEKB_WORKER_MODEL_TIMEOUT_MS:-120000}
   CUEKB_RERANK_MIN_REMAINING_MS: ${CUEKB_RERANK_MIN_REMAINING_MS:-180}
   CUEKB_RERANK_ENABLED: ${CUEKB_RERANK_ENABLED:-true}
-
-x-model-env: &model-env
-  CUEKB_ENV: production
-  CUEKB_BACKEND: production
-  CUEKB_PROCESS_ROLE: model
-  CUEKB_HOST: 0.0.0.0
-  CUEKB_PORT: 8090
-  CUEKB_EMBEDDING_MODEL: BAAI/bge-m3
-  CUEKB_EMBEDDING_REVISION: ${CUEKB_EMBEDDING_REVISION:?set pinned embedding revision}
-  CUEKB_RERANKER_SERVICE_URL: ${CUEKB_RERANKER_SERVICE_URL:-}
-  CUEKB_RERANKER_MODEL: BAAI/bge-reranker-v2-m3
-  CUEKB_RERANKER_REVISION: ${CUEKB_RERANKER_REVISION:-}
-  CUEKB_VECTOR_DIMENSION: ${CUEKB_VECTOR_DIMENSION:-1024}
-  CUEKB_MODEL_USE_FP16: ${CUEKB_MODEL_USE_FP16:-false}
 
 x-logging: &default-logging
   driver: json-file
@@ -89,20 +73,6 @@ services:
     restart: "no"
     logging: *default-logging
 
-  model:
-    build: {context: ., target: model}
-    environment:
-      <<: *model-env
-    volumes: [cuekb_models:/home/cuekb/.cache/huggingface]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
-      interval: 15s
-      timeout: 5s
-      retries: 60
-      start_period: 120s
-    restart: unless-stopped
-    logging: *default-logging
-
   worker:
     build: {context: ., target: worker}
     environment:
@@ -114,7 +84,6 @@ services:
     depends_on:
       migrate: {condition: service_completed_successfully}
       opensearch: {condition: service_healthy}
-      model: {condition: service_healthy}
     restart: unless-stopped
     logging: *default-logging
 
@@ -142,5 +111,4 @@ volumes:
   cuekb_pg:
   cuekb_search:
   cuekb_files:
-  cuekb_models:
   cuekb_worker_cache:

@@ -27,17 +27,14 @@ class Settings(BaseSettings):
     worker_max_attempts: int = Field(default=3, ge=1, le=20)
     api_key_pepper: str = ""
     bootstrap_api_key: str = ""
-    model_service_url: str = "http://localhost:8090"
+    embedding_service_url: str = ""
     reranker_service_url: str = ""
-    embedding_model: str = "BAAI/bge-m3"
     embedding_revision: str = ""
-    reranker_model: str = "BAAI/bge-reranker-v2-m3"
     reranker_revision: str = ""
     vector_dimension: int = Field(default=1024, ge=1)
     search_deadline_ms: int = Field(default=900, ge=100, le=10000)
     model_timeout_ms: int = Field(default=400, ge=20, le=5000)
     worker_model_timeout_ms: int = Field(default=120000, ge=1000, le=600000)
-    model_use_fp16: bool = False
     rerank_min_remaining_ms: int = Field(default=180, ge=10, le=5000)
     rerank_enabled: bool = True
     exact_identifier_pattern: str = (
@@ -48,12 +45,16 @@ class Settings(BaseSettings):
     def reranker_configured(self) -> bool:
         return bool(self.reranker_service_url.strip())
 
+    @property
+    def embedding_configured(self) -> bool:
+        return bool(self.embedding_service_url.strip())
+
     @model_validator(mode="after")
     def validate_production(self) -> "Settings":
         if self.backend not in {"memory", "production"}:
             raise ValueError("backend must be memory or production")
-        if self.process_role not in {"api", "worker", "model"}:
-            raise ValueError("process_role must be api, worker, or model")
+        if self.process_role not in {"api", "worker"}:
+            raise ValueError("process_role must be api or worker")
         if self.backend == "production" and self.process_role == "api":
             if not self.api_key_pepper or len(self.api_key_pepper) < 32:
                 raise ValueError(
@@ -63,8 +64,11 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "production requires CUEKB_BOOTSTRAP_API_KEY with at least 24 characters"
                 )
-        if self.backend == "production" and not self.embedding_revision:
-            raise ValueError("production requires a pinned embedding revision")
+        if self.backend == "production":
+            if not self.embedding_configured:
+                raise ValueError("production requires CUEKB_EMBEDDING_SERVICE_URL")
+            if not self.embedding_revision:
+                raise ValueError("production requires a pinned embedding revision")
         if self.backend == "production" and self.reranker_configured and not self.reranker_revision:
             raise ValueError(
                 "production requires a pinned reranker revision when reranker service is configured"

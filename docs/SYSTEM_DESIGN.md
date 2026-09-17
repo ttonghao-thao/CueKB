@@ -66,7 +66,7 @@ flowchart LR
 | --- | --- | --- |
 | 保存/读取知识库、文档、版本、任务和正文 | `InMemoryRepository`中的Python dict | 生产模式由已实现的PostgreSQL仓储接管，并执行权限、事务与发布协议 |
 | 建索引、按关键词查候选 | `InMemorySearchBackend`的Python dict与词频匹配 | 生产模式由OpenSearch适配器建立索引并执行BM25召回 |
-| 将文本转换成向量 | 内存模式不执行 | 生产模式由模型服务中的BGE-M3执行 |
+| 将文本转换成向量 | 内存模式不执行 | 生产模式通过外部Embedding API执行 |
 | 保存向量、按向量找相近候选 | 内存模式不执行 | 生产模式由OpenSearch向量字段与k-NN检索执行 |
 | 保存上传的原始文件 | 内存模式不执行 | 生产模式由文件存储适配器执行 |
 
@@ -88,7 +88,7 @@ flowchart LR
     W -->|读取文件| FILE
     W --> PARSE["Docling与OCR：结构/正文/锚点"]
     PARSE -->|结构化结果由Worker保存| PG
-    W -->|文档块文本| EMB["Embedding适配器：BGE-M3，计算向量"]
+    W -->|文档块文本| EMB["外部Embedding API：BGE-M3，计算向量"]
     EMB -->|返回文档向量| W
     W -->|写入文本字段和文档向量，验证可搜索| OS["OpenSearch：保存索引并查找候选"]
     API -->|发布请求| PUB
@@ -97,11 +97,11 @@ flowchart LR
     RET -->|关键词与向量召回| OS
     RET -->|查询文本| EMB
     EMB -->|返回查询向量，再由检索服务提交OpenSearch| RET
-    RET -.->|仅配置独立地址后调用| RANK["可选重排适配器"]
+    RET -.->|仅配置独立地址后调用| RANK["外部重排 API"]
     RET -->|证据JSON| C
 ```
 
-应用采用模块化结构，API与独立Worker共享领域模型；解析器是Worker调用的库，不要求另建解析微服务。Embedding和重排使用独立服务地址；Embedding地址必需，重排地址为空时不调用重排。普通检索不调用生成式LLM。
+应用采用模块化结构，API与独立Worker共享领域模型；解析器是Worker调用的库，不要求另建解析微服务。Embedding和重排均使用项目外部的独立服务地址；Embedding地址必需，重排地址为空时不调用重排。CueKB不构建、运行或保存任一模型的权重。普通检索不调用生成式LLM。
 
 #### 2.2.1 PostgreSQL、OpenSearch与Embedding是什么关系
 
@@ -114,6 +114,17 @@ flowchart LR
 | OpenSearch | 搜索引擎服务 | 写入文本/文档向量→搜索索引；关键词/查询向量→候选内容块及相关性排名 | 保存可重建的检索副本，包括向量；不代替PG裁决权限或可见版本 |
 
 “Embedding”既可指文本编码过程，也常指其输出的向量。本项目图中`Embedding适配器`表示模型调用组件，`文档向量`/`查询向量`表示返回的数据。BGE-M3是选用的编码模型，OpenSearch是保存并检索编码结果的搜索引擎；两者不是同一个组件。
+
+#### 2.2.2 外部模型 API 契约
+
+CueKB只作为客户端调用模型服务；生产配置要求`CUEKB_EMBEDDING_SERVICE_URL`和`CUEKB_EMBEDDING_REVISION`，可选重排同时要求`CUEKB_RERANKER_SERVICE_URL`和`CUEKB_RERANKER_REVISION`。两个地址都是不含末尾斜杠的服务基址，运行方负责TLS、网络访问控制、鉴权代理、模型部署、容量、健康检查和权重生命周期。
+
+| 能力 | 请求 | 成功响应 | CueKB校验 |
+| --- | --- | --- | --- |
+| Embedding（必配） | `POST {CUEKB_EMBEDDING_SERVICE_URL}/embed`，`{"texts":["..."]}` | `{"model_revision":"<revision>","vectors":[[...]]}` | 返回revision必须等于`CUEKB_EMBEDDING_REVISION`；每条输入应有一条向量，向量维度由OpenSearch映射校验 |
+| Rerank（可选） | `POST {CUEKB_RERANKER_SERVICE_URL}/rerank`，`{"query":"...","passages":["..."]}` | `{"model_revision":"<revision>","scores":[...]}` | 返回revision必须等于`CUEKB_RERANKER_REVISION`；每个候选应有一个分数 |
+
+服务应以非2xx表达鉴权、限流或不可用；CueKB按既有deadline处理为向量或重排降级，绝不回退为项目内推理。该契约与原有reranker调用方式一致，但不约束供应商的模型运行时；如需接入不同协议，在`model_client.py`增加明确的适配器，不能把第三方响应泄漏到核心检索逻辑。
 
 **已完成向量路径中的调用与数据传递：**
 
@@ -158,10 +169,10 @@ sequenceDiagram
 | Python Worker | 租约、续期、解析、投影、幂等和退避 | 不参与在线请求 | **已完成** | `worker.py` |
 | Docling / OCR | PDF/DOCX结构、表格、正文和锚点 | 不在查询时解析 | **已完成** | `services/parsing.py` |
 | 基础质量与分块 | 空内容、UTF-8和替换字符门禁；有界chunk | 提供标题和来源定位 | **已完成** | `services/parsing.py` |
-| Embedding / BGE-M3 | 文档块编码 | 非exact查询编码 | **已完成** | `model_server.py`、`model_client.py` |
+| 外部Embedding API / BGE-M3 | 文档块编码 | 非exact查询编码 | **已完成** | `model_client.py` |
 | OpenSearch | 写入CJK BM25和向量投影 | BM25/k-NN候选召回 | **已完成** | `adapters/opensearch.py` |
 | RRF融合 | 不处理语料 | 有界候选融合与去重 | **已完成** | `services/retrieval.py` |
-| 重排 | 不处理入库向量 | 地址未配置时跳过；配置后按deadline、路径和负载处理有限候选 | **已完成** | `model_server.py`、`model_client.py`、`services/retrieval.py` |
+| 外部重排 API | 不处理入库向量 | 地址未配置时跳过；配置后按deadline、路径和负载处理有限候选 | **已完成** | `model_client.py`、`services/retrieval.py` |
 | 发布服务 / outbox | ready、手动/自动发布和清理事件 | PG只加载当前发布版本 | **已完成** | `adapters/postgres.py`、`worker.py` |
 | 关系DDL | 定义实体、别名、关系和证据表 | 不提供查询行为 | **待开始** | M3统一建立DDL和应用服务 |
 | 关系写入与一跳扩展 | 写入有出处的关系 | `related`有界一跳扩展 | **待开始** | M3 |
@@ -492,17 +503,17 @@ API Key哈希、吊销和知识库ACL代码状态为**已完成**。OIDC身份�
 
 限制上传格式/大小与解析资源，拒绝路径穿越和任意远端URL抓取。原文属于不可信输入；未来回答模块把它作为数据而非指令，不能因文档内容越权调用工具。
 
-模型服务安全控制代码状态为**已完成**：Embedding使用固定仓库和完整commit revision；只有配置重排地址时才要求固定reranker revision；接口不接受客户端传入模型路径；容器使用非root用户；冻结依赖经`pip-audit`未发现已知漏洞。
+模型接入安全控制代码状态为**已完成**：生产模式要求外部Embedding地址及固定revision；只有配置重排地址时才要求固定reranker revision；接口不接受客户端传入模型路径或服务地址；模型服务自身的TLS、凭据、网络策略和权重安全由外部部署负责；CueKB容器继续使用非root用户。
 
 ## 8. 部署与资源策略
 
 ### 8.1 本地
 
-当前Compose包含api、worker、postgres、opensearch和model服务，支持单机运行、模型有限并发以及数据库、索引、原文和模型缓存持久化。
+当前Compose包含api、worker、postgres和opensearch，支持单机运行及数据库、索引和原文持久化；Embedding与重排是该Compose之外的服务。
 
-Compose部署代码状态为**已完成**：包含迁移门禁、API、Worker、模型服务、PostgreSQL、OpenSearch及持久卷；生产配置强制密钥和Embedding revision，配置重排地址时强制reranker revision，API不会回退内存。步骤见[README](../README.md)。
+Compose部署代码状态为**已完成**：包含迁移门禁、API、Worker、PostgreSQL、OpenSearch及持久卷；生产配置强制外部Embedding地址、密钥和Embedding revision，配置重排地址时强制reranker revision，API不会回退内存。步骤见[README](../README.md)。
 
-用户16GB M4机器不能在无实测情况下保证质量基线模型、OpenSearch和开发工具同时满足1秒目标。可选择：独立模型服务；或本地轻量中文Embedding、减少重排候选并单独验收。严格离线时所有模型与OCR权重需提前下载，禁用远程推理。
+用户16GB M4机器不能在无实测情况下保证外部模型服务、OpenSearch和开发工具同时满足1秒目标。可选择与CueKB网络隔离部署的质量基线模型服务，或使用轻量中文Embedding、减少重排候选并单独验收。严格离线时外部模型与OCR权重需提前下载，禁用远程推理。
 
 轻量配置仍用相同适配器，但Embedding模型和索引不能与质量基线混用。重排默认关闭；配置独立地址后才加载并调用，其执行或跳过原因会出现在响应中。
 
@@ -510,7 +521,7 @@ Compose部署代码状态为**已完成**：包含迁移门禁、API、Worker、
 
 当前部署代码提供单机Compose。多副本、高可用、PG/OpenSearch副本、RTO/RPO和对象存储状态为**待确认**；单机Compose不表示高可用。备份以PG与原文为核心，OpenSearch索引可重建。
 
-模型服务容量依据输入长度、每请求候选数、QPS和排队延迟测量。不能用“100用户在线”代替100 QPS，也不能只用权重大小估算吞吐。
+外部模型服务容量依据输入长度、每请求候选数、QPS和排队延迟测量。不能用“100用户在线”代替100 QPS，也不能只用权重大小估算吞吐。
 
 ### 8.3 可观测性
 
@@ -571,7 +582,7 @@ Compose部署代码状态为**已完成**：包含迁移门禁、API、Worker、
 | `src/cuekb/services/retrieval.py` | exact/hybrid路由、并行召回、RRF、有限重排、PG最终加载与降级 |
 | `src/cuekb/adapters/memory.py` | 仅开发/测试的内存存储和关键词后端 |
 | `src/cuekb/adapters/postgres.py`、`opensearch.py`、`model_client.py`、`storage.py` | 生产PG、搜索、模型及文件适配器 |
-| `src/cuekb/worker.py`、`model_server.py`、`services/parsing.py` | 异步入库、模型服务、Docling/OCR及质量分块 |
+| `src/cuekb/worker.py`、`adapters/model_client.py`、`services/parsing.py` | 异步入库、外部模型API调用、Docling/OCR及质量分块 |
 | `migrations`、`Dockerfile`、`docker-compose.yml` | 初始迁移和单机生产部署定义 |
 | `db/schema.sql` | 初始DDL，不代表迁移已执行 |
 | `tests/` | 本地API、检索路由、解析、生产配置门禁、密钥哈希与文件路径边界测试 |
@@ -585,7 +596,7 @@ Compose部署代码状态为**已完成**：包含迁移门禁、API、Worker、
 | 风险 | 处理 |
 | --- | --- |
 | PDF解析错误比检索误差更大 | 首批样本人工核验，低质量进入needs_review |
-| 模型质量配置在本地过慢 | 分离模型服务或轻量配置；分别报告精度和延迟 |
+| 外部模型服务时延或容量不足 | 调整服务容量或轻量配置；分别报告精度和端到端延迟 |
 | 发布最终一致导致短时漏召回 | 前置索引验证、权威指针、有限补取和index_transition状态 |
 | 图扩展加入大量不相关内容 | M3（**待开始**）采用有证据关系、显式路径、数量/方向/一跳限制与消融 |
 | 上传时间误当业务版本 | 发布scope与业务有效性独立建模 |

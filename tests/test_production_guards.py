@@ -8,7 +8,7 @@ from cuekb.config import Settings
 from cuekb.security import hash_api_key
 
 
-def test_production_api_requires_auth_secrets_and_pinned_embedding() -> None:
+def test_production_api_requires_auth_secrets_external_embedding_and_revision() -> None:
     with pytest.raises(ValidationError):
         Settings(backend="production", process_role="api")
 
@@ -17,17 +17,26 @@ def test_production_api_requires_auth_secrets_and_pinned_embedding() -> None:
         process_role="api",
         api_key_pepper="p" * 32,
         bootstrap_api_key="k" * 24,
+        embedding_service_url="https://embedding.example.internal",
         embedding_revision="embedding-commit",
     )
     assert settings.backend == "production"
     assert not settings.reranker_configured
 
 
-def test_production_requires_reranker_revision_only_when_service_is_configured() -> None:
+def test_production_requires_external_embedding_and_reranker_revision_when_configured() -> None:
+    with pytest.raises(ValidationError, match="CUEKB_EMBEDDING_SERVICE_URL"):
+        Settings(
+            backend="production",
+            process_role="worker",
+            embedding_revision="embedding-commit",
+        )
+
     with pytest.raises(ValidationError, match="pinned reranker revision"):
         Settings(
             backend="production",
             process_role="worker",
+            embedding_service_url="https://embedding.example.internal",
             embedding_revision="embedding-commit",
             reranker_service_url="http://reranker:8090",
         )
@@ -35,6 +44,7 @@ def test_production_requires_reranker_revision_only_when_service_is_configured()
     settings = Settings(
         backend="production",
         process_role="worker",
+        embedding_service_url="https://embedding.example.internal",
         embedding_revision="embedding-commit",
         reranker_service_url="http://reranker:8090",
         reranker_revision="reranker-commit",

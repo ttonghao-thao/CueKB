@@ -11,7 +11,7 @@ def test_unconfigured_reranker_does_not_fall_back_to_embedding_service() -> None
         client.rerank("query", ["passage"], 100)
 
 
-def test_embedding_and_reranker_use_their_own_service_urls(
+def test_embedding_and_reranker_use_their_own_external_service_urls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, str]] = []

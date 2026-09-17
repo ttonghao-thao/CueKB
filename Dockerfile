@@ -4,7 +4,7 @@ ENV PATH="/app/.venv/bin:$PATH" UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
 RUN useradd --create-home --uid 10001 cuekb \
-    && mkdir -p /data/originals /home/cuekb/.cache/huggingface \
+    && mkdir -p /data/originals /home/cuekb/.cache \
     && chown -R cuekb:cuekb /data/originals /home/cuekb/.cache
 COPY pyproject.toml uv.lock README.md alembic.ini ./
 COPY src/ ./src/
@@ -22,9 +22,3 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2
     && uv sync --frozen --no-dev --no-editable --extra ingestion
 USER cuekb
 CMD ["cuekb-worker"]
-
-FROM source AS model
-RUN uv sync --frozen --no-dev --no-editable --extra models
-USER cuekb
-EXPOSE 8090
-CMD ["cuekb-model-server"]
