@@ -1,12 +1,12 @@
 from fastapi.testclient import TestClient
 
-from cuekb.api.dependencies import repository, search_backend
+from cuekb.api.dependencies import _search_backend, repository
 from cuekb.main import app
 
 
 def setup_function() -> None:
     repository.cache_clear()
-    search_backend.cache_clear()
+    _search_backend.cache_clear()
 
 
 def test_health_and_search_flow() -> None:

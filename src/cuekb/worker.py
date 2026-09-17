@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 class Runtime(NamedTuple):
     repository: PostgreSQLRepository
     search: OpenSearchBackend
-    models: HttpModelClient
     storage: LocalFileStorage
     owner: str
 
@@ -32,21 +31,17 @@ class Runtime(NamedTuple):
 def runtime() -> Runtime:
     settings = get_settings()
     return Runtime(
-        repository=PostgreSQLRepository(settings.database_url, settings.api_key_pepper),
+        repository=PostgreSQLRepository(
+            settings.database_url,
+            settings.api_key_pepper,
+            settings.model_config_key.get_secret_value(),
+        ),
         search=OpenSearchBackend(
             settings.opensearch_url,
             f"{settings.opensearch_index_prefix}-chunks",
             settings.vector_dimension,
-            settings.embedding_model,
+            "",
             settings.opensearch_timeout_ms,
-        ),
-        models=HttpModelClient(
-            settings.embedding_base_url,
-            settings.embedding_api_key.get_secret_value(),
-            settings.embedding_model,
-            settings.reranker_base_url,
-            settings.reranker_api_key.get_secret_value(),
-            settings.reranker_model,
         ),
         storage=LocalFileStorage(settings.storage_path),
         owner=f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:12]}",
@@ -82,6 +77,9 @@ def run_once() -> bool:
     settings = get_settings()
     current = runtime()
     outbox_processed = _process_outbox(current)
+    model_config = current.repository.get_model_configuration()
+    if model_config is None:
+        return outbox_processed
     job = current.repository.claim_job(
         current.owner, settings.worker_lease_seconds, settings.worker_max_attempts
     )
@@ -90,7 +88,24 @@ def run_once() -> bool:
     stopped = threading.Event()
     lease_lost = threading.Event()
     thread: threading.Thread | None = None
+    models: HttpModelClient | None = None
+    model_search: OpenSearchBackend | None = None
     try:
+        models = HttpModelClient(
+            model_config["embedding_base_url"],
+            model_config["embedding_api_key"],
+            model_config["embedding_model"],
+            model_config["reranker_base_url"],
+            model_config["reranker_api_key"] or "",
+            model_config["reranker_model"],
+        )
+        model_search = OpenSearchBackend(
+            settings.opensearch_url,
+            f"{settings.opensearch_index_prefix}-chunks",
+            settings.vector_dimension,
+            model_config["embedding_model"],
+            settings.opensearch_timeout_ms,
+        )
 
         def heartbeat() -> None:
             while not stopped.wait(settings.worker_lease_seconds / 3):
@@ -129,15 +144,15 @@ def run_once() -> bool:
         vectors = []
         for start in range(0, len(chunks), 32):
             vectors.extend(
-                current.models.embed(
+                models.embed(
                     [chunk.search_text for chunk in chunks[start : start + 32]],
                     settings.worker_model_timeout_ms,
                 )
             )
         if lease_lost.is_set():
             raise RuntimeError("worker_lease_lost")
-        current.search.ensure_index()
-        current.search.index(chunks, vectors)
+        model_search.ensure_index()
+        model_search.index(chunks, vectors)
         current.repository.save_ready(job["id"], current.owner, chunks)
         stopped.set()
         thread.join(timeout=2)
@@ -167,6 +182,11 @@ def run_once() -> bool:
             delay_seconds=min(60, 2**attempts),
         )
         logger.exception("ingestion job failed", extra={"job_id": str(job["id"])})
+    finally:
+        if models is not None:
+            models.close()
+        if model_search is not None:
+            model_search.client.close()
     return True
 
 

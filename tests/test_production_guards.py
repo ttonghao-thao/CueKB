@@ -8,7 +8,7 @@ from cuekb.config import Settings
 from cuekb.security import hash_api_key
 
 
-def test_production_api_requires_auth_secrets_and_openai_embedding_configuration() -> None:
+def test_production_api_requires_auth_and_model_config_encryption_secrets() -> None:
     with pytest.raises(ValidationError):
         Settings(backend="production", process_role="api")
 
@@ -17,43 +17,23 @@ def test_production_api_requires_auth_secrets_and_openai_embedding_configuration
         process_role="api",
         api_key_pepper="p" * 32,
         bootstrap_api_key="k" * 24,
-        embedding_base_url="https://embedding.example.internal/v1",
-        embedding_api_key=SecretStr("embedding-key"),
-        embedding_model="BAAI/bge-m3",
+        model_config_key=SecretStr("m" * 32),
     )
     assert settings.backend == "production"
-    assert not settings.reranker_configured
 
 
-def test_production_requires_openai_configuration_for_embedding_and_reranker() -> None:
-    with pytest.raises(ValidationError, match="CUEKB_EMBEDDING_BASE_URL"):
+def test_production_starts_without_model_services_but_requires_encryption_key() -> None:
+    with pytest.raises(ValidationError, match="CUEKB_MODEL_CONFIG_KEY"):
         Settings(
             backend="production",
             process_role="worker",
-            embedding_model="BAAI/bge-m3",
         )
-
-    with pytest.raises(ValidationError, match="CUEKB_RERANKER_API_KEY"):
-        Settings(
-            backend="production",
-            process_role="worker",
-            embedding_base_url="https://embedding.example.internal/v1",
-            embedding_api_key=SecretStr("embedding-key"),
-            embedding_model="BAAI/bge-m3",
-            reranker_base_url="http://reranker:8090/v1",
-        )
-
     settings = Settings(
         backend="production",
         process_role="worker",
-        embedding_base_url="https://embedding.example.internal/v1",
-        embedding_api_key=SecretStr("embedding-key"),
-        embedding_model="BAAI/bge-m3",
-        reranker_base_url="http://reranker:8090/v1",
-        reranker_api_key=SecretStr("reranker-key"),
-        reranker_model="BAAI/bge-reranker-v2-m3",
+        model_config_key=SecretStr("m" * 32),
     )
-    assert settings.reranker_configured
+    assert settings.backend == "production"
 
 
 def test_api_key_hash_is_peppered_and_does_not_contain_secret() -> None:

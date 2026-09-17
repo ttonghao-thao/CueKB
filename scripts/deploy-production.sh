@@ -8,8 +8,7 @@ if [ ! -f "$env_file" ]; then
 fi
 
 docker compose --env-file "$env_file" config --quiet
-docker compose --env-file "$env_file" build
-docker compose --env-file "$env_file" up -d
+docker compose --env-file "$env_file" up -d --no-build
 docker compose --env-file "$env_file" ps
 
 attempt=0

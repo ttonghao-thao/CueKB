@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Uploa
 from fastapi.responses import FileResponse
 
 from cuekb import __version__
+from cuekb.adapters.opensearch import OpenSearchBackend
 from cuekb.adapters.postgres import ConflictError, PostgreSQLRepository
 from cuekb.api.dependencies import (
     current_principal,
@@ -29,6 +30,8 @@ from cuekb.schemas import (
     HealthResponse,
     KnowledgeBaseAccess,
     KnowledgeBaseCreate,
+    ModelConfigurationStatus,
+    ModelConfigurationUpdate,
     PublishRequest,
     SearchRequest,
     SearchResponse,
@@ -50,6 +53,80 @@ def ready() -> dict:
         repository().engine.connect().close()
         search_backend().client.cluster.health()
     return {"status": "ready"}
+
+
+def _model_configuration_status(config: dict | None) -> ModelConfigurationStatus:
+    if config is None:
+        return ModelConfigurationStatus(configured=False)
+    return ModelConfigurationStatus(
+        configured=True,
+        embedding_base_url=config["embedding_base_url"],
+        embedding_model=config["embedding_model"],
+        embedding_api_key_set=bool(config["embedding_api_key"]),
+        reranker_base_url=config["reranker_base_url"],
+        reranker_model=config["reranker_model"],
+        reranker_api_key_set=bool(config["reranker_api_key"]),
+        revision=config["revision"],
+        updated_at=config["updated_at"],
+    )
+
+
+def _require_model_admin(principal: Principal | None) -> PostgreSQLRepository:
+    repo = repository()
+    if not isinstance(repo, PostgreSQLRepository):
+        raise HTTPException(409, "model_configuration_requires_production_backend")
+    if not principal or not principal.is_system_admin:
+        raise HTTPException(403, "system_admin_required")
+    return repo
+
+
+@router.get("/model-configuration", response_model=ModelConfigurationStatus, tags=["system"])
+def get_model_configuration(
+    principal: Principal | None = Depends(current_principal),
+) -> ModelConfigurationStatus:
+    return _model_configuration_status(_require_model_admin(principal).get_model_configuration())
+
+
+@router.put("/model-configuration", response_model=ModelConfigurationStatus, tags=["system"])
+def update_model_configuration(
+    request: ModelConfigurationUpdate,
+    principal: Principal | None = Depends(current_principal),
+) -> ModelConfigurationStatus:
+    repo = _require_model_admin(principal)
+    settings = get_settings()
+    index = OpenSearchBackend(
+        settings.opensearch_url,
+        f"{settings.opensearch_index_prefix}-chunks",
+        settings.vector_dimension,
+        request.embedding_model,
+        settings.opensearch_timeout_ms,
+    )
+    try:
+        index.validate_existing_index()
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    finally:
+        index.client.close()
+    try:
+        config = repo.save_model_configuration(
+            embedding_base_url=request.embedding_base_url,
+            embedding_api_key=(
+                request.embedding_api_key.get_secret_value()
+                if request.embedding_api_key is not None
+                else None
+            ),
+            embedding_model=request.embedding_model,
+            reranker_base_url=request.reranker_base_url,
+            reranker_api_key=(
+                request.reranker_api_key.get_secret_value()
+                if request.reranker_api_key is not None
+                else None
+            ),
+            reranker_model=request.reranker_model,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return _model_configuration_status(config)
 
 
 @router.post(
@@ -101,6 +178,8 @@ def _queue(
     repo.require_role(principal, [metadata.kb_id], "write")
     if principal is None:
         raise HTTPException(401, "invalid_api_key")
+    if repo.get_model_configuration() is None:
+        raise HTTPException(409, "embedding_service_not_configured")
     uri, content_sha = file_storage().save(content)
     request_sha = hashlib.sha256(content + metadata.model_dump_json().encode()).hexdigest()
     try:

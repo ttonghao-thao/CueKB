@@ -27,12 +27,7 @@ class Settings(BaseSettings):
     worker_max_attempts: int = Field(default=3, ge=1, le=20)
     api_key_pepper: str = ""
     bootstrap_api_key: str = ""
-    embedding_base_url: str = ""
-    embedding_api_key: SecretStr = SecretStr("")
-    embedding_model: str = ""
-    reranker_base_url: str = ""
-    reranker_api_key: SecretStr = SecretStr("")
-    reranker_model: str = ""
+    model_config_key: SecretStr = SecretStr("")
     vector_dimension: int = Field(default=1024, ge=1)
     search_deadline_ms: int = Field(default=900, ge=100, le=10000)
     model_timeout_ms: int = Field(default=400, ge=20, le=5000)
@@ -42,14 +37,6 @@ class Settings(BaseSettings):
     exact_identifier_pattern: str = (
         r"^(?:[A-Za-z][A-Za-z0-9_.:/+-]*\d[A-Za-z0-9_.:/+-]*|[A-Z][A-Z0-9_./:-]{2,})$"
     )
-
-    @property
-    def reranker_configured(self) -> bool:
-        return bool(self.reranker_base_url.strip())
-
-    @property
-    def embedding_configured(self) -> bool:
-        return bool(self.embedding_base_url.strip())
 
     @model_validator(mode="after")
     def validate_production(self) -> "Settings":
@@ -66,18 +53,10 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "production requires CUEKB_BOOTSTRAP_API_KEY with at least 24 characters"
                 )
-        if self.backend == "production":
-            if not self.embedding_configured:
-                raise ValueError("production requires CUEKB_EMBEDDING_BASE_URL")
-            if not self.embedding_api_key.get_secret_value():
-                raise ValueError("production requires CUEKB_EMBEDDING_API_KEY")
-            if not self.embedding_model.strip():
-                raise ValueError("production requires CUEKB_EMBEDDING_MODEL")
-        if self.backend == "production" and self.reranker_configured:
-            if not self.reranker_api_key.get_secret_value():
-                raise ValueError("production requires CUEKB_RERANKER_API_KEY when reranker is configured")
-            if not self.reranker_model.strip():
-                raise ValueError("production requires CUEKB_RERANKER_MODEL when reranker is configured")
+        if self.backend == "production" and len(self.model_config_key.get_secret_value()) < 32:
+            raise ValueError(
+                "production requires CUEKB_MODEL_CONFIG_KEY with at least 32 characters"
+            )
         return self
 
 

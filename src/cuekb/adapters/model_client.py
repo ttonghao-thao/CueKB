@@ -34,6 +34,11 @@ class HttpModelClient:
     def embedding_model(self) -> str:
         return self._embedding_model
 
+    def close(self) -> None:
+        self.embedding_client.close()
+        if self.reranker_client is not None:
+            self.reranker_client.close()
+
     def embed(self, texts: Sequence[str], timeout_ms: int) -> list[list[float]]:
         response = self.embedding_client.post(
             "/embeddings",

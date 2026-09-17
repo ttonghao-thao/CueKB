@@ -14,12 +14,7 @@ x-app-env: &app-env
   CUEKB_WORKER_POLL_SECONDS: ${CUEKB_WORKER_POLL_SECONDS:-1}
   CUEKB_WORKER_LEASE_SECONDS: ${CUEKB_WORKER_LEASE_SECONDS:-300}
   CUEKB_WORKER_MAX_ATTEMPTS: ${CUEKB_WORKER_MAX_ATTEMPTS:-3}
-  CUEKB_EMBEDDING_BASE_URL: ${CUEKB_EMBEDDING_BASE_URL:?set embedding OpenAI-compatible base URL}
-  CUEKB_EMBEDDING_API_KEY: ${CUEKB_EMBEDDING_API_KEY:?set embedding API key}
-  CUEKB_EMBEDDING_MODEL: ${CUEKB_EMBEDDING_MODEL:?set embedding model}
-  CUEKB_RERANKER_BASE_URL: ${CUEKB_RERANKER_BASE_URL:-}
-  CUEKB_RERANKER_API_KEY: ${CUEKB_RERANKER_API_KEY:-}
-  CUEKB_RERANKER_MODEL: ${CUEKB_RERANKER_MODEL:-}
+  CUEKB_MODEL_CONFIG_KEY: ${CUEKB_MODEL_CONFIG_KEY:?set CUEKB_MODEL_CONFIG_KEY}
   CUEKB_VECTOR_DIMENSION: ${CUEKB_VECTOR_DIMENSION:-1024}
   CUEKB_SEARCH_DEADLINE_MS: ${CUEKB_SEARCH_DEADLINE_MS:-900}
   CUEKB_MODEL_TIMEOUT_MS: ${CUEKB_MODEL_TIMEOUT_MS:-400}
@@ -65,7 +60,8 @@ services:
     logging: *default-logging
 
   migrate:
-    build: {context: ., target: api}
+    image: ${CUEKB_API_IMAGE:-cuekb-api:local}
+    pull_policy: never
     environment:
       <<: *app-env
       CUEKB_PROCESS_ROLE: worker
@@ -76,7 +72,8 @@ services:
     logging: *default-logging
 
   worker:
-    build: {context: ., target: worker}
+    image: ${CUEKB_WORKER_IMAGE:-cuekb-worker:local}
+    pull_policy: never
     environment:
       <<: *app-env
       CUEKB_PROCESS_ROLE: worker
@@ -90,7 +87,8 @@ services:
     logging: *default-logging
 
   api:
-    build: {context: ., target: api}
+    image: ${CUEKB_API_IMAGE:-cuekb-api:local}
+    pull_policy: never
     environment:
       <<: *app-env
       CUEKB_PROCESS_ROLE: api

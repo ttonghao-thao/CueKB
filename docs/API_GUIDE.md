@@ -68,6 +68,8 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 
 内置管理门户位于`/portal/`。API Key仅进入当前标签页的`sessionStorage`，浏览器请求仍直接调用本章接口，不建立额外Cookie会话。
 
+系统管理员可通过`GET /v1/model-configuration`读取模型配置状态，通过`PUT /v1/model-configuration`保存Embedding与可选Reranker的`base_url`、`model`、`api_key`。GET只返回`*_api_key_set`布尔值，不返回密钥；PUT中密钥为`null`表示保留现有值。首次保存Embedding时必须提供密钥，Reranker启用时也须提供完整三元组。已有OpenSearch索引与新Embedding Model不匹配时返回409；更换模型需先完成索引重建方案。
+
 ```json
 {
   "kb_id": "替换为UUID",
@@ -135,7 +137,7 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 
 `retrieval_path`、`executed_stages`和`skipped_stages`说明本次真实执行路径。例如exact请求的`executed_stages`不应包含`embedding`；未配置重排地址时记录`reranker_service_unconfigured`，其他跳过原因包括显式关闭、候选不足和剩余预算不足。
 
-这些选择不是调用模型临时猜测，也不是只能改源码的硬编码。调用方可用`mode`明确选择exact或hybrid；auto根据服务端可配置的标识符规则确定路径。Embedding始终使用必配的 OpenAI-compatible `CUEKB_EMBEDDING_BASE_URL`、`CUEKB_EMBEDDING_API_KEY`和`CUEKB_EMBEDDING_MODEL`；外部API契约及model校验见[系统设计](SYSTEM_DESIGN.md#222-外部模型-api-契约)。重排默认不执行；服务端完整配置`CUEKB_RERANKER_BASE_URL`、`CUEKB_RERANKER_API_KEY`和`CUEKB_RERANKER_MODEL`后，还会检查`CUEKB_RERANK_ENABLED`、候选数量、`CUEKB_RERANK_MIN_REMAINING_MS`和请求总deadline。重排模型繁忙时会快速返回429，检索服务保留已经通过权威校验的RRF结果并标记`rerank_unavailable`。
+这些选择不是调用模型临时猜测，也不是只能改源码的硬编码。调用方可用`mode`明确选择exact或hybrid；auto根据服务端可配置的标识符规则确定路径。Embedding服务的`base_url`、`api_key`和`model`由系统管理员在门户保存；配置完成前导入和检索返回`409 embedding_service_not_configured`。外部API契约及model校验见[系统设计](SYSTEM_DESIGN.md#222-外部模型-api-契约)。重排默认不执行；服务端完整配置Reranker后，还会检查`CUEKB_RERANK_ENABLED`、候选数量、`CUEKB_RERANK_MIN_REMAINING_MS`和请求总deadline。重排模型繁忙时会快速返回429，检索服务保留已经通过权威校验的RRF结果并标记`rerank_unavailable`。
 
 原件可通过`GET /v1/documents/{document_id}/source`下载当前发布版本；指定历史版本可附`?version_id=<UUID>`，仍执行知识库读权限和删除状态检查。
 

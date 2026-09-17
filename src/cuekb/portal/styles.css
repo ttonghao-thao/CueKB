@@ -56,6 +56,10 @@ tr[data-document]:hover { background: #f8fbf9; }
 .muted { color: var(--muted); }
 .empty, .loading { padding: 56px 20px; text-align: center; color: var(--muted); }
 .form-panel { padding: clamp(20px, 4vw, 34px); }
+.model-status { padding: 16px 20px; margin-bottom: 18px; }
+.model-secret { margin-top: 18px; }
+.model-section-heading { margin-top: 32px; }
+.model-note { margin-top: 25px; }
 .drop-zone { min-height: 210px; padding: 35px; display: grid; place-items: center; align-content: center; gap: 8px; border: 1.5px dashed #a9bbb0; border-radius: 13px; background: #fafcf9; color: var(--muted); text-align: center; }
 .drop-zone:hover, .drop-zone.dragging { border-color: var(--brand); background: var(--brand-soft); }
 .drop-zone strong { color: var(--ink); }

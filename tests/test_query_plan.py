@@ -30,14 +30,24 @@ class VectorMemorySearch(InMemorySearchBackend):
         ]
 
 
-def build(settings: Settings | None = None):
+def build(settings: Settings | None = None, reranker_configured: bool = False):
     repository, search, model = InMemoryRepository(), VectorMemorySearch(), RecordingModel()
     ingestion = IngestionService(repository, search)
     kb = ingestion.create_knowledge_base(KnowledgeBaseCreate(name="KB"))
     ingestion.ingest_text(
         DocumentCreate(kb_id=kb.id, name="手册", content="E102 光链路异常。\n\n检查光功率。")
     )
-    return kb, model, RetrievalService(repository, search, settings or Settings(), model)
+    return (
+        kb,
+        model,
+        RetrievalService(
+            repository,
+            search,
+            settings or Settings(),
+            model,
+            reranker_configured=reranker_configured,
+        ),
+    )
 
 
 def test_auto_exact_identifier_skips_embedding_and_rerank() -> None:
@@ -53,7 +63,7 @@ def test_auto_exact_identifier_skips_embedding_and_rerank() -> None:
 
 
 def test_hybrid_uses_embedding_and_bounded_rerank() -> None:
-    kb, model, retrieval = build(Settings(reranker_base_url="http://reranker:8090/v1"))
+    kb, model, retrieval = build(reranker_configured=True)
     result = retrieval.search_evidence(
         SearchRequest(query="链路为什么异常", kb_ids=[kb.id], mode=RetrievalMode.HYBRID)
     )
@@ -76,10 +86,10 @@ def test_hybrid_skips_rerank_when_service_is_unconfigured() -> None:
 def test_hybrid_skips_rerank_when_deadline_budget_is_too_small() -> None:
     kb, model, retrieval = build(
         Settings(
-            reranker_base_url="http://reranker:8090/v1",
             search_deadline_ms=100,
             rerank_min_remaining_ms=500,
-        )
+        ),
+        reranker_configured=True,
     )
     result = retrieval.search_evidence(
         SearchRequest(query="链路为什么异常", kb_ids=[kb.id], mode=RetrievalMode.HYBRID)

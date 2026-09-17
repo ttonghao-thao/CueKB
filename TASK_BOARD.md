@@ -4,6 +4,14 @@
 
 当前编码状态：**M0、M1、M2及首期管理门户已完成；M3、M4待开始；生成式回答待确认。**
 
+## 当前优化计划（2026-09-17）
+
+1. 拆分 API/Worker 镜像的手动 `docker build` 与仅引用本地镜像的 Compose 部署。
+2. 将 Embedding/Reranker 服务配置迁至 PostgreSQL，提供系统管理员门户配置入口；API/Worker 在运行时读取，并保留索引模型一致性约束。
+3. 更新部署、架构与 API 文档，运行针对性测试及静态检查；Docker 实机验证单独记录。
+
+状态：编码与本地静态验证已完成；Docker目标环境验收待执行。
+
 ## 状态口径
 
 | 状态 | 唯一含义 |
@@ -20,8 +28,8 @@
 
 | 能力 | 已完成内容 | 主要代码或配置 |
 | --- | --- | --- |
-| 工程与部署 | 冻结Python依赖、多阶段Dockerfile、Compose、迁移门禁、健康检查、生产配置门禁和部署脚本 | `pyproject.toml`、`uv.lock`、`Dockerfile`、`docker-compose.yml`、`scripts/deploy-production.sh` |
-| 权威仓储 | PostgreSQL知识库、文档、版本、正文、任务、发布指针、ACL和outbox仓储；Alembic初始迁移 | `db/schema.sql`、`migrations/`、`adapters/postgres.py` |
+| 工程与部署 | 冻结Python依赖、多阶段Dockerfile、手动镜像构建、Compose本地镜像引用、迁移门禁、健康检查和部署脚本 | `pyproject.toml`、`uv.lock`、`Dockerfile`、`docker-compose.yml`、`scripts/deploy-production.sh` |
+| 权威仓储 | PostgreSQL知识库、文档、版本、正文、任务、发布指针、ACL、outbox及加密模型配置仓储；Alembic初始迁移和模型配置迁移 | `db/schema.sql`、`migrations/`、`adapters/postgres.py` |
 | 身份与权限 | API Key签发、哈希保存、吊销；read/write/admin知识库ACL；检索和原文返回前复验 | `security.py`、`api/routes.py`、`adapters/postgres.py` |
 | 语料导入 | 文本与multipart文件接口；PDF、DOCX、Markdown、TXT；原文件保存；Docling/OCR；基础质量门禁和结构化分块 | `api/routes.py`、`services/parsing.py`、`adapters/storage.py` |
 | 后台任务 | 幂等提交、PG任务租约、续租、确定性chunk ID、有界退避、失败状态、自动发布和outbox清理 | `worker.py`、`adapters/postgres.py` |
@@ -31,7 +39,7 @@
 | 检索编排 | `auto`/`exact`/`hybrid`/`related`路由、BM25与向量并行召回、RRF、PG最终过滤和版本切换重试 | `services/retrieval.py` |
 | 重排与降级 | 独立 OpenAI-compatible 重排API；未配置时默认跳过；配置后执行model校验、有界候选、deadline/负载门禁和故障降级 | `model_client.py`、`services/retrieval.py` |
 | 对外接口 | 知识库、API Key、ACL、文件/文本导入、任务、发布、原文、删除、检索和健康接口 | `api/routes.py`、`schemas.py`、`docs/API_GUIDE.md` |
-| 管理门户 | API Key连接、知识库选择、批量文件导入、任务轮询、文档与版本管理、原文下载、删除和检索验证 | `portal/`、`api/routes.py`、`adapters/postgres.py` |
+| 管理门户 | API Key连接、知识库选择、批量文件导入、任务轮询、文档与版本管理、原文下载、删除、检索验证及系统管理员模型配置 | `portal/`、`api/routes.py`、`adapters/postgres.py` |
 | 自动化检查 | API/检索/解析/路径选择/配置门禁/密钥/文件边界测试及生产验收脚本 | `tests/`、`scripts/acceptance-production.py` |
 
 ## 待开始
@@ -81,9 +89,9 @@
 
 | 验证活动 | 状态 | 当前记录 |
 | --- | --- | --- |
-| 本地单元/API/静态检查 | **已完成** | OpenAI-compatible 模型接入后，17项Pytest、Ruff、compileall、`uv lock --check`、配置密钥脱敏断言通过；Pyright为0 error（未安装可选Docling产生4个warning）；当前环境无Docker CLI，未执行Compose实际schema/构建/启动 |
+| 本地单元/API/静态检查 | **已完成** | 本次优化后20项Pytest、Ruff check/format、compileall、JavaScript语法、Shell语法、Compose YAML解析、`uv lock --check`、0002迁移离线SQL通过；Pyright为0 error（未安装可选Docling产生4个warning）。完整`alembic upgrade head --sql`仍因既有0001迁移使用`MockConnection.exec_driver_sql`失败；本次0002独立离线检查通过。 |
 | 冻结依赖安全审计 | **已完成** | `pip-audit`检查全部extras，未发现已知漏洞 |
-| Docker目标环境启动 | **待开始** | 执行Compose构建、迁移、健康检查和生产验收脚本 |
+| Docker目标环境启动 | **待开始** | 当前环境无Docker CLI；需在目标环境手动`docker build`两个镜像，执行Compose迁移/启动，门户配置模型，再跑生产验收脚本及门户浏览器检查 |
 | 真实语料质量评测 | **待开始** | 中文扫描件、复杂表格、型号/版本、无答案和多证据样本 |
 | 时延与负载测试 | **待开始** | 记录硬件、模型、候选数、QPS、P50/P95和降级率 |
 | 故障与恢复演练 | **待开始** | Worker崩溃、重复事件、索引延迟、模型超时、撤权、删除和PG不可用 |
@@ -93,6 +101,7 @@
 
 - P1至P4以及M0至M2的编码状态均为**已完成**。
 - `exact`路径跳过Embedding和重排；`hybrid`执行BM25与向量召回；未配置重排地址时默认跳过重排，配置后继续受开关、deadline、候选数和模型负载控制。
-- 生产模式强制使用PostgreSQL、OpenSearch、外部Embedding API的`base_url`、`api_key`和`model`，不会回退内存模式。
+- 生产模式强制使用PostgreSQL和OpenSearch，不会回退内存模式；未配置Embedding时可启动，但导入/检索返回409。外部模型三元组由系统管理员在门户维护，API与Worker在运行时读取。
 - 首期门户编码已完成；下一项核心编码工作从M3开始；生成式回答、OIDC、对象存储、多`scope`和高可用拓扑保持**待确认**。
 - 外部Embedding部署已从项目Compose、镜像、依赖和代码入口移除；Embedding和Reranker通过独立 OpenAI-compatible API的`base_url`、`api_key`和`model`调用。
+- 应用镜像由操作员手动构建，Compose只使用本地镜像；模型密钥经`pgcrypto`加密，`CUEKB_MODEL_CONFIG_KEY`需稳定保存；现有索引不接受不匹配的Embedding Model。

@@ -26,9 +26,97 @@ class ConflictError(RuntimeError):
 
 
 class PostgreSQLRepository:
-    def __init__(self, database_url: str, pepper: str) -> None:
+    def __init__(self, database_url: str, pepper: str, model_config_key: str) -> None:
         self.engine: Engine = create_engine(database_url, pool_pre_ping=True)
         self.pepper = pepper
+        self.model_config_key = model_config_key
+
+    def get_model_configuration(self) -> dict | None:
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    text(
+                        "SELECT embedding_base_url,pgp_sym_decrypt(embedding_api_key,:key) "
+                        "AS embedding_api_key,embedding_model,reranker_base_url,"
+                        "CASE WHEN reranker_api_key IS NULL THEN NULL ELSE "
+                        "pgp_sym_decrypt(reranker_api_key,:key) END AS reranker_api_key,"
+                        "reranker_model,revision,updated_at FROM model_configurations WHERE id=1"
+                    ),
+                    {"key": self.model_config_key},
+                )
+                .mappings()
+                .first()
+            )
+        return dict(row) if row else None
+
+    def save_model_configuration(
+        self,
+        embedding_base_url: str,
+        embedding_api_key: str | None,
+        embedding_model: str,
+        reranker_base_url: str,
+        reranker_api_key: str | None,
+        reranker_model: str,
+    ) -> dict:
+        with self.engine.begin() as conn:
+            conn.execute(text("SELECT pg_advisory_xact_lock(1129663299)"))
+            existing = (
+                conn.execute(
+                    text(
+                        "SELECT pgp_sym_decrypt(embedding_api_key,:key) AS embedding_api_key,"
+                        "CASE WHEN reranker_api_key IS NULL THEN NULL ELSE "
+                        "pgp_sym_decrypt(reranker_api_key,:key) END AS reranker_api_key "
+                        "FROM model_configurations WHERE id=1 FOR UPDATE"
+                    ),
+                    {"key": self.model_config_key},
+                )
+                .mappings()
+                .first()
+            )
+            embedding_secret = (
+                embedding_api_key
+                if embedding_api_key is not None
+                else (existing["embedding_api_key"] if existing else "")
+            )
+            reranker_secret = (
+                (
+                    reranker_api_key
+                    if reranker_api_key is not None
+                    else (existing["reranker_api_key"] if existing else None)
+                )
+                if reranker_base_url
+                else None
+            )
+            if not embedding_secret:
+                raise ValueError("embedding_api_key_required")
+            if reranker_base_url and not reranker_secret:
+                raise ValueError("reranker_api_key_required")
+            conn.execute(
+                text(
+                    "INSERT INTO model_configurations(id,embedding_base_url,embedding_api_key,"
+                    "embedding_model,reranker_base_url,reranker_api_key,reranker_model) "
+                    "VALUES (1,:embedding_url,pgp_sym_encrypt(:embedding_key,:key,'cipher-algo=aes256'),"
+                    ":embedding_model,:reranker_url,CASE WHEN CAST(:reranker_key AS text) IS NULL THEN NULL ELSE "
+                    "pgp_sym_encrypt(:reranker_key,:key,'cipher-algo=aes256') END,:reranker_model) "
+                    "ON CONFLICT (id) DO UPDATE SET embedding_base_url=EXCLUDED.embedding_base_url,"
+                    "embedding_api_key=EXCLUDED.embedding_api_key,"
+                    "embedding_model=EXCLUDED.embedding_model,reranker_base_url=EXCLUDED.reranker_base_url,"
+                    "reranker_api_key=EXCLUDED.reranker_api_key,reranker_model=EXCLUDED.reranker_model,"
+                    "revision=model_configurations.revision+1,updated_at=now()"
+                ),
+                {
+                    "embedding_url": embedding_base_url,
+                    "embedding_key": embedding_secret,
+                    "embedding_model": embedding_model,
+                    "reranker_url": reranker_base_url,
+                    "reranker_key": reranker_secret,
+                    "reranker_model": reranker_model,
+                    "key": self.model_config_key,
+                },
+            )
+        result = self.get_model_configuration()
+        assert result is not None
+        return result
 
     def bootstrap(self, api_key: str) -> None:
         digest = hash_api_key(api_key, self.pepper)

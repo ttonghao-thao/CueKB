@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import time
 import uuid
 
@@ -63,8 +62,8 @@ def main() -> None:
     parser.add_argument(
         "--expect-rerank",
         action="store_true",
-        default=bool(os.getenv("CUEKB_RERANKER_BASE_URL", "").strip()),
-        help="require the configured reranker to execute during hybrid search",
+        default=None,
+        help="require reranker execution (default: read the portal configuration)",
     )
     args = parser.parse_args()
     run = uuid.uuid4().hex
@@ -75,6 +74,16 @@ def main() -> None:
         portal = admin.get("/portal/")
         portal.raise_for_status()
         assert "CueKB 管理门户" in portal.text
+        model_config_response = admin.get("/v1/model-configuration")
+        model_config_response.raise_for_status()
+        model_config = model_config_response.json()
+        assert model_config["configured"], "configure Embedding in the portal before acceptance"
+        assert "embedding_api_key" not in model_config
+        expect_rerank = (
+            args.expect_rerank
+            if args.expect_rerank is not None
+            else bool(model_config["reranker_base_url"])
+        )
         kb = admin.post("/v1/knowledge-bases", json={"name": f"acceptance-{run}"}).json()
         created = admin.post(
             "/v1/api-keys", json={"principal_name": f"acceptance-{run}", "label": "acceptance"}
@@ -127,7 +136,7 @@ def main() -> None:
             hybrid.raise_for_status()
             hybrid_body = hybrid.json()
             assert "embedding" in hybrid_body["executed_stages"] and hybrid_body["hits"]
-            if args.expect_rerank:
+            if expect_rerank:
                 assert "rerank" in hybrid_body["executed_stages"], hybrid_body
             else:
                 assert "rerank" not in hybrid_body["executed_stages"], hybrid_body
@@ -184,7 +193,7 @@ def main() -> None:
     print(
         "PASS: production auth, ACL, idempotent upload, worker, source, exact/hybrid, "
         "embedding, portal management API, "
-        f"rerank={'enabled' if args.expect_rerank else 'disabled'}, version switch, "
+        f"rerank={'enabled' if expect_rerank else 'disabled'}, version switch, "
         "revoke and delete"
     )
 

@@ -1,6 +1,6 @@
 const state = {
   apiKey: sessionStorage.getItem("cuekb_api_key") || "",
-  knowledgeBases: [], currentKb: null, documents: [], files: [], jobs: new Map(),
+  knowledgeBases: [], currentKb: null, documents: [], files: [], jobs: new Map(), isSystemAdmin: false, rerankerKeySet: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -42,12 +42,24 @@ function showView(name) {
   $$(".view").forEach((item) => item.classList.toggle("active", item.id === `view-${name}`));
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === name));
   if (name === "documents") loadDocuments();
+  if (name === "models" && state.isSystemAdmin) loadModelConfig();
 }
 
 async function connect(apiKey) {
   state.apiKey = apiKey.trim();
+  state.isSystemAdmin = false;
+  $("#models-nav").hidden = true;
   try {
     state.knowledgeBases = await api("/knowledge-bases");
+    try {
+      await api("/model-configuration");
+      state.isSystemAdmin = true;
+    } catch (error) {
+      if (error.status !== 403 && error.status !== 409) throw error;
+      state.isSystemAdmin = false;
+    }
+    $("#models-nav").hidden = !state.isSystemAdmin;
+    if (!state.isSystemAdmin && $("#view-models").classList.contains("active")) showView("documents");
     sessionStorage.setItem("cuekb_api_key", state.apiKey);
     $("#connection-state").textContent = "已安全连接";
     $("#connection-state").classList.add("connected");
@@ -61,6 +73,49 @@ async function connect(apiKey) {
     $("#key-error").textContent = error.status === 401 ? "API Key 无效或已被吊销" : `连接失败：${error.message}`;
     if (!$("#key-dialog").open) $("#key-dialog").showModal();
   }
+}
+
+async function loadModelConfig() {
+  if (!state.isSystemAdmin) return;
+  try {
+    const config = await api("/model-configuration");
+    $("#embedding-base-url").value = config.embedding_base_url;
+    $("#embedding-model").value = config.embedding_model;
+    $("#reranker-base-url").value = config.reranker_base_url;
+    $("#reranker-model").value = config.reranker_model;
+    $("#embedding-api-key").value = "";
+    $("#reranker-api-key").value = "";
+    $("#embedding-api-key").required = !config.embedding_api_key_set;
+    state.rerankerKeySet = config.reranker_api_key_set;
+    $("#reranker-model").required = Boolean(config.reranker_base_url);
+    $("#reranker-api-key").required = Boolean(config.reranker_base_url && !state.rerankerKeySet);
+    $("#model-config-status").textContent = config.configured
+      ? `已配置 · 修订 ${config.revision} · Embedding 密钥已保存${config.reranker_base_url ? " · Reranker 已启用" : " · Reranker 已关闭"}`
+      : "尚未配置 Embedding。服务已启动，导入和检索需在保存模型配置后使用。";
+  } catch (error) { handleError(error, "读取模型配置失败"); }
+}
+
+async function saveModelConfig(event) {
+  event.preventDefault();
+  if (!state.isSystemAdmin) return;
+  const button = $("#save-model-config");
+  button.disabled = true;
+  const embeddingKey = $("#embedding-api-key").value;
+  const rerankerKey = $("#reranker-api-key").value;
+  const payload = {
+    embedding_base_url: $("#embedding-base-url").value.trim(),
+    embedding_model: $("#embedding-model").value.trim(),
+    embedding_api_key: embeddingKey || null,
+    reranker_base_url: $("#reranker-base-url").value.trim(),
+    reranker_model: $("#reranker-base-url").value.trim() ? $("#reranker-model").value.trim() : "",
+    reranker_api_key: rerankerKey || null,
+  };
+  try {
+    await api("/model-configuration", { method: "PUT", body: JSON.stringify(payload) });
+    toast("模型配置已保存");
+    await loadModelConfig();
+  } catch (error) { handleError(error, "保存模型配置失败"); }
+  finally { button.disabled = false; }
 }
 
 function renderKnowledgeBases() {
@@ -236,6 +291,12 @@ $("#drop-zone").addEventListener("dragleave", (event) => event.currentTarget.cla
 $("#drop-zone").addEventListener("drop", (event) => { event.preventDefault(); event.currentTarget.classList.remove("dragging"); setFiles(event.dataTransfer.files); });
 $("#upload-form").addEventListener("submit", uploadFiles);
 $("#search-form").addEventListener("submit", search);
+$("#model-config-form").addEventListener("submit", saveModelConfig);
+$("#reranker-base-url").addEventListener("input", () => {
+  const enabled = Boolean($("#reranker-base-url").value.trim());
+  $("#reranker-model").required = enabled;
+  $("#reranker-api-key").required = enabled && !state.rerankerKeySet;
+});
 $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
 
 if (state.apiKey) connect(state.apiKey); else $("#key-dialog").showModal();

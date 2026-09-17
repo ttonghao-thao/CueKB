@@ -1,7 +1,9 @@
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from opensearchpy.exceptions import OpenSearchException
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,6 +46,20 @@ def create_app() -> FastAPI:
     @application.exception_handler(PermissionError)
     async def permission_error(_: Request, exc: PermissionError) -> JSONResponse:
         return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+    @application.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> Response:
+        if request.url.path != "/v1/model-configuration":
+            return await request_validation_exception_handler(request, exc)
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {"loc": item["loc"], "msg": item["msg"], "type": item["type"]}
+                    for item in exc.errors()
+                ]
+            },
+        )
 
     @application.exception_handler(SQLAlchemyError)
     async def database_unavailable(_: Request, __: SQLAlchemyError) -> JSONResponse:

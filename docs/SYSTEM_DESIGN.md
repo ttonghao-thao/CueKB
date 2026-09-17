@@ -27,7 +27,7 @@ CueKB是一套证据检索服务。输入自然语言问题与可信访问身份
 
 **待开始**：轻量关系、完整上下文、证据状态评估、质量评测工具和运行指标。
 
-**待确认**：轻量Web门户、LLM回答、文档级ACL、外部平台同步及更复杂查询。DOC旧格式、复杂图形理解、图片/视频语义检索、全自动知识图谱和生产故障动作执行不在当前范围。
+**待确认**：LLM回答、文档级ACL、外部平台同步及更复杂查询。DOC旧格式、复杂图形理解、图片/视频语义检索、全自动知识图谱和生产故障动作执行不在当前范围。
 
 ## 2. 内部开发视图：架构、组件与数据流
 
@@ -70,7 +70,7 @@ flowchart LR
 | 保存向量、按向量找相近候选 | 内存模式不执行 | 生产模式由OpenSearch向量字段与k-NN检索执行 |
 | 保存上传的原始文件 | 内存模式不执行 | 生产模式由文件存储适配器执行 |
 
-生产接入不是“把内存改成PostgreSQL”这一项开关，而是分别装配权威仓储、搜索引擎、文本编码和文件保存。当前[`api/dependencies.py`](../src/cuekb/api/dependencies.py)根据`CUEKB_BACKEND`选择内存或生产适配器；生产配置缺少模型`base_url`、`api_key`或`model`时启动失败，不会静默回退。
+生产接入不是“把内存改成PostgreSQL”这一项开关，而是分别装配权威仓储、搜索引擎、文本编码和文件保存。当前[`api/dependencies.py`](../src/cuekb/api/dependencies.py)根据`CUEKB_BACKEND`选择内存或生产适配器；外部模型配置由PostgreSQL读取。未配置Embedding时生产服务可以启动，导入与检索返回409，且不会静默回退内存模式。
 
 ### 2.2 已完成编码的生产架构
 
@@ -101,7 +101,7 @@ flowchart LR
     RET -->|证据JSON| C
 ```
 
-应用采用模块化结构，API与独立Worker共享领域模型；解析器是Worker调用的库，不要求另建解析微服务。Embedding和重排均使用项目外部的独立服务地址；Embedding地址必需，重排地址为空时不调用重排。CueKB不构建、运行或保存任一模型的权重。普通检索不调用生成式LLM。
+应用采用模块化结构，API与独立Worker共享领域模型；解析器是Worker调用的库，不要求另建解析微服务。Embedding和重排均使用项目外部的独立服务地址；Embedding配置完成后才接受导入/检索，重排地址为空时不调用重排。CueKB不构建、运行或保存任一模型的权重。普通检索不调用生成式LLM。
 
 #### 2.2.1 PostgreSQL、OpenSearch与Embedding是什么关系
 
@@ -117,12 +117,12 @@ flowchart LR
 
 #### 2.2.2 外部模型 API 契约
 
-CueKB只作为客户端调用模型服务。Embedding必须配置`CUEKB_EMBEDDING_BASE_URL`、`CUEKB_EMBEDDING_API_KEY`和`CUEKB_EMBEDDING_MODEL`；可选重排使用同样的`CUEKB_RERANKER_BASE_URL`、`CUEKB_RERANKER_API_KEY`和`CUEKB_RERANKER_MODEL`三元组。`base_url`必须包含服务的`/v1`前缀且不含末尾斜杠；运行方负责TLS、网络访问控制、鉴权代理、模型部署、容量、健康检查和权重生命周期。`api_key`使用`SecretStr`保存，不写入日志或响应。
+CueKB只作为客户端调用模型服务。系统管理员通过门户提交Embedding和可选Reranker各自的`base_url`、`api_key`和`model`三元组；API和Worker从PostgreSQL读取最新配置。`base_url`必须以`/v1`结尾且不含末尾斜杠；运行方负责TLS、网络访问控制、鉴权代理、模型部署、容量、健康检查和权重生命周期。模型API Key以`pgcrypto`加密保存，`CUEKB_MODEL_CONFIG_KEY`是部署环境中独立的稳定加密密钥；管理API只返回密钥是否已设置，不回显明文。
 
 | 能力 | 请求 | 成功响应 | CueKB校验 |
 | --- | --- | --- | --- |
-| Embedding（必配） | `POST {CUEKB_EMBEDDING_BASE_URL}/embeddings`，Bearer `api_key`，`{"model":"...","input":["..."],"encoding_format":"float"}` | OpenAI `{"model":"...","data":[{"index":0,"embedding":[...]}]}` | 返回model必须等于配置model；按`index`还原输入顺序；每条输入应有一条向量，向量维度由OpenSearch映射校验 |
-| Rerank（可选） | `POST {CUEKB_RERANKER_BASE_URL}/rerank`，Bearer `api_key`，`{"model":"...","query":"...","documents":["..."]}` | OpenAI-compatible `{"model":"...","results":[{"index":0,"relevance_score":0.9}]}` | 返回model必须等于配置model；按`index`还原输入顺序；每个候选应有一个分数 |
+| Embedding（导入/检索前必配） | `POST {embedding_base_url}/embeddings`，Bearer `api_key`，`{"model":"...","input":["..."],"encoding_format":"float"}` | OpenAI `{"model":"...","data":[{"index":0,"embedding":[...]}]}` | 返回model必须等于配置model；按`index`还原输入顺序；每条输入应有一条向量，向量维度由OpenSearch映射校验 |
+| Rerank（可选） | `POST {reranker_base_url}/rerank`，Bearer `api_key`，`{"model":"...","query":"...","documents":["..."]}` | OpenAI-compatible `{"model":"...","results":[{"index":0,"relevance_score":0.9}]}` | 返回model必须等于配置model；按`index`还原输入顺序；每个候选应有一个分数 |
 
 Embedding遵循 OpenAI `POST /embeddings` 契约；重排不是 OpenAI 官方端点，采用 vLLM 等 OpenAI-compatible 服务使用的`POST /rerank`扩展。服务应以非2xx表达鉴权、限流或不可用；CueKB按既有deadline处理为向量或重排降级，绝不回退为项目内推理。若需要其他第三方协议，必须在`model_client.py`增加明确适配器，不能把第三方响应泄漏到核心检索逻辑。
 
@@ -159,7 +159,7 @@ sequenceDiagram
 | 组件/依赖 | 入库时负责什么 | 检索时负责什么 | 代码状态 | 代码依据 |
 | --- | --- | --- | --- | --- |
 | Uvicorn / FastAPI / Pydantic | 接收HTTP并校验输入 | Bearer API Key、ACL和响应契约 | **已完成** | `api/routes.py`、`schemas.py` |
-| 内置管理门户 | 面向管理员提供导入、任务、版本、原文、删除和检索验证页面 | 仅保存标签页级API Key，所有操作继续执行API ACL | **已完成** | `portal/`、`main.py` |
+| 内置管理门户 | 面向管理员提供导入、任务、版本、原文、删除和检索验证页面；系统管理员配置外部模型 | 仅保存标签页级API Key，所有操作继续执行API ACL | **已完成** | `portal/`、`main.py` |
 | 导入与版本服务 | 文件、版本、幂等任务和发布 | 不执行在线召回 | **已完成** | `api/routes.py`、`adapters/postgres.py` |
 | 检索编排服务 | 不处理上传解析 | exact/hybrid路由、并行召回、RRF、重排和最终校验 | **已完成** | `services/retrieval.py` |
 | Repository / SearchBackend端口 | 隔离业务存储和索引 | 隔离正文读取和候选召回 | **已完成** | `ports.py` |
@@ -179,7 +179,7 @@ sequenceDiagram
 | 完整上下文组装 | 建立父章节和表格上下文 | 补相邻步骤、表头和单位 | **待开始** | M3 |
 | 对象存储适配器 | 保存原文件 | 原文下载 | **待确认** | 存储产品和保留策略尚待确认 |
 
-表中源码短路径均相对于`src/cuekb/`。Compose会运行迁移、API、Worker、模型、PG和OpenSearch；内部数据服务不映射宿主机端口。确切依赖见`pyproject.toml`；不引入Neo4j、Redis、独立向量数据库或分布式消息队列。
+表中源码短路径均相对于`src/cuekb/`。Compose会运行迁移、API、Worker、PG和OpenSearch；模型服务在Compose之外，内部数据服务不映射宿主机端口。确切依赖见`pyproject.toml`；不引入Neo4j、Redis、独立向量数据库或分布式消息队列。
 
 ### 2.4 语料进入系统后如何流转
 
@@ -282,6 +282,7 @@ sequenceDiagram
 | entities / entity_aliases / mentions | 实体、别名及原文位置 | **待开始** |
 | relation_assertions / relation_evidence | 有出处关系、条件、支持或反驳证据 | **待开始** |
 | index_generations | 模型、维度、分块版本及索引切换记录 | **待开始** |
+| model_configurations | 单实例外部Embedding/Reranker地址、模型标识、加密凭据与修订号 | **已完成** |
 | audit_events / search_traces | 管理操作和持久化检索诊断 | **待开始** |
 
 实体、文档、块使用稳定内部ID。不同文档具有相同正文时不合并权限边界；字节去重可在文件层发生，业务记录仍独立。
@@ -383,7 +384,7 @@ PostgreSQL与OpenSearch不存在跨库原子事务，采用可重试发布协议
 | related | 调用方请求关系查询 | 当前执行hybrid并返回`scope_limited=true` | hybrid回退**已完成**；一跳扩展**待开始** |
 | auto | 调用方默认值 | 确定性正则选择exact或hybrid | **已完成** |
 
-精确查询不只是“识别到了错误码”就跳过其他条件。相同错误码在不同产品存在时，结合明确型号或返回分组和歧义。调用方可通过`mode`明确选择；`auto`的标识符正则来自配置。重排先检查`CUEKB_RERANKER_BASE_URL`，地址为空时直接跳过；地址存在时继续使用总deadline、模型超时、候选数、最低剩余预算和开关等原有策略。
+精确查询不只是“识别到了错误码”就跳过其他条件。相同错误码在不同产品存在时，结合明确型号或返回分组和歧义。调用方可通过`mode`明确选择；`auto`的标识符正则来自配置。重排先检查PostgreSQL中是否配置Reranker地址，地址为空时直接跳过；地址存在时继续使用总deadline、模型超时、候选数、最低剩余预算和开关等原有策略。
 
 ### 5.3 普通查询步骤与初始参数
 
@@ -503,7 +504,7 @@ API Key哈希、吊销和知识库ACL代码状态为**已完成**。OIDC身份�
 
 限制上传格式/大小与解析资源，拒绝路径穿越和任意远端URL抓取。原文属于不可信输入；未来回答模块把它作为数据而非指令，不能因文档内容越权调用工具。
 
-模型接入安全控制代码状态为**已完成**：生产模式要求外部Embedding的`base_url`、`api_key`和`model`；只有配置重排地址时才要求其完整三元组；接口不接受客户端传入模型路径、服务地址、模型名称或凭据；模型服务自身的TLS、凭据、网络策略和权重安全由外部部署负责；CueKB容器继续使用非root用户。
+模型接入安全控制代码状态为**已完成**：只有系统管理员可通过管理接口修改外部模型配置；Embedding三元组保存后才允许导入/检索，Reranker地址存在时也必须有完整三元组；普通检索接口不接受客户端传入模型路径、服务地址、模型名称或凭据；模型服务自身的TLS、凭据、网络策略和权重安全由外部部署负责；CueKB容器继续使用非root用户。
 
 ## 8. 部署与资源策略
 
@@ -511,7 +512,7 @@ API Key哈希、吊销和知识库ACL代码状态为**已完成**。OIDC身份�
 
 当前Compose包含api、worker、postgres和opensearch，支持单机运行及数据库、索引和原文持久化；Embedding与重排是该Compose之外的服务。
 
-Compose部署代码状态为**已完成**：包含迁移门禁、API、Worker、PostgreSQL、OpenSearch及持久卷；生产配置强制外部Embedding的`base_url`、`api_key`和`model`，配置重排地址时强制其同样的三元组，API不会回退内存。步骤见[README](../README.md)。
+Compose部署代码状态为**已完成**：包含迁移门禁、API、Worker、PostgreSQL、OpenSearch及持久卷；API和Worker镜像先由操作员手动`docker build`，Compose只引用本地镜像；模型配置从门户写入PostgreSQL，未配置时服务仍可启动且API不会回退内存。步骤见[README](../README.md)。
 
 用户16GB M4机器不能在无实测情况下保证外部模型服务、OpenSearch和开发工具同时满足1秒目标。可选择与CueKB网络隔离部署的质量基线模型服务，或使用轻量中文Embedding、减少重排候选并单独验收。严格离线时外部模型与OCR权重需提前下载，禁用远程推理。
 

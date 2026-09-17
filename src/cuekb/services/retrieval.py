@@ -42,6 +42,7 @@ class RetrievalService:
         search: SearchBackend,
         settings: Settings,
         model: ModelClient | None = None,
+        reranker_configured: bool = False,
     ) -> None:
         self.repository, self.search, self.settings, self.model = (
             repository,
@@ -50,6 +51,7 @@ class RetrievalService:
             model,
         )
         self.router = QueryRouter(settings.exact_identifier_pattern)
+        self.reranker_configured = reranker_configured
 
     def search_evidence(
         self, request: SearchRequest, _retry_on_transition: bool = True
@@ -128,7 +130,7 @@ class RetrievalService:
         remaining_ms = (deadline - perf_counter()) * 1000
         can_rerank = (
             self.settings.rerank_enabled
-            and self.settings.reranker_configured
+            and self.reranker_configured
             and path != "exact"
             and self.model is not None
             and len(rerank_head) > 1
@@ -159,7 +161,7 @@ class RetrievalService:
         else:
             if path == "exact":
                 reason = "exact_path"
-            elif not self.settings.reranker_configured:
+            elif not self.reranker_configured:
                 reason = "reranker_service_unconfigured"
             elif not self.settings.rerank_enabled:
                 reason = "rerank_disabled"

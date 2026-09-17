@@ -17,6 +17,7 @@
         <button class="nav-item active" data-view="documents">文档管理</button>
         <button class="nav-item" data-view="upload">导入文档</button>
         <button class="nav-item" data-view="search">检索验证</button>
+        <button class="nav-item" data-view="models" id="models-nav" hidden>模型配置</button>
       </nav>
       <div class="sidebar-footer">
         <span id="connection-state" class="connection-state">尚未连接</span>
@@ -80,6 +81,29 @@
         </form>
         <div id="search-summary"></div>
         <div id="search-results" class="results"></div>
+      </section>
+
+      <section id="view-models" class="view">
+        <div class="page-heading"><div><p class="eyebrow">系统管理</p><h1>模型配置</h1><p>配置独立的 OpenAI-compatible 模型服务。保存后 API 与 Worker 会读取最新配置，无需重启。</p></div></div>
+        <div id="model-config-status" class="panel model-status">正在读取配置…</div>
+        <form id="model-config-form" class="panel form-panel">
+          <h2>Embedding</h2>
+          <p class="muted">导入和混合检索需要此服务；地址需包含 /v1。</p>
+          <div class="field-grid">
+            <label><span>Base URL</span><input id="embedding-base-url" type="url" placeholder="https://embedding.example.internal/v1" required></label>
+            <label><span>Model</span><input id="embedding-model" placeholder="BAAI/bge-m3" required></label>
+          </div>
+          <label class="model-secret"><span>API Key</span><input id="embedding-api-key" type="password" autocomplete="new-password" placeholder="首次配置时必填；留空保留现有密钥"></label>
+          <h2 class="model-section-heading">Reranker（可选）</h2>
+          <p class="muted">留空地址可关闭重排；启用时需填写 Model 和 API Key。</p>
+          <div class="field-grid">
+            <label><span>Base URL</span><input id="reranker-base-url" type="url" placeholder="https://reranker.example.internal/v1"></label>
+            <label><span>Model</span><input id="reranker-model" placeholder="BAAI/bge-reranker-v2-m3"></label>
+          </div>
+          <label class="model-secret"><span>API Key</span><input id="reranker-api-key" type="password" autocomplete="new-password" placeholder="启用时首次必填；留空保留现有密钥"></label>
+          <p class="muted model-note">Embedding Model 与现有 OpenSearch 索引绑定。更换模型需要先按索引重建流程处理，不能直接覆盖旧索引。</p>
+          <div class="form-actions"><button id="save-model-config" class="primary" type="submit">保存配置</button></div>
+        </form>
       </section>
     </main>
   </div>

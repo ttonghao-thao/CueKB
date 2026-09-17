@@ -21,15 +21,7 @@ class OpenSearchBackend:
 
     def ensure_index(self) -> None:
         if self.client.indices.exists(index=self.index_name):
-            mapping = self.client.indices.get_mapping(index=self.index_name)[self.index_name][
-                "mappings"
-            ]
-            model = mapping.get("_meta", {}).get("embedding_model")
-            if model != self.embedding_model:
-                raise RuntimeError("opensearch_embedding_model_mismatch")
-            dimension = mapping.get("properties", {}).get("embedding", {}).get("dimension")
-            if dimension != self.dimension:
-                raise RuntimeError("opensearch_embedding_dimension_mismatch")
+            self.validate_existing_index()
             return
         self.client.indices.create(
             index=self.index_name,
@@ -58,6 +50,17 @@ class OpenSearchBackend:
                 },
             },
         )
+
+    def validate_existing_index(self) -> None:
+        if not self.client.indices.exists(index=self.index_name):
+            return
+        mapping = self.client.indices.get_mapping(index=self.index_name)[self.index_name][
+            "mappings"
+        ]
+        if mapping.get("_meta", {}).get("embedding_model") != self.embedding_model:
+            raise RuntimeError("opensearch_embedding_model_mismatch")
+        if mapping.get("properties", {}).get("embedding", {}).get("dimension") != self.dimension:
+            raise RuntimeError("opensearch_embedding_dimension_mismatch")
 
     def index(
         self, chunks: Sequence[Chunk], vectors: Sequence[Sequence[float]] | None = None
