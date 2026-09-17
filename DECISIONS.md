@@ -23,7 +23,7 @@
 | 项目 | 处理方式 | 状态 |
 | --- | --- | --- |
 | 项目目录 | 已在`/Users/snowking/Documents/CueKB`创建工程 | **已完成** |
-| 标准库/模型/解析版本 | Python依赖冻结，Embedding和reranker锁定完整revision | **已完成** |
+| 标准库/模型/解析版本 | Python依赖冻结，Embedding和reranker通过明确的 OpenAI-compatible `model`标识调用 | **已完成** |
 | 真实语料规模与扫描件比例 | 用真实样本建立基线，再制定容量计划 | 验证活动**待开始** |
 | 并发与QPS | 初始建议10万内容块、5 QPS稳态和10 QPS短时负载 | 条件**待确认** |
 | 可用模型硬件 | 确定目标主机或独立模型服务的CPU/GPU与内存 | **待确认** |

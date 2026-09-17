@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,10 +27,12 @@ class Settings(BaseSettings):
     worker_max_attempts: int = Field(default=3, ge=1, le=20)
     api_key_pepper: str = ""
     bootstrap_api_key: str = ""
-    embedding_service_url: str = ""
-    reranker_service_url: str = ""
-    embedding_revision: str = ""
-    reranker_revision: str = ""
+    embedding_base_url: str = ""
+    embedding_api_key: SecretStr = SecretStr("")
+    embedding_model: str = ""
+    reranker_base_url: str = ""
+    reranker_api_key: SecretStr = SecretStr("")
+    reranker_model: str = ""
     vector_dimension: int = Field(default=1024, ge=1)
     search_deadline_ms: int = Field(default=900, ge=100, le=10000)
     model_timeout_ms: int = Field(default=400, ge=20, le=5000)
@@ -43,11 +45,11 @@ class Settings(BaseSettings):
 
     @property
     def reranker_configured(self) -> bool:
-        return bool(self.reranker_service_url.strip())
+        return bool(self.reranker_base_url.strip())
 
     @property
     def embedding_configured(self) -> bool:
-        return bool(self.embedding_service_url.strip())
+        return bool(self.embedding_base_url.strip())
 
     @model_validator(mode="after")
     def validate_production(self) -> "Settings":
@@ -66,13 +68,16 @@ class Settings(BaseSettings):
                 )
         if self.backend == "production":
             if not self.embedding_configured:
-                raise ValueError("production requires CUEKB_EMBEDDING_SERVICE_URL")
-            if not self.embedding_revision:
-                raise ValueError("production requires a pinned embedding revision")
-        if self.backend == "production" and self.reranker_configured and not self.reranker_revision:
-            raise ValueError(
-                "production requires a pinned reranker revision when reranker service is configured"
-            )
+                raise ValueError("production requires CUEKB_EMBEDDING_BASE_URL")
+            if not self.embedding_api_key.get_secret_value():
+                raise ValueError("production requires CUEKB_EMBEDDING_API_KEY")
+            if not self.embedding_model.strip():
+                raise ValueError("production requires CUEKB_EMBEDDING_MODEL")
+        if self.backend == "production" and self.reranker_configured:
+            if not self.reranker_api_key.get_secret_value():
+                raise ValueError("production requires CUEKB_RERANKER_API_KEY when reranker is configured")
+            if not self.reranker_model.strip():
+                raise ValueError("production requires CUEKB_RERANKER_MODEL when reranker is configured")
         return self
 
 

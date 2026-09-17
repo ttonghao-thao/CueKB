@@ -63,7 +63,7 @@ def main() -> None:
     parser.add_argument(
         "--expect-rerank",
         action="store_true",
-        default=bool(os.getenv("CUEKB_RERANKER_SERVICE_URL", "").strip()),
+        default=bool(os.getenv("CUEKB_RERANKER_BASE_URL", "").strip()),
         help="require the configured reranker to execute during hybrid search",
     )
     args = parser.parse_args()

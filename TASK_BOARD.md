@@ -27,9 +27,9 @@
 | 后台任务 | 幂等提交、PG任务租约、续租、确定性chunk ID、有界退避、失败状态、自动发布和outbox清理 | `worker.py`、`adapters/postgres.py` |
 | 发布与删除 | 新版本写入、ready、手动/自动发布、唯一`default`版本、版本切换、撤权、删除和索引清理事件 | `api/routes.py`、`worker.py`、`adapters/postgres.py` |
 | 关键词检索 | OpenSearch CJK BM25、知识库/文档/产品/版本过滤和有界候选 | `adapters/opensearch.py`、`services/retrieval.py` |
-| 语义检索 | 固定修订BGE-M3外部API、文档向量、查询向量、OpenSearch k-NN、模型和索引维度校验 | `model_client.py`、`adapters/opensearch.py` |
+| 语义检索 | OpenAI-compatible BGE-M3外部API、文档向量、查询向量、OpenSearch k-NN、模型和索引维度校验 | `model_client.py`、`adapters/opensearch.py` |
 | 检索编排 | `auto`/`exact`/`hybrid`/`related`路由、BM25与向量并行召回、RRF、PG最终过滤和版本切换重试 | `services/retrieval.py` |
-| 重排与降级 | 独立重排地址；未配置时默认跳过；配置后执行固定revision、有界候选、deadline/负载门禁和故障降级 | `model_client.py`、`services/retrieval.py` |
+| 重排与降级 | 独立 OpenAI-compatible 重排API；未配置时默认跳过；配置后执行model校验、有界候选、deadline/负载门禁和故障降级 | `model_client.py`、`services/retrieval.py` |
 | 对外接口 | 知识库、API Key、ACL、文件/文本导入、任务、发布、原文、删除、检索和健康接口 | `api/routes.py`、`schemas.py`、`docs/API_GUIDE.md` |
 | 管理门户 | API Key连接、知识库选择、批量文件导入、任务轮询、文档与版本管理、原文下载、删除和检索验证 | `portal/`、`api/routes.py`、`adapters/postgres.py` |
 | 自动化检查 | API/检索/解析/路径选择/配置门禁/密钥/文件边界测试及生产验收脚本 | `tests/`、`scripts/acceptance-production.py` |
@@ -68,7 +68,7 @@
 
 | 阶段 | 编码状态 | 范围 |
 | --- | --- | --- |
-| M0 工程与版本基线 | **已完成** | 依赖锁、模型revision、迁移、容器和部署入口 |
+| M0 工程与版本基线 | **已完成** | 依赖锁、模型标识、迁移、容器和部署入口 |
 | M1 文档与关键词检索 | **已完成** | 导入、解析、原件、PG、权限、版本、删除和BM25 |
 | M2 混合检索 | **已完成** | Embedding、向量召回、RRF、重排、deadline路由和降级 |
 | M3 轻量关系与上下文 | **待开始** | 关系写入、一跳扩展和完整上下文预算 |
@@ -81,7 +81,7 @@
 
 | 验证活动 | 状态 | 当前记录 |
 | --- | --- | --- |
-| 本地单元/API/静态检查 | **已完成** | 外部Embedding API剥离后，17项Pytest、Ruff、compileall、`uv lock --check`和Compose结构断言通过；当前环境无Docker CLI，未执行Compose实际schema/构建/启动 |
+| 本地单元/API/静态检查 | **已完成** | OpenAI-compatible 模型接入后，17项Pytest、Ruff、compileall、`uv lock --check`、配置密钥脱敏断言通过；Pyright为0 error（未安装可选Docling产生4个warning）；当前环境无Docker CLI，未执行Compose实际schema/构建/启动 |
 | 冻结依赖安全审计 | **已完成** | `pip-audit`检查全部extras，未发现已知漏洞 |
 | Docker目标环境启动 | **待开始** | 执行Compose构建、迁移、健康检查和生产验收脚本 |
 | 真实语料质量评测 | **待开始** | 中文扫描件、复杂表格、型号/版本、无答案和多证据样本 |
@@ -93,6 +93,6 @@
 
 - P1至P4以及M0至M2的编码状态均为**已完成**。
 - `exact`路径跳过Embedding和重排；`hybrid`执行BM25与向量召回；未配置重排地址时默认跳过重排，配置后继续受开关、deadline、候选数和模型负载控制。
-- 生产模式强制使用PostgreSQL、OpenSearch、外部Embedding API、固定模型revision和API密钥，不会回退内存模式。
+- 生产模式强制使用PostgreSQL、OpenSearch、外部Embedding API的`base_url`、`api_key`和`model`，不会回退内存模式。
 - 首期门户编码已完成；下一项核心编码工作从M3开始；生成式回答、OIDC、对象存储、多`scope`和高可用拓扑保持**待确认**。
-- 外部Embedding部署已从项目Compose、镜像、依赖和代码入口移除；生产通过必配外部API地址调用，重排保持独立可选API。
+- 外部Embedding部署已从项目Compose、镜像、依赖和代码入口移除；Embedding和Reranker通过独立 OpenAI-compatible API的`base_url`、`api_key`和`model`调用。

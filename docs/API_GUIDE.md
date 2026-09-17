@@ -135,7 +135,7 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 
 `retrieval_path`、`executed_stages`和`skipped_stages`说明本次真实执行路径。例如exact请求的`executed_stages`不应包含`embedding`；未配置重排地址时记录`reranker_service_unconfigured`，其他跳过原因包括显式关闭、候选不足和剩余预算不足。
 
-这些选择不是调用模型临时猜测，也不是只能改源码的硬编码。调用方可用`mode`明确选择exact或hybrid；auto根据服务端可配置的标识符规则确定路径。Embedding始终使用必配的`CUEKB_EMBEDDING_SERVICE_URL`；外部API契约及revision校验见[系统设计](SYSTEM_DESIGN.md#222-外部模型-api-契约)。重排默认不执行；服务端配置`CUEKB_RERANKER_SERVICE_URL`后，还会检查`CUEKB_RERANK_ENABLED`、候选数量、`CUEKB_RERANK_MIN_REMAINING_MS`和请求总deadline。重排模型繁忙时会快速返回429，检索服务保留已经通过权威校验的RRF结果并标记`rerank_unavailable`。
+这些选择不是调用模型临时猜测，也不是只能改源码的硬编码。调用方可用`mode`明确选择exact或hybrid；auto根据服务端可配置的标识符规则确定路径。Embedding始终使用必配的 OpenAI-compatible `CUEKB_EMBEDDING_BASE_URL`、`CUEKB_EMBEDDING_API_KEY`和`CUEKB_EMBEDDING_MODEL`；外部API契约及model校验见[系统设计](SYSTEM_DESIGN.md#222-外部模型-api-契约)。重排默认不执行；服务端完整配置`CUEKB_RERANKER_BASE_URL`、`CUEKB_RERANKER_API_KEY`和`CUEKB_RERANKER_MODEL`后，还会检查`CUEKB_RERANK_ENABLED`、候选数量、`CUEKB_RERANK_MIN_REMAINING_MS`和请求总deadline。重排模型繁忙时会快速返回429，检索服务保留已经通过权威校验的RRF结果并标记`rerank_unavailable`。
 
 原件可通过`GET /v1/documents/{document_id}/source`下载当前发布版本；指定历史版本可附`?version_id=<UUID>`，仍执行知识库读权限和删除状态检查。
 

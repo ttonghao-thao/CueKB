@@ -11,12 +11,12 @@ from cuekb.domain.models import Chunk
 
 class OpenSearchBackend:
     def __init__(
-        self, url: str, index: str, dimension: int, model_revision: str, timeout_ms: int = 500
+        self, url: str, index: str, dimension: int, embedding_model: str, timeout_ms: int = 500
     ) -> None:
         self.client = OpenSearch(hosts=[url], max_retries=0)
         self.index_name = index
         self.dimension = dimension
-        self.model_revision = model_revision
+        self.embedding_model = embedding_model
         self.search_timeout_seconds = timeout_ms / 1000
 
     def ensure_index(self) -> None:
@@ -24,9 +24,9 @@ class OpenSearchBackend:
             mapping = self.client.indices.get_mapping(index=self.index_name)[self.index_name][
                 "mappings"
             ]
-            revision = mapping.get("_meta", {}).get("embedding_revision")
-            if revision != self.model_revision:
-                raise RuntimeError("opensearch_embedding_revision_mismatch")
+            model = mapping.get("_meta", {}).get("embedding_model")
+            if model != self.embedding_model:
+                raise RuntimeError("opensearch_embedding_model_mismatch")
             dimension = mapping.get("properties", {}).get("embedding", {}).get("dimension")
             if dimension != self.dimension:
                 raise RuntimeError("opensearch_embedding_dimension_mismatch")
@@ -36,7 +36,7 @@ class OpenSearchBackend:
             body={
                 "settings": {"index": {"knn": True}},
                 "mappings": {
-                    "_meta": {"embedding_revision": self.model_revision},
+                    "_meta": {"embedding_model": self.embedding_model},
                     "properties": {
                         "kb_id": {"type": "keyword"},
                         "document_id": {"type": "keyword"},

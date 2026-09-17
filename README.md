@@ -20,17 +20,17 @@ CueKB接收PDF、DOCX、Markdown和TXT语料，向客服或其他第三方系统
 
 ## 生产组件
 
-单机Compose部署包含PostgreSQL、OpenSearch、迁移任务、API和入库Worker。PostgreSQL保存权威内容/权限/发布版本；OpenSearch保存BM25和向量索引；Embedding与重排均通过外部HTTP API调用，模型部署、权重缓存、容量和可用性不属于本项目。Embedding地址必配；重排默认关闭，只有配置`CUEKB_RERANKER_SERVICE_URL`后才按查询路径和剩余时间选择执行。原文件、数据库和索引使用独立命名卷。
+单机Compose部署包含PostgreSQL、OpenSearch、迁移任务、API和入库Worker。PostgreSQL保存权威内容/权限/发布版本；OpenSearch保存BM25和向量索引；Embedding与重排均通过外部 OpenAI-compatible HTTP API调用，模型部署、权重缓存、容量和可用性不属于本项目。Embedding的`base_url`、`api_key`、`model`必配；重排默认关闭，只有完整配置其同名三项后才按查询路径和剩余时间选择执行。原文件、数据库和索引使用独立命名卷。
 
-生产模式有以下强制门禁：API Key密钥材料不能为空；必须配置`CUEKB_EMBEDDING_SERVICE_URL`并固定Embedding revision；配置重排地址时也必须固定reranker revision；Python依赖由`uv.lock`冻结；迁移成功后API/Worker才启动；API不会回退到内存后端；PG和OpenSearch不暴露宿主机端口。API只绑定`127.0.0.1:8080`，应由同机TLS反向代理对外发布。
+生产模式有以下强制门禁：API Key密钥材料不能为空；必须配置`CUEKB_EMBEDDING_BASE_URL`、`CUEKB_EMBEDDING_API_KEY`和`CUEKB_EMBEDDING_MODEL`；配置重排地址时也必须提供其`base_url`、`api_key`和`model`；Python依赖由`uv.lock`冻结；迁移成功后API/Worker才启动；API不会回退到内存后端；PG和OpenSearch不暴露宿主机端口。API只绑定`127.0.0.1:8080`，应由同机TLS反向代理对外发布。
 
 ### 部署
 
-需要Docker Engine及Compose v2。模型首次启动需要下载约数GB权重，并需要能够承载BGE-M3和reranker的CPU/GPU及内存；具体容量必须在目标主机实测。
+需要Docker Engine及Compose v2。外部模型服务需要自行承载Embedding与Reranker的权重、CPU/GPU、网络和容量；具体容量必须在目标环境实测。
 
 ```bash
 cp deploy/production.env.example .env.production
-# 替换数据库密码、API Key pepper和bootstrap key；配置外部Embedding地址，并按需配置重排地址
+# 替换数据库密码、API Key pepper和bootstrap key；配置外部模型的 base_url、api_key、model
 chmod 600 .env.production
 ./scripts/deploy-production.sh .env.production
 docker compose --env-file .env.production logs -f api worker
@@ -42,7 +42,7 @@ docker compose --env-file .env.production logs -f api worker
 docker compose --env-file .env.production down
 ```
 
-不要在没有备份确认的情况下增加`--volumes`。升级前备份PostgreSQL和原文件卷；OpenSearch是可重建投影。模型修订变化时必须使用新索引generation并重建全部向量，不能直接复用旧索引。
+不要在没有备份确认的情况下增加`--volumes`。升级前备份PostgreSQL和原文件卷；OpenSearch是可重建投影。Embedding model变化时必须使用新索引generation并重建全部向量，不能直接复用旧索引。
 
 ### 生产验收
 

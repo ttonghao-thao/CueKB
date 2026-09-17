@@ -32,11 +32,11 @@
 | 解析 | Docling与PDF OCR | **已完成** |
 | 权威存储 | PostgreSQL；原始文件走文件存储适配器 | **已完成** |
 | 检索 | OpenSearch的BM25与向量索引，RRF融合 | **已完成** |
-| 模型 | BGE-M3通过必配外部API调用；bge-reranker-v2-m3通过独立地址按需启用 | **已完成** |
+| 模型 | BGE-M3通过必配 OpenAI-compatible API调用；bge-reranker-v2-m3通过独立地址按需启用 | **已完成** |
 | 轻量关系 | PostgreSQL实体、别名、关系、证据表；限定一跳 | **待开始** |
 | 部署 | 单机Compose；API、Worker与外部模型API分离 | **已完成** |
 
-Python依赖已写入`uv.lock`，模型固定到明确上游提交，不自动追随`latest`。模型换型必须创建匹配的新索引。
+Python依赖已写入`uv.lock`，Embedding与Reranker通过明确的 OpenAI-compatible `model`标识调用，不自动追随`latest`。Embedding模型换型必须创建匹配的新索引。
 
 ## 关键约束
 

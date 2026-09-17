@@ -7,7 +7,7 @@ from cuekb.services.retrieval import RetrievalService
 
 
 class RecordingModel:
-    model_revision = "test-revision"
+    embedding_model = "test-model"
 
     def __init__(self) -> None:
         self.embed_calls = 0
@@ -53,7 +53,7 @@ def test_auto_exact_identifier_skips_embedding_and_rerank() -> None:
 
 
 def test_hybrid_uses_embedding_and_bounded_rerank() -> None:
-    kb, model, retrieval = build(Settings(reranker_service_url="http://reranker:8090"))
+    kb, model, retrieval = build(Settings(reranker_base_url="http://reranker:8090/v1"))
     result = retrieval.search_evidence(
         SearchRequest(query="链路为什么异常", kb_ids=[kb.id], mode=RetrievalMode.HYBRID)
     )
@@ -76,7 +76,7 @@ def test_hybrid_skips_rerank_when_service_is_unconfigured() -> None:
 def test_hybrid_skips_rerank_when_deadline_budget_is_too_small() -> None:
     kb, model, retrieval = build(
         Settings(
-            reranker_service_url="http://reranker:8090",
+            reranker_base_url="http://reranker:8090/v1",
             search_deadline_ms=100,
             rerank_min_remaining_ms=500,
         )

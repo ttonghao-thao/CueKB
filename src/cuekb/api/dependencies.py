@@ -33,7 +33,7 @@ def search_backend() -> Any:
         settings.opensearch_url,
         f"{settings.opensearch_index_prefix}-chunks",
         settings.vector_dimension,
-        settings.embedding_revision,
+        settings.embedding_model,
         settings.opensearch_timeout_ms,
     )
     result.ensure_index()
@@ -47,10 +47,12 @@ def model_client():
         None
         if settings.backend == "memory"
         else HttpModelClient(
-            settings.embedding_service_url,
-            settings.embedding_revision,
-            settings.reranker_service_url,
-            settings.reranker_revision,
+            settings.embedding_base_url,
+            settings.embedding_api_key.get_secret_value(),
+            settings.embedding_model,
+            settings.reranker_base_url,
+            settings.reranker_api_key.get_secret_value(),
+            settings.reranker_model,
         )
     )
 
