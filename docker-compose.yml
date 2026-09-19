@@ -60,7 +60,7 @@ services:
     logging: *default-logging
 
   migrate:
-    image: ${CUEKB_API_IMAGE:-cuekb-api:local}
+    image: ${CUEKB_API_IMAGE:-cuekb-api:latest}
     pull_policy: never
     environment:
       <<: *app-env
@@ -72,7 +72,7 @@ services:
     logging: *default-logging
 
   worker:
-    image: ${CUEKB_WORKER_IMAGE:-cuekb-worker:local}
+    image: ${CUEKB_WORKER_IMAGE:-cuekb-worker:latest}
     pull_policy: never
     environment:
       <<: *app-env
@@ -87,7 +87,7 @@ services:
     logging: *default-logging
 
   api:
-    image: ${CUEKB_API_IMAGE:-cuekb-api:local}
+    image: ${CUEKB_API_IMAGE:-cuekb-api:latest}
     pull_policy: never
     environment:
       <<: *app-env

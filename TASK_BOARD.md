@@ -107,4 +107,5 @@
 - 首期门户编码已完成；下一项核心编码工作从M3开始；生成式回答、OIDC、对象存储、多`scope`和高可用拓扑保持**待确认**。
 - 外部Embedding部署已从项目Compose、镜像、依赖和代码入口移除；Embedding和Reranker通过独立 OpenAI-compatible API的`base_url`、`api_key`和`model`调用。
 - 应用镜像由操作员手动构建，Compose只使用本地镜像；模型密钥经`pgcrypto`加密，`CUEKB_MODEL_CONFIG_KEY`需稳定保存；现有索引不接受不匹配的Embedding Model。
+- API与Worker默认本地镜像标签统一为`cuekb-api:latest`和`cuekb-worker:latest`；`CUEKB_API_IMAGE`和`CUEKB_WORKER_IMAGE`仍可覆盖为自定义标签。
 - API与Worker使用独立dependency extra和精简runtime层；Worker锁定PyTorch CPU wheel，锁文件不再包含CUDA、cuDNN、NCCL或Triton包。Docling仍保留完整standard解析能力，避免在未完成真实语料回归前改变PDF OCR和表格行为。

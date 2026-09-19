@@ -32,10 +32,10 @@ CueKB接收PDF、DOCX、Markdown和TXT语料，向客服或其他第三方系统
 cp deploy/production.env.example .env.production
 # 替换数据库密码、API Key pepper、bootstrap key和模型配置加密密钥
 chmod 600 .env.production
-docker build --target api -t cuekb-api:local .
-docker build --target worker -t cuekb-worker:local .
+docker build --target api -t cuekb-api:latest .
+docker build --target worker -t cuekb-worker:latest .
 # Worker应显示CPU版PyTorch且不包含CUDA运行时
-docker run --rm --entrypoint python cuekb-worker:local -c \
+docker run --rm --entrypoint python cuekb-worker:latest -c \
   "import torch; print(torch.__version__, torch.version.cuda); assert torch.version.cuda is None"
 ./scripts/deploy-production.sh .env.production
 docker compose --env-file .env.production logs -f api worker
