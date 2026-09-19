@@ -49,6 +49,7 @@ services:
     environment:
       discovery.type: single-node
       plugins.security.disabled: "true"
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${CUEKB_OPENSEARCH_INITIAL_ADMIN_PASSWORD:?set CUEKB_OPENSEARCH_INITIAL_ADMIN_PASSWORD}
       OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
     volumes: [cuekb_search:/usr/share/opensearch/data]
     healthcheck:
