@@ -24,4 +24,4 @@ done
 bootstrap_key=$(sed -n 's/^CUEKB_BOOTSTRAP_API_KEY=//p' "$env_file")
 curl --fail-with-body --retry 20 --retry-delay 3 \
   -H "Authorization: Bearer $bootstrap_key" \
-  http://127.0.0.1:8080/v1/ready
+  http://127.0.0.1:8085/v1/ready

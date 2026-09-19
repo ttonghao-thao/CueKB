@@ -22,7 +22,7 @@ CueKB接收PDF、DOCX、Markdown和TXT语料，向客服或其他第三方系统
 
 单机Compose部署包含PostgreSQL、OpenSearch、迁移任务、API和入库Worker。PostgreSQL保存权威内容/权限/发布版本及模型服务配置；OpenSearch保存BM25和向量索引；Embedding与重排均通过外部 OpenAI-compatible HTTP API调用，模型部署、权重缓存、容量和可用性不属于本项目。启动后由系统管理员在门户填写Embedding的`base_url`、`api_key`、`model`；重排默认关闭，可在同一页面配置。原文件、数据库和索引使用独立命名卷。
 
-生产模式有以下强制门禁：API Key密钥材料和`CUEKB_MODEL_CONFIG_KEY`不能为空；模型API Key由该密钥通过PostgreSQL `pgcrypto`加密保存，密钥需与数据库备份一同安全保管；Python依赖由`uv.lock`冻结；迁移成功后API/Worker才启动；API不会回退到内存后端；PG和OpenSearch不暴露宿主机端口。未配置Embedding时API/Worker仍能启动，`/v1/ready`仍检查数据库与OpenSearch，导入和检索返回`409 embedding_service_not_configured`。API只绑定`127.0.0.1:8080`，应由同机TLS反向代理对外发布。
+生产模式有以下强制门禁：API Key密钥材料和`CUEKB_MODEL_CONFIG_KEY`不能为空；模型API Key由该密钥通过PostgreSQL `pgcrypto`加密保存，密钥需与数据库备份一同安全保管；Python依赖由`uv.lock`冻结；迁移成功后API/Worker才启动；API不会回退到内存后端；PG和OpenSearch不暴露宿主机端口。未配置Embedding时API/Worker仍能启动，`/v1/ready`仍检查数据库与OpenSearch，导入和检索返回`409 embedding_service_not_configured`。生产Compose将容器内8080映射到宿主机`127.0.0.1:8085`，应由同机TLS反向代理对外发布。
 
 ### 部署
 

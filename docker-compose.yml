@@ -95,7 +95,7 @@ services:
       CUEKB_PROCESS_ROLE: api
       CUEKB_API_KEY_PEPPER: ${CUEKB_API_KEY_PEPPER:?set CUEKB_API_KEY_PEPPER}
       CUEKB_BOOTSTRAP_API_KEY: ${CUEKB_BOOTSTRAP_API_KEY:?set CUEKB_BOOTSTRAP_API_KEY}
-    ports: ["127.0.0.1:8080:8080"]
+    ports: ["127.0.0.1:8085:8080"]
     volumes: [cuekb_files:/data/originals]
     depends_on:
       migrate: {condition: service_completed_successfully}

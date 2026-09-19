@@ -93,7 +93,7 @@
 | --- | --- | --- |
 | 本地单元/API/静态检查 | **已完成** | 本次镜像精简后20项Pytest、Ruff check/format、compileall、JavaScript语法、Shell语法、Compose YAML与Dockerfile结构解析、`uv lock --check`通过；Pyright检查`src`为0 error（未在API开发环境安装可选Docling产生4个warning）。独立API环境共36包、97MB且无Docling/Torch；独立Worker环境共112包、1.2GB且无FastAPI/Uvicorn/Alembic，CPU Torch、Docling导入、Markdown与DOCX表格解析通过。环境大小来自macOS arm64虚拟环境，不等同于Linux Docker镜像大小。 |
 | 冻结依赖安全审计 | **已完成** | `pip-audit`检查全部extras，未发现已知漏洞 |
-| Docker目标环境启动 | **待开始** | 当前环境无Docker CLI；OpenSearch 3启动需设置`CUEKB_OPENSEARCH_INITIAL_ADMIN_PASSWORD`。API runtime已包含Alembic迁移依赖、`migrations/`与`db/schema.sql`；在Linux目标环境重新构建API镜像后执行Compose迁移/启动，核对镜像大小和Worker的`torch.version.cuda is None`，再完成门户模型配置、生产验收脚本及门户浏览器检查 |
+| Docker目标环境启动 | **待开始** | 当前环境无Docker CLI；OpenSearch 3启动需设置`CUEKB_OPENSEARCH_INITIAL_ADMIN_PASSWORD`。API runtime已包含Alembic迁移依赖、`migrations/`与`db/schema.sql`；生产Compose将容器内8080映射至宿主机`127.0.0.1:8085`。在Linux目标环境重新构建API镜像后执行Compose迁移/启动，核对镜像大小和Worker的`torch.version.cuda is None`，再完成门户模型配置、生产验收脚本及门户浏览器检查 |
 | 真实语料质量评测 | **待开始** | 中文扫描件、复杂表格、型号/版本、无答案和多证据样本 |
 | 时延与负载测试 | **待开始** | 记录硬件、模型、候选数、QPS、P50/P95和降级率 |
 | 故障与恢复演练 | **待开始** | Worker崩溃、重复事件、索引延迟、模型超时、撤权、删除和PG不可用 |

@@ -57,7 +57,7 @@ def upload(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="http://127.0.0.1:8080")
+    parser.add_argument("--url", default="http://127.0.0.1:8085")
     parser.add_argument("--bootstrap-key", required=True)
     parser.add_argument(
         "--expect-rerank",
