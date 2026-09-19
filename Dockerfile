@@ -31,6 +31,7 @@ FROM runtime AS api
 COPY --from=api-builder /app/.venv /app/.venv
 COPY alembic.ini ./
 COPY migrations/ ./migrations/
+COPY db/ ./db/
 USER cuekb
 EXPOSE 8080
 CMD ["uvicorn", "cuekb.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2", "--proxy-headers"]
