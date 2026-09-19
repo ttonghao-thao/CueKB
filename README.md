@@ -34,11 +34,14 @@ cp deploy/production.env.example .env.production
 chmod 600 .env.production
 docker build --target api -t cuekb-api:local .
 docker build --target worker -t cuekb-worker:local .
+# Worker应显示CPU版PyTorch且不包含CUDA运行时
+docker run --rm --entrypoint python cuekb-worker:local -c \
+  "import torch; print(torch.__version__, torch.version.cuda); assert torch.version.cuda is None"
 ./scripts/deploy-production.sh .env.production
 docker compose --env-file .env.production logs -f api worker
 ```
 
-构建镜像是独立的手动步骤；Compose中的API、Worker与迁移任务仅使用已存在的本地镜像，不自动构建或拉取应用镜像。如使用自定义标签，同时修改`.env.production`中的`CUEKB_API_IMAGE`和`CUEKB_WORKER_IMAGE`。部署脚本只校验Compose、启动服务并等待Worker运行，再用bootstrap key检查`/v1/ready`。启动后用bootstrap API Key打开`/portal/`的“模型配置”页，填写Embedding服务地址、API Key和Model；Reranker可选。配置保存后API与Worker会读取新配置，无需重启。模型服务的网络和健康由运行方单独检查。停止服务但保留数据：
+构建镜像是独立的手动步骤；Compose中的API、Worker与迁移任务仅使用已存在的本地镜像，不自动构建或拉取应用镜像。Dockerfile按角色安装依赖：API镜像不包含Docling，Worker镜像不包含FastAPI、Uvicorn和Alembic；Docling使用CPU版PyTorch，避免在不运行本地GPU模型的Worker中安装CUDA运行库。构建缓存只保留在BuildKit缓存中，不进入最终runtime镜像。如使用自定义标签，同时修改`.env.production`中的`CUEKB_API_IMAGE`和`CUEKB_WORKER_IMAGE`。部署脚本只校验Compose、启动服务并等待Worker运行，再用bootstrap key检查`/v1/ready`。启动后用bootstrap API Key打开`/portal/`的“模型配置”页，填写Embedding服务地址、API Key和Model；Reranker可选。配置保存后API与Worker会读取新配置，无需重启。模型服务的网络和健康由运行方单独检查。停止服务但保留数据：
 
 ```bash
 docker compose --env-file .env.production down
@@ -66,7 +69,7 @@ set +a
 
 ```bash
 /opt/homebrew/opt/python@3.12/bin/python3.12 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
+.venv/bin/pip install -e '.[api,dev]'
 .venv/bin/pytest -q
 .venv/bin/uvicorn cuekb.main:app --reload --host 127.0.0.1 --port 8080
 ```

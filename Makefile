@@ -2,7 +2,7 @@
 
 install:
 	python3 -m venv .venv
-	.venv/bin/pip install -e '.[dev]'
+	.venv/bin/pip install -e '.[api,dev]'
 
 test:
 	.venv/bin/pytest

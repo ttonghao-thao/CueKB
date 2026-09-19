@@ -1,14 +1,16 @@
 # CueKB 开发任务板
 
-版本：v0.1。更新时间：2026-09-17。
+版本：v0.1。更新时间：2026-09-19。
 
 当前编码状态：**M0、M1、M2及首期管理门户已完成；M3、M4待开始；生成式回答待确认。**
 
-## 当前优化计划（2026-09-17）
+## 当前优化计划（2026-09-19）
 
 1. 拆分 API/Worker 镜像的手动 `docker build` 与仅引用本地镜像的 Compose 部署。
 2. 将 Embedding/Reranker 服务配置迁至 PostgreSQL，提供系统管理员门户配置入口；API/Worker 在运行时读取，并保留索引模型一致性约束。
-3. 更新部署、架构与 API 文档，运行针对性测试及静态检查；Docker 实机验证单独记录。
+3. 按API、Worker运行角色拆分Python依赖；API移除Docling/Torch和未使用的Uvicorn标准extras，Worker移除Web/迁移依赖并固定CPU版PyTorch。
+4. 使用builder/runtime镜像阶段和BuildKit缓存挂载，最终镜像不携带uv、依赖下载缓存及构建文件。
+5. 更新部署、架构与 API 文档，运行针对性测试及静态检查；Docker 实机验证单独记录。
 
 状态：编码与本地静态验证已完成；Docker目标环境验收待执行。
 
@@ -28,7 +30,7 @@
 
 | 能力 | 已完成内容 | 主要代码或配置 |
 | --- | --- | --- |
-| 工程与部署 | 冻结Python依赖、多阶段Dockerfile、手动镜像构建、Compose本地镜像引用、迁移门禁、健康检查和部署脚本 | `pyproject.toml`、`uv.lock`、`Dockerfile`、`docker-compose.yml`、`scripts/deploy-production.sh` |
+| 工程与部署 | 冻结且按角色拆分Python依赖、CPU版Docling/Torch、精简runtime镜像、多阶段Dockerfile、手动镜像构建、Compose本地镜像引用、迁移门禁、健康检查和部署脚本 | `pyproject.toml`、`uv.lock`、`Dockerfile`、`docker-compose.yml`、`scripts/deploy-production.sh` |
 | 权威仓储 | PostgreSQL知识库、文档、版本、正文、任务、发布指针、ACL、outbox及加密模型配置仓储；Alembic初始迁移和模型配置迁移 | `db/schema.sql`、`migrations/`、`adapters/postgres.py` |
 | 身份与权限 | API Key签发、哈希保存、吊销；read/write/admin知识库ACL；检索和原文返回前复验 | `security.py`、`api/routes.py`、`adapters/postgres.py` |
 | 语料导入 | 文本与multipart文件接口；PDF、DOCX、Markdown、TXT；原文件保存；Docling/OCR；基础质量门禁和结构化分块 | `api/routes.py`、`services/parsing.py`、`adapters/storage.py` |
@@ -89,9 +91,9 @@
 
 | 验证活动 | 状态 | 当前记录 |
 | --- | --- | --- |
-| 本地单元/API/静态检查 | **已完成** | 本次优化后20项Pytest、Ruff check/format、compileall、JavaScript语法、Shell语法、Compose YAML解析、`uv lock --check`、0002迁移离线SQL通过；Pyright为0 error（未安装可选Docling产生4个warning）。完整`alembic upgrade head --sql`仍因既有0001迁移使用`MockConnection.exec_driver_sql`失败；本次0002独立离线检查通过。 |
+| 本地单元/API/静态检查 | **已完成** | 本次镜像精简后20项Pytest、Ruff check/format、compileall、JavaScript语法、Shell语法、Compose YAML与Dockerfile结构解析、`uv lock --check`通过；Pyright检查`src`为0 error（未在API开发环境安装可选Docling产生4个warning）。独立API环境共36包、97MB且无Docling/Torch；独立Worker环境共112包、1.2GB且无FastAPI/Uvicorn/Alembic，CPU Torch、Docling导入、Markdown与DOCX表格解析通过。环境大小来自macOS arm64虚拟环境，不等同于Linux Docker镜像大小。 |
 | 冻结依赖安全审计 | **已完成** | `pip-audit`检查全部extras，未发现已知漏洞 |
-| Docker目标环境启动 | **待开始** | 当前环境无Docker CLI；需在目标环境手动`docker build`两个镜像，执行Compose迁移/启动，门户配置模型，再跑生产验收脚本及门户浏览器检查 |
+| Docker目标环境启动 | **待开始** | 当前环境无Docker CLI；需在Linux目标环境重新`docker build`两个镜像，核对镜像大小和Worker的`torch.version.cuda is None`，再执行Compose迁移/启动、门户模型配置、生产验收脚本及门户浏览器检查 |
 | 真实语料质量评测 | **待开始** | 中文扫描件、复杂表格、型号/版本、无答案和多证据样本 |
 | 时延与负载测试 | **待开始** | 记录硬件、模型、候选数、QPS、P50/P95和降级率 |
 | 故障与恢复演练 | **待开始** | Worker崩溃、重复事件、索引延迟、模型超时、撤权、删除和PG不可用 |
@@ -105,3 +107,4 @@
 - 首期门户编码已完成；下一项核心编码工作从M3开始；生成式回答、OIDC、对象存储、多`scope`和高可用拓扑保持**待确认**。
 - 外部Embedding部署已从项目Compose、镜像、依赖和代码入口移除；Embedding和Reranker通过独立 OpenAI-compatible API的`base_url`、`api_key`和`model`调用。
 - 应用镜像由操作员手动构建，Compose只使用本地镜像；模型密钥经`pgcrypto`加密，`CUEKB_MODEL_CONFIG_KEY`需稳定保存；现有索引不接受不匹配的Embedding Model。
+- API与Worker使用独立dependency extra和精简runtime层；Worker锁定PyTorch CPU wheel，锁文件不再包含CUDA、cuDNN、NCCL或Triton包。Docling仍保留完整standard解析能力，避免在未完成真实语料回归前改变PDF OCR和表格行为。

@@ -1,6 +1,6 @@
 # CueKB 项目核心
 
-版本：v0.1。状态：M0 / M1 / M2及首期管理门户编码已完成。更新时间：2026-09-17。
+版本：v0.1。状态：M0 / M1 / M2及首期管理门户编码已完成。更新时间：2026-09-19。
 
 当前交付状态：M0工程与版本基线、M1文档与关键词检索、M2混合检索及首期管理门户编码均已完成，内存开发模式继续保留。M3轻量关系与上下文、M4质量与运行能力待开始；生成式回答待确认。完整清单以`TASK_BOARD.md`为准。
 
@@ -34,7 +34,7 @@
 | 检索 | OpenSearch的BM25与向量索引，RRF融合 | **已完成** |
 | 模型 | Embedding通过门户配置的 OpenAI-compatible API调用；Reranker通过独立地址按需启用，未配置Embedding仍可启动 | **已完成** |
 | 轻量关系 | PostgreSQL实体、别名、关系、证据表；限定一跳 | **待开始** |
-| 部署 | 手动`docker build`制作API/Worker镜像；单机Compose引用本地镜像，API/Worker与外部模型API分离 | **已完成** |
+| 部署 | 手动`docker build`制作API/Worker镜像；按角色安装依赖并使用精简runtime层，Worker使用CPU版PyTorch；单机Compose引用本地镜像，API/Worker与外部模型API分离 | **已完成** |
 
 Python依赖已写入`uv.lock`，Embedding与Reranker通过明确的 OpenAI-compatible `model`标识调用，不自动追随`latest`。Embedding模型换型必须创建匹配的新索引。
 

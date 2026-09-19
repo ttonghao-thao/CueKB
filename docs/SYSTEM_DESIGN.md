@@ -512,7 +512,7 @@ API Key哈希、吊销和知识库ACL代码状态为**已完成**。OIDC身份�
 
 当前Compose包含api、worker、postgres和opensearch，支持单机运行及数据库、索引和原文持久化；Embedding与重排是该Compose之外的服务。
 
-Compose部署代码状态为**已完成**：包含迁移门禁、API、Worker、PostgreSQL、OpenSearch及持久卷；API和Worker镜像先由操作员手动`docker build`，Compose只引用本地镜像；模型配置从门户写入PostgreSQL，未配置时服务仍可启动且API不会回退内存。步骤见[README](../README.md)。
+Compose部署代码状态为**已完成**：包含迁移门禁、API、Worker、PostgreSQL、OpenSearch及持久卷；API和Worker镜像先由操作员手动`docker build`，Compose只引用本地镜像；两个镜像通过独立dependency extra安装各自运行依赖，最终runtime层不包含uv与下载缓存；Worker的Docling使用CPU版PyTorch，不携带CUDA运行库。模型配置从门户写入PostgreSQL，未配置时服务仍可启动且API不会回退内存。步骤见[README](../README.md)。
 
 用户16GB M4机器不能在无实测情况下保证外部模型服务、OpenSearch和开发工具同时满足1秒目标。可选择与CueKB网络隔离部署的质量基线模型服务，或使用轻量中文Embedding、减少重排候选并单独验收。严格离线时外部模型与OCR权重需提前下载，禁用远程推理。
 
