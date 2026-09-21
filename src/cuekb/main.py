@@ -9,6 +9,7 @@ from opensearchpy.exceptions import OpenSearchException
 from sqlalchemy.exc import SQLAlchemyError
 
 from cuekb import __version__
+from cuekb.adapters.generations import MaintenanceBusy
 from cuekb.api.routes import router
 
 
@@ -43,13 +44,17 @@ def create_app() -> FastAPI:
             response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
+    @application.exception_handler(MaintenanceBusy)
+    async def maintenance_busy(_: Request, exc: MaintenanceBusy) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
     @application.exception_handler(PermissionError)
     async def permission_error(_: Request, exc: PermissionError) -> JSONResponse:
         return JSONResponse(status_code=403, content={"detail": str(exc)})
 
     @application.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> Response:
-        if request.url.path != "/v1/model-configuration":
+        if request.url.path not in {"/v1/model-configuration", "/v1/index-generations"}:
             return await request_validation_exception_handler(request, exc)
         return JSONResponse(
             status_code=422,

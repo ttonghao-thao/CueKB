@@ -42,7 +42,8 @@ function showView(name) {
   $$(".view").forEach((item) => item.classList.toggle("active", item.id === `view-${name}`));
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === name));
   if (name === "documents") loadDocuments();
-  if (name === "models" && state.isSystemAdmin) loadModelConfig();
+  if (name === "models" && state.isSystemAdmin) { loadModelConfig(); loadGenerations(); }
+  if (name === "knowledge") loadKnowledge();
 }
 
 async function connect(apiKey) {
@@ -61,12 +62,14 @@ async function connect(apiKey) {
     $("#models-nav").hidden = !state.isSystemAdmin;
     if (!state.isSystemAdmin && $("#view-models").classList.contains("active")) showView("documents");
     sessionStorage.setItem("cuekb_api_key", state.apiKey);
-    $("#connection-state").textContent = "已安全连接";
+    $("#connection-state").textContent = "已连接";
     $("#connection-state").classList.add("connected");
     renderKnowledgeBases();
     $("#key-dialog").close();
     $("#key-error").textContent = "";
     await loadDocuments();
+    $("#knowledge-list").textContent = "";
+    $("#generation-list").textContent = "";
   } catch (error) {
     state.apiKey = "";
     sessionStorage.removeItem("cuekb_api_key");
@@ -241,7 +244,7 @@ async function uploadFiles(event) {
     if (existingId) metadata.document_id = existingId;
     const form = new FormData(); form.append("metadata", JSON.stringify(metadata)); form.append("file", file);
     try {
-      const job = await api("/documents", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, body: form });
+      const job = await api("/documents", { method: "POST", headers: { "Idempotency-Key": newId() }, body: form });
       state.jobs.set(job.id, { ...job, filename: file.name }); renderJobs(); pollJob(job.id);
     } catch (error) { toast(`${file.name}：${error.message}`, "error"); }
   }
@@ -265,9 +268,9 @@ async function search(event) {
   if (!state.currentKb) return toast("请先选择知识库", "error");
   $("#search-results").innerHTML = '<div class="loading">正在检索…</div>';
   try {
-    const result = await api("/search", { method: "POST", body: JSON.stringify({ query: $("#query").value.trim(), kb_ids: [state.currentKb.id], mode: $("#search-mode").value, top_k: Number($("#top-k").value), include_context: true }) });
-    $("#search-summary").textContent = `${result.hits.length} 条证据 · 路径 ${result.retrieval_path} · ${Object.values(result.timings_ms).reduce((a, b) => a + b, 0).toFixed(1)} ms${result.degraded_reasons.length ? ` · 降级：${result.degraded_reasons.join(", ")}` : ""}`;
-    $("#search-results").innerHTML = result.hits.length ? result.hits.map((hit) => `<article class="panel result-card"><div class="result-meta"><span>#${hit.rank}</span><span>文档 ${shortId(hit.document_id)}</span><span>${escapeHtml(hit.title_path.join(" / ") || "正文")}</span><span>${escapeHtml(hit.retrieval_sources.join(" + "))}</span></div><p>${escapeHtml(hit.context || hit.source_text)}</p></article>`).join("") : '<div class="panel empty">没有找到匹配证据</div>';
+    const result = await api("/search", { method: "POST", body: JSON.stringify({ query: $("#query").value.trim(), kb_ids: [state.currentKb.id], mode: $("#search-mode").value, top_k: Number($("#top-k").value), include_context: true, filters: { product_model: $("#search-product").value.trim() || null, software_version: $("#search-software").value.trim() || null }, relations: { entity_ids: splitValues($("#search-entities").value), types: splitValues($("#search-relation-types").value), direction: $("#search-direction").value, at: $("#search-at").value.trim() || null } }) });
+    $("#search-summary").textContent = `${result.hits.length} 条证据${result.scope_limited ? " · 仅有界一跳，不代表全部影响范围" : ""} · 路径 ${result.retrieval_path} · ${(result.timings_ms.total || 0).toFixed(1)} ms${result.degraded_reasons.length ? ` · 降级：${result.degraded_reasons.join(", ")}` : ""}`;
+    $("#search-results").innerHTML = result.hits.length ? result.hits.map((hit) => `<article class="panel result-card"><div class="result-meta"><span>#${hit.rank}</span><span>文档 ${shortId(hit.document_id)}</span><span>${escapeHtml(hit.title_path.join(" / ") || "正文")}</span><span>${escapeHtml(hit.retrieval_sources.join(" + "))}</span></div><p>${escapeHtml(hit.context || hit.source_text)}</p><p class="muted">块 ID：${escapeHtml(hit.chunk_id)}${hit.context_truncated ? " · 上下文受预算截断" : ""}</p>${(hit.relations || []).map(r => `<p class="muted">${escapeHtml(r.relation_type)} · ${escapeHtml(r.stance)} · ${escapeHtml(r.subject_id)} → ${escapeHtml(r.object_id)}</p>`).join("")}</article>`).join("") : '<div class="panel empty">没有找到匹配证据</div>';
   } catch (error) { $("#search-results").innerHTML = ""; handleError(error, "检索失败"); }
 }
 
@@ -280,7 +283,7 @@ $$('.nav-item').forEach((button) => button.addEventListener("click", () => showV
 $$('[data-go]').forEach((button) => button.addEventListener("click", () => showView(button.dataset.go)));
 $("#change-key").addEventListener("click", () => { $("#api-key").value = ""; $("#key-dialog").showModal(); });
 $("#key-form").addEventListener("submit", (event) => { event.preventDefault(); connect($("#api-key").value); });
-$("#kb-select").addEventListener("change", async (event) => { state.currentKb = state.knowledgeBases.find((kb) => kb.id === event.target.value); sessionStorage.setItem("cuekb_kb_id", event.target.value); renderRole(); await loadDocuments(); });
+$("#kb-select").addEventListener("change", async (event) => { state.currentKb = state.knowledgeBases.find((kb) => kb.id === event.target.value); sessionStorage.setItem("cuekb_kb_id", event.target.value); renderRole(); $("#knowledge-list").textContent = ""; await loadDocuments(); if ($("#view-knowledge").classList.contains("active")) loadKnowledge(); });
 $("#document-filter").addEventListener("input", renderDocuments);
 $("#refresh-documents").addEventListener("click", loadDocuments);
 $("#drop-zone").addEventListener("click", () => $("#file-input").click());
@@ -300,3 +303,72 @@ $("#reranker-base-url").addEventListener("input", () => {
 $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
 
 if (state.apiKey) connect(state.apiKey); else $("#key-dialog").showModal();
+
+
+// getRandomValues works on the explicitly supported HTTP :8085 origin.
+function newId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, n => n.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+const splitValues = value => value.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+function requireKnowledgeAdmin() {
+  if (state.currentKb?.role !== "admin") throw new Error("需要知识库管理员权限");
+  return `/knowledge-bases/${state.currentKb.id}`;
+}
+async function loadKnowledge() {
+  if (!state.currentKb) return;
+  const kb = state.currentKb.id;
+  try {
+    const [entities, relations] = await Promise.all([api(`/knowledge-bases/${kb}/entities?limit=200`), api(`/knowledge-bases/${kb}/relations?limit=200`)]);
+    if (state.currentKb?.id !== kb) return;
+    $("#knowledge-list").innerHTML = `<h2>实体与当前有效证据（各显示最多200条）</h2>${entities.map(e => `<p><strong>${escapeHtml(e.name)}</strong> · ${escapeHtml(e.kind)}<br>${escapeHtml(e.id)}<br>别名：${escapeHtml(e.aliases.join("、"))}</p>`).join("")}${relations.map(r => `<p>${escapeHtml(r.relation_type)} · ${escapeHtml(r.id)}<br>${escapeHtml(r.subject_id)} → ${escapeHtml(r.object_id)}<br>${escapeHtml(JSON.stringify(r.evidence))} ${state.currentKb.role === "admin" ? `<button class="secondary" data-remove-relation="${r.id}">删除</button>` : ""}</p>`).join("") || "暂无记录"}`;
+    $$("[data-remove-relation]").forEach(button => button.addEventListener("click", async () => {
+      try { await api(`${requireKnowledgeAdmin()}/relations/${button.dataset.removeRelation}`, {method:"DELETE"}); await loadKnowledge(); } catch(error) { handleError(error,"删除关系失败"); }
+    }));
+    $$("#entity-form input, #entity-form textarea, #entity-form button, #relation-form input, #relation-form textarea, #relation-form select, #relation-form button").forEach(el => el.disabled = state.currentKb.role !== "admin");
+  } catch(error) { handleError(error,"读取实体与关系失败"); }
+}
+$("#refresh-knowledge").addEventListener("click",loadKnowledge);
+$("#entity-form").addEventListener("submit",async event => {
+  event.preventDefault();
+  try {
+    const base = requireKnowledgeAdmin();
+    const id = $("#entity-id").value.trim() || newId(); $("#entity-id").value=id;
+    await api(`${base}/entities/${id}`,{method:"PUT",body:JSON.stringify({name:$("#entity-name").value.trim(),kind:$("#entity-kind").value.trim(),aliases:splitValues($("#entity-aliases").value),mention_chunk_ids:splitValues($("#entity-mentions").value)})});
+    toast("实体已保存"); await loadKnowledge();
+  } catch(error) { handleError(error,"保存实体失败"); }
+});
+$("#relation-form").addEventListener("submit",async event => {
+  event.preventDefault();
+  try {
+    const base = requireKnowledgeAdmin();
+    const id = $("#relation-id").value.trim() || newId(); $("#relation-id").value=id;
+    const evidence = ["supports","refutes"].flatMap(stance => splitValues($(`#relation-${stance}`).value).map(chunk_id => ({chunk_id,stance})));
+    const conditions = {}; if ($("#relation-product").value.trim()) conditions.product_model=$("#relation-product").value.trim(); if ($("#relation-software").value.trim()) conditions.software_version=$("#relation-software").value.trim();
+    await api(`${base}/relations/${id}`,{method:"PUT",body:JSON.stringify({subject_id:$("#relation-subject").value.trim(),object_id:$("#relation-object").value.trim(),relation_type:$("#relation-type").value,evidence,conditions,valid_from:$("#relation-from").value.trim() || null,valid_until:$("#relation-until").value.trim() || null})});
+    toast("关系已保存"); await loadKnowledge();
+  } catch(error) { handleError(error,"保存关系失败"); }
+});
+async function loadGenerations() {
+  if (!state.isSystemAdmin) return;
+  try {
+    const rows = await api("/index-generations");
+    $("#generation-list").innerHTML = rows.map(r => `<div class="version-row"><strong>${escapeHtml(r.embedding_model)}</strong> · ${escapeHtml(r.status)} · ${r.dimension}维 · ${r.chunk_count == null ? "块数未校验" : `${r.chunk_count}块`}<br><span class="muted">${escapeHtml(r.id)} ${escapeHtml(r.error_code || "")}</span><div class="version-actions">${r.status === "ready" ? `<button class="primary" data-generation="${r.id}" data-action="activate">切换使用</button>` : ""}${r.status === "retired" ? `<button class="secondary" data-generation="${r.id}" data-action="rollback">重建并回退到此模型</button>` : ""}${["queued","building","ready"].includes(r.status) ? `<button class="secondary" data-generation="${r.id}" data-action="cancel">取消任务</button>` : ""}</div></div>`).join("") || "尚无重建记录";
+    $$("[data-generation]").forEach(button => button.addEventListener("click",async () => {
+      button.disabled=true;
+      try { const action=button.dataset.action; await api(`/index-generations/${button.dataset.generation}${action === "cancel" ? "" : `/${action}`}`,{method:action === "cancel" ? "DELETE" : "POST"}); toast(action === "rollback" ? "已创建回退重建任务，完成后需切换" : "操作成功"); await loadGenerations(); await loadModelConfig(); } catch(error) { handleError(error,"generation操作失败"); } finally { button.disabled=false; }
+    }));
+  } catch(error) { handleError(error,"读取generation失败"); }
+}
+$("#refresh-generations").addEventListener("click",loadGenerations);
+$("#create-generation").addEventListener("click",async event => {
+  if (!state.isSystemAdmin || !$("#model-config-form").reportValidity()) return;
+  event.currentTarget.disabled=true;
+  try {
+    await api("/index-generations",{method:"POST",body:JSON.stringify({embedding_base_url:$("#embedding-base-url").value.trim(),embedding_model:$("#embedding-model").value.trim(),embedding_api_key:$("#embedding-api-key").value || null,reranker_base_url:$("#reranker-base-url").value.trim(),reranker_model:$("#reranker-base-url").value.trim() ? $("#reranker-model").value.trim() : "",reranker_api_key:$("#reranker-api-key").value || null,dimension:Number($("#generation-dimension").value),chunking_version:"structured-v1"})});
+    $("#embedding-api-key").value=""; $("#reranker-api-key").value="";
+    toast("重建任务已创建，请刷新查看状态"); await loadGenerations();
+  } catch(error) { handleError(error,"创建重建任务失败"); } finally { $("#create-generation").disabled=false; }
+});

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from concurrent.futures import ThreadPoolExecutor
+from copy import copy
 from time import perf_counter
 from uuid import UUID, uuid4
 
@@ -9,6 +10,7 @@ from cuekb.config import Settings
 from cuekb.domain.models import EvidenceStatus, RetrievalMode, RetrievalStatus
 from cuekb.ports import ModelClient, Repository, SearchBackend
 from cuekb.schemas import SearchHit, SearchRequest, SearchResponse
+from cuekb.services.context import assemble_context
 
 
 def rrf(rankings: list[list[UUID]], rank_constant: int = 60) -> dict[UUID, float]:
@@ -54,6 +56,100 @@ class RetrievalService:
         self.reranker_configured = reranker_configured
 
     def search_evidence(
+        self, request: SearchRequest, _retry_on_transition: bool = True, principal=None
+    ) -> SearchResponse:
+        started = perf_counter()
+        snapshot = getattr(self.repository, "read_snapshot", None)
+        if snapshot is None:
+            return self._search_evidence(request, _retry_on_transition)
+        # One repeatable-read snapshot covers all authoritative reads in each attempt.
+        for attempt in range(2):
+            with snapshot() as scoped:
+                scoped.require_role(principal, request.kb_ids, "read")
+                service = copy(self)
+                service.repository = scoped
+                result = service._search_evidence(request, False)
+            # A fresh transaction is mandatory: repeatable-read alone would hide revocations.
+            with snapshot() as latest:
+                if principal and principal.api_key_id:
+                    latest.assert_api_key_active(principal.api_key_id)
+                latest.require_role(principal, request.kb_ids, "read")
+                revisions = {
+                    str(k): latest.get_knowledge_base(k).content_revision for k in request.kb_ids
+                }
+                if revisions != result.content_revisions and attempt == 0:
+                    continue
+                current = {
+                    c.id: c
+                    for c in latest.load_chunks([h.chunk_id for h in result.hits], request.kb_ids)
+                }
+                relations = []
+                if request.mode == RetrievalMode.RELATED and "relation" in result.executed_stages:
+                    try:
+                        seeds = [
+                            c.id
+                            for c in latest.load_chunks(
+                                getattr(service, "_relation_seed_ids", []), request.kb_ids
+                            )
+                        ]
+                        relations = latest.related_chunks(
+                            request,
+                            seeds,
+                            self.settings.relation_candidates,
+                            self.settings.relation_timeout_ms,
+                        )
+                    except Exception as exc:
+                        from sqlalchemy.exc import DBAPIError
+
+                        if (
+                            not isinstance(exc, DBAPIError)
+                            or getattr(exc.orig, "sqlstate", None) != "57014"
+                        ):
+                            raise
+                        result.degraded_reasons.append("relation_unavailable")
+                relation_ids = {r["chunk_id"] for r in relations}
+                result.hits = [
+                    h
+                    for h in result.hits
+                    if h.chunk_id in current
+                    and (h.retrieval_sources != ["relation"] or h.chunk_id in relation_ids)
+                ]
+                budget = self.settings.context_max_chars
+                for rank, hit in enumerate(result.hits, 1):
+                    hit.rank = rank
+                    hit.relations = [r for r in relations if r["chunk_id"] == hit.chunk_id]
+                    if not hit.relations:
+                        hit.retrieval_sources = [
+                            s for s in hit.retrieval_sources if s != "relation"
+                        ]
+                    hit.context = None
+                    hit.context_parts = []
+                    if request.include_context:
+                        chunk = current[hit.chunk_id]
+                        neighbors = latest.context_chunks(chunk, self.settings.context_max_chunks)
+                        hit.context, hit.context_parts, hit.context_truncated = assemble_context(
+                            chunk, neighbors, min(budget, self.settings.context_per_hit_chars)
+                        )
+                        hit.context_truncated = (
+                            hit.context_truncated
+                            or len(neighbors) >= self.settings.context_max_chunks
+                        )
+                        budget -= len(hit.context)
+                if revisions != result.content_revisions:
+                    result.degraded_reasons.append("index_transition")
+                result.content_revisions = revisions
+                result.retrieval_status = (
+                    RetrievalStatus.NOT_FOUND
+                    if not result.hits
+                    else RetrievalStatus.DEGRADED
+                    if result.degraded_reasons
+                    else RetrievalStatus.OK
+                )
+                result.timings_ms["total"] = (perf_counter() - started) * 1000
+                return result
+        raise RuntimeError("unreachable")
+
+    def _search_evidence(
         self, request: SearchRequest, _retry_on_transition: bool = True
     ) -> SearchResponse:
         started = perf_counter()
@@ -114,6 +210,38 @@ class RetrievalService:
         rankings = [[item_id for item_id, _ in keyword]]
         if vector:
             rankings.append([item_id for item_id, _ in vector])
+        relation_rows = []
+        if path == "related":
+            remaining = int((deadline - perf_counter()) * 1000)
+            if remaining > 0:
+                try:
+                    seeds = [
+                        c.id
+                        for c in self.repository.load_chunks(
+                            [i for ranking in rankings for i in ranking], request.kb_ids
+                        )
+                        if self._matches(c, filters)
+                    ]
+                    self._relation_seed_ids = seeds
+                    relation_rows = self.repository.related_chunks(
+                        request,
+                        seeds,
+                        self.settings.relation_candidates,
+                        min(remaining, self.settings.relation_timeout_ms),
+                    )
+                    rankings.append(list(dict.fromkeys(r["chunk_id"] for r in relation_rows)))
+                    executed.append("relation")
+                except Exception as exc:
+                    from sqlalchemy.exc import DBAPIError
+
+                    if (
+                        not isinstance(exc, DBAPIError)
+                        or getattr(exc.orig, "sqlstate", None) != "57014"
+                    ):
+                        raise
+                    degraded.append("relation_unavailable")
+            else:
+                degraded.append("relation_budget_exhausted")
         scores = rrf(rankings)
         executed.append("rrf")
         candidate_ids = sorted(scores, key=lambda item_id: (-scores[item_id], str(item_id)))
@@ -183,8 +311,18 @@ class RetrievalService:
 
         keyword_ids, vector_ids = {item for item, _ in keyword}, {item for item, _ in vector}
         hits = []
+        context_budget = self.settings.context_max_chars
         for rank, chunk_id in enumerate(ordered[: request.top_k], 1):
             chunk = by_id[chunk_id]
+            context, parts, truncated = None, [], False
+            if request.include_context:
+                context, parts, truncated = assemble_context(
+                    chunk,
+                    self.repository.context_chunks(chunk, self.settings.context_max_chunks),
+                    min(context_budget, self.settings.context_per_hit_chars),
+                )
+                truncated = truncated or len(parts) >= self.settings.context_max_chunks
+                context_budget -= len(context)
             hits.append(
                 SearchHit(
                     chunk_id=chunk.id,
@@ -192,13 +330,20 @@ class RetrievalService:
                     version_id=chunk.version_id,
                     rank=rank,
                     source_text=chunk.source_text,
-                    context=chunk.source_text if request.include_context else None,
+                    context=context,
+                    context_parts=parts,
+                    context_truncated=truncated,
+                    relations=[r for r in relation_rows if r["chunk_id"] == chunk_id],
                     title_path=chunk.title_path,
                     anchor=chunk.anchor,
                     metadata=chunk.metadata,
                     retrieval_sources=[
                         name
-                        for name, ids in (("keyword", keyword_ids), ("vector", vector_ids))
+                        for name, ids in (
+                            ("keyword", keyword_ids),
+                            ("vector", vector_ids),
+                            ("relation", {r["chunk_id"] for r in relation_rows}),
+                        )
                         if chunk_id in ids
                     ],
                 )
@@ -218,7 +363,7 @@ class RetrievalService:
             revisions[str(kb)] = knowledge_base.content_revision
         if revisions != initial_revisions:
             if _retry_on_transition:
-                return self.search_evidence(request, _retry_on_transition=False)
+                return self._search_evidence(request, _retry_on_transition=False)
             degraded.append("index_transition")
             valid_ids = {
                 chunk.id

@@ -9,12 +9,14 @@ from functools import lru_cache
 from typing import NamedTuple
 from uuid import UUID, uuid4, uuid5
 
+from cuekb.adapters.generations import MaintenanceBusy
 from cuekb.adapters.model_client import HttpModelClient
 from cuekb.adapters.opensearch import OpenSearchBackend
 from cuekb.adapters.postgres import PostgreSQLRepository
 from cuekb.adapters.storage import LocalFileStorage
 from cuekb.config import get_settings
 from cuekb.domain.models import Chunk
+from cuekb.services.generations import rebuild_once
 from cuekb.services.parsing import ParseError, parse_document
 
 logger = logging.getLogger(__name__)
@@ -59,9 +61,11 @@ def _process_outbox(current: Runtime) -> bool:
         if event["event_type"] == "document_deleted":
             current.search.delete_document(UUID(str(event["payload"]["document_id"])))
         elif event["event_type"] == "publication_switched":
-            current.search.delete_inactive_versions(
-                UUID(str(event["payload"]["document_id"])),
-                UUID(str(event["payload"]["active_version_id"])),
+            document_id = UUID(str(event["payload"]["document_id"]))
+            # Only explicitly retired versions are safe to remove. An old event
+            # must preserve both a newer publication and not-yet-published ready versions.
+            current.search.delete_versions(
+                document_id, current.repository.superseded_versions(document_id)
             )
         else:
             raise RuntimeError(f"unsupported_outbox_event:{event['event_type']}")
@@ -76,8 +80,34 @@ def _process_outbox(current: Runtime) -> bool:
 def run_once() -> bool:
     settings = get_settings()
     current = runtime()
-    outbox_processed = _process_outbox(current)
+    if rebuild_once(current.repository, settings):
+        return True
+    try:
+        with current.repository.maintenance_guard():
+            return _run_ingestion_once()
+    except MaintenanceBusy:
+        return False
+
+
+def _run_ingestion_once() -> bool:
+    settings = get_settings()
+    current = runtime()
     model_config = current.repository.get_model_configuration()
+    if model_config:
+        current = current._replace(
+            search=OpenSearchBackend(
+                settings.opensearch_url,
+                model_config["active_index"] or f"{settings.opensearch_index_prefix}-chunks",
+                model_config["embedding_dimension"] or settings.vector_dimension,
+                model_config["embedding_model"],
+                settings.opensearch_timeout_ms,
+            )
+        )
+    try:
+        outbox_processed = _process_outbox(current)
+    finally:
+        if model_config:
+            current.search.client.close()
     if model_config is None:
         return outbox_processed
     job = current.repository.claim_job(
@@ -101,8 +131,8 @@ def run_once() -> bool:
         )
         model_search = OpenSearchBackend(
             settings.opensearch_url,
-            f"{settings.opensearch_index_prefix}-chunks",
-            settings.vector_dimension,
+            model_config["active_index"] or f"{settings.opensearch_index_prefix}-chunks",
+            model_config["embedding_dimension"] or settings.vector_dimension,
             model_config["embedding_model"],
             settings.opensearch_timeout_ms,
         )
@@ -151,6 +181,10 @@ def run_once() -> bool:
             )
         if lease_lost.is_set():
             raise RuntimeError("worker_lease_lost")
+        if model_config["active_index"] and not model_search.client.indices.exists(
+            index=model_search.index_name
+        ):
+            raise RuntimeError("active_generation_index_missing")
         model_search.ensure_index()
         model_search.index(chunks, vectors)
         current.repository.save_ready(job["id"], current.owner, chunks)

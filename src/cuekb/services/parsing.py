@@ -90,27 +90,47 @@ def _parse_text(content: bytes, markdown: bool) -> list[ParsedBlock]:
         raise ParseError("replacement_character_ratio_high")
     blocks: list[ParsedBlock] = []
     headings: list[str] = []
+    pending: list[str] = []
+    pending_start = 0
     offset = 0
-    for part in re.finditer(r"\S(?:.*?\S)?(?=\n\s*\n|\Z)", text, re.DOTALL):
-        value = part.group(0).strip()
-        if markdown and value.startswith("#"):
-            first, _, remainder = value.partition("\n")
-            level = len(first) - len(first.lstrip("#"))
-            title = first[level:].strip()
-            headings = headings[: max(level - 1, 0)] + ([title] if title else [])
-            value = remainder.strip()
-            if not value:
-                continue
-        start = text.find(value, max(offset, part.start()))
-        end = start + len(value)
-        offset = end
-        blocks.extend(
-            _split_block(
-                value,
-                headings,
-                SourceAnchor(heading_path=headings.copy(), start_offset=start, end_offset=end),
+    fenced = False
+
+    def flush() -> None:
+        value = "".join(pending).strip()
+        if value:
+            raw = "".join(pending)
+            start = pending_start + len(raw) - len(raw.lstrip())
+            blocks.extend(
+                _split_block(
+                    value,
+                    headings,
+                    SourceAnchor(
+                        heading_path=headings.copy(),
+                        start_offset=start,
+                        end_offset=start + len(value),
+                    ),
+                )
             )
+        pending.clear()
+
+    for line in text.splitlines(keepends=True):
+        heading = (
+            re.match(r"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line) if markdown and not fenced else None
         )
+        if heading:
+            flush()
+            level = len(heading[1])
+            headings = headings[: level - 1] + [heading[2]]
+        elif not line.strip() and not fenced:
+            flush()
+        else:
+            if not pending:
+                pending_start = offset
+            pending.append(line)
+        if markdown and line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        offset += len(line)
+    flush()
     if not blocks:
         raise ParseError("empty_content")
     return blocks
@@ -119,6 +139,28 @@ def _parse_text(content: bytes, markdown: bool) -> list[ParsedBlock]:
 def _split_block(
     value: str, headings: list[str], anchor: SourceAnchor, max_chars: int = 1200
 ) -> list[ParsedBlock]:
+    lines = value.splitlines()
+    if len(lines) > 2 and "|" in lines[0] and re.match(r"^\s*\|?[\s:|\-]+\|?\s*$", lines[1]):
+        header = "\n".join(lines[:2])
+        if len(value) > max_chars and len(header) < max_chars // 2:
+            result: list[ParsedBlock] = []
+            rows: list[str] = []
+            for row in lines[2:]:
+                # Keep units and column labels with every split row.
+                for start in range(0, max(len(row), 1), max_chars - len(header) - 1):
+                    piece = row[start : start + max_chars - len(header) - 1]
+                    if (
+                        rows
+                        and len(header) + sum(len(r) + 1 for r in rows) + len(piece) + 1 > max_chars
+                    ):
+                        result.append(
+                            ParsedBlock(header + "\n" + "\n".join(rows), headings.copy(), anchor)
+                        )
+                        rows = []
+                    rows.append(piece)
+            if rows:
+                result.append(ParsedBlock(header + "\n" + "\n".join(rows), headings.copy(), anchor))
+            return result
     if len(value) <= max_chars:
         return [ParsedBlock(value, headings.copy(), anchor)]
     result = []

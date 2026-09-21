@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import ClassVar
@@ -27,6 +28,7 @@ def test_model_configuration_requires_system_admin_and_never_returns_api_keys(mo
         "updated_at": datetime.now(UTC),
     }
     repo = PostgreSQLRepository.__new__(PostgreSQLRepository)
+    repo.maintenance_guard = lambda: nullcontext()
     repo.get_model_configuration = lambda: stored
     repo.save_model_configuration = lambda **updates: (
         stored.update({key: value for key, value in updates.items() if value is not None}) or stored
@@ -128,7 +130,11 @@ def test_unconfigured_models_do_not_block_backend_initialization_or_claim_jobs(m
         process_role="worker",
         model_config_key=SecretStr("m" * 32),
     )
-    repo = SimpleNamespace(get_model_configuration=lambda: None)
+    repo = SimpleNamespace(
+        get_model_configuration=lambda: None,
+        maintenance_guard=lambda **_: nullcontext(),
+        pending_generation=lambda _: None,
+    )
     monkeypatch.setattr(dependencies, "get_settings", lambda: settings)
     monkeypatch.setattr(dependencies, "repository", lambda: repo)
 

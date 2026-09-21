@@ -91,6 +91,7 @@ class Chunk(BaseModel):
     kb_id: UUID
     document_id: UUID
     version_id: UUID
+    section_id: UUID | None = None
     ordinal: int = Field(ge=0)
     title_path: list[str] = Field(default_factory=list)
     source_text: str = Field(min_length=1)
@@ -125,3 +126,12 @@ class RetrievalPlan(BaseModel):
     use_embedding: bool
     use_rerank: bool
     reasons: list[str] = Field(default_factory=list)
+
+
+class Section(BaseModel):
+    id: UUID
+    version_id: UUID
+    parent_id: UUID | None = None
+    ordinal: int
+    title_path: list[str]
+    content: str

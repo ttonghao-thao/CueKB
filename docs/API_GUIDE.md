@@ -68,7 +68,7 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 
 内置管理门户位于`/portal/`。API Key仅进入当前标签页的`sessionStorage`，浏览器请求仍直接调用本章接口，不建立额外Cookie会话。
 
-系统管理员可通过`GET /v1/model-configuration`读取模型配置状态，通过`PUT /v1/model-configuration`保存Embedding与可选Reranker的`base_url`、`model`、`api_key`。GET只返回`*_api_key_set`布尔值，不返回密钥；PUT中密钥为`null`表示保留现有值。首次保存Embedding时必须提供密钥，Reranker启用时也须提供完整三元组。已有OpenSearch索引与新Embedding Model不匹配时返回409；更换模型需先完成索引重建方案。
+系统管理员可通过`GET /v1/model-configuration`读取模型配置状态，通过`PUT /v1/model-configuration`保存Embedding与可选Reranker的`base_url`、`model`、`api_key`。GET只返回`*_api_key_set`布尔值，不返回密钥；PUT中密钥为`null`表示保留现有值。首次保存Embedding时必须提供密钥，Reranker启用时也须提供完整三元组。已有OpenSearch索引与新Embedding Model不匹配时返回409；更换模型通过下文generation重建与切换接口完成。
 
 ```json
 {
@@ -102,7 +102,7 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 | `mode=auto` | 明确标识符走exact短路径，其他问题走hybrid |
 | `mode=exact` | BM25关键词路径，明确跳过Embedding和重排 |
 | `mode=hybrid` | BM25与查询Embedding/向量召回并行并用RRF融合；仅在服务端配置重排地址后才可能重排 |
-| `mode=related` | 当前使用hybrid主链路并标记范围受限；关系扩展代码状态为**待开始** |
+| `mode=related` | hybrid主链路加有证据的一跳扩展，RRF融合；始终标记范围受限 |
 | `top_k` | 1–20，默认8；合法结果不足时不会放松权限或版本约束凑满 |
 
 成功返回HTTP 200。`hits`是调用方应展示或交给自身回答模块的原文证据。以下数值是契约示例，不是性能实测：
@@ -155,3 +155,82 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 | 5xx | 服务或依赖异常；不得转换成“无结果” |
 
 运行实例的`/openapi.json`是字段级契约。部署方变更API、模型或索引generation时应通知调用方并完成兼容性验证。
+
+## 3. M3关系与上下文
+
+`POST /v1/search`新增可选`relations`字段，仅`mode=related`使用：
+
+```json
+{
+  "entity_ids": ["起始实体UUID"],
+  "types": ["depends_on", "references"],
+  "direction": "outgoing",
+  "at": "2026-09-21T00:00:00+08:00"
+}
+```
+
+`entity_ids`最多20个；也会从query精确匹配名称/审核别名，以及普通合法召回块的mention确定起点。`direction`可选outgoing/incoming/both，默认outgoing；types为空不过滤类型；at默认当前时间，有效区间为`[valid_from, valid_until)`，时间必须包含时区。带型号/软件条件的关系须与请求filters显式匹配。所有实体、关系和证据须属于请求授权的同一知识库，扩展不跨库，不走第二跳。
+
+响应`retrieval_sources`新增`relation`。每个hit新增：
+
+- `relations`：匹配的relation_id、subject_id、object_id、relation_type、conditions、stance和chunk_id；stance为supports/refutes，不能解释为事实真假已判定。
+- `context_parts`：组成context的各个chunk_id、source_text、anchor和title_path，均为同一文档同一当前版本。
+- `context_truncated`：上下文受字符/块预算限制。总预算耗尽时context可为空字符串，source_text仍提供命中原文。include_context=false时context为null、context_parts为空。
+
+### 实体和关系管理
+
+只在production后端开放；读取需要知识库read，维护需要知识库admin。列表使用`limit=50`（最多200）、`offset=0`。
+
+| 方法与路径 | 行为 |
+| --- | --- |
+| GET `/v1/knowledge-bases/{kb_id}/entities` | 列出实体、别名和当前可见mention块ID |
+| PUT `/v1/knowledge-bases/{kb_id}/entities/{entity_id}` | 以调用方稳定UUID创建/完整替换实体、别名、mention；成功204 |
+| DELETE `/v1/knowledge-bases/{kb_id}/entities/{entity_id}` | 删除实体及其关系、别名和mention；成功204 |
+| GET `/v1/knowledge-bases/{kb_id}/relations` | 列出仍有当前发布证据的关系；不代表条件和时间必然适用 |
+| PUT `/v1/knowledge-bases/{kb_id}/relations/{relation_id}` | 稳定UUID创建/完整替换关系及证据；成功204 |
+| DELETE `/v1/knowledge-bases/{kb_id}/relations/{relation_id}` | 删除关系及证据引用；成功204 |
+
+实体PUT请求：
+
+```json
+{"name":"设备R1","kind":"device","aliases":["路由器R1"],"mention_chunk_ids":["当前发布原文块UUID"]}
+```
+
+关系PUT请求：
+
+```json
+{
+  "subject_id":"起点实体UUID","object_id":"终点实体UUID","relation_type":"depends_on",
+  "evidence":[{"chunk_id":"当前发布原文块UUID","stance":"supports"}],
+  "conditions":{"product_model":"R1"},
+  "valid_from":null,"valid_until":null
+}
+```
+
+关系类型限belongs_to、adjacent_to、alias_of、revises、replaces、references、depends_on、applies_to；别名最多50条，每条最多200字符；mention最多100块；每个关系1–50条证据。UUID所属知识库或证据可见性不匹配返回422；唯一冲突返回409；权限不足403。文档删除或发布版本替换后，旧关系证据立即停止返回，不依赖OpenSearch清理完成。重复PUT不会增加重复证据，但会递增内容修订。
+
+## 4. 索引generation管理
+
+仅system admin，所有配置密钥加密保存在PG，GET不返回密钥。普通模型配置接口仍拒绝直接更换已有Embedding model；首次模型配置完成后才可创建generation。
+
+| 方法与路径 | 行为 |
+| --- | --- |
+| GET `/v1/index-generations` | 最近50条状态、模型、维度、分块版本、块数、尝试次数及安全错误代码；未验证块数为null |
+| POST `/v1/index-generations` | 排队重建，202返回id与queued状态 |
+| POST `/v1/index-generations/{id}/activate` | ready校验后切换，成功204 |
+| POST `/v1/index-generations/{id}/rollback` | 根据retired旧配置重建当前数据，202返回新任务；ready后仍需activate |
+| DELETE `/v1/index-generations/{id}` | 取消未激活任务，成功204；正在持锁重建时409，稍后重试 |
+
+创建请求沿用`ModelConfigurationUpdate`字段，再加`dimension`（1–65536）与`chunking_version`（当前仅`structured-v1`）。密钥null保留现有密钥；目标服务使用不同凭据时须显式填写。
+
+```json
+{
+  "embedding_base_url":"https://embedding.example/v1",
+  "embedding_api_key":"目标服务密钥",
+  "embedding_model":"目标模型标识",
+  "reranker_base_url":"","reranker_model":"","reranker_api_key":null,
+  "dimension":1024,"chunking_version":"structured-v1"
+}
+```
+
+状态：queued → building → ready → active → retired；失败有界退避重试，耗尽后failed。至多一个未完成重建。building期间内容/模型写入返回`409 index_maintenance_in_progress`，查询及撤权保持可用。重建完成到切换之间发生内容/配置变化时返回`409 generation_stale_rebuild_required`，必须取消并重建。回退不会恢复被删除内容或被撤销权限。模型服务可用性及真实向量质量由目标环境验收。

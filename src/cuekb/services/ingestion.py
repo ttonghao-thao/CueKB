@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import re
-from uuid import UUID
+from uuid import UUID, uuid5
 
-from cuekb.domain.models import Chunk, Document, DocumentVersion, Job, KnowledgeBase, SourceAnchor
+from cuekb.domain.models import Chunk, Document, DocumentVersion, Job, KnowledgeBase
 from cuekb.ports import Repository, SearchBackend
 from cuekb.schemas import DocumentCreate, KnowledgeBaseCreate
 
@@ -36,25 +35,24 @@ class IngestionService:
 
     @staticmethod
     def _chunk_text(request: DocumentCreate, document_id: UUID, version_id: UUID) -> list[Chunk]:
-        paragraphs = [
-            part.strip() for part in re.split(r"\n\s*\n", request.content) if part.strip()
-        ]
-        chunks: list[Chunk] = []
-        offset = 0
-        for ordinal, paragraph in enumerate(paragraphs):
-            start = request.content.find(paragraph, offset)
-            end = start + len(paragraph)
-            offset = end
-            chunks.append(
-                Chunk(
-                    kb_id=request.kb_id,
-                    document_id=document_id,
-                    version_id=version_id,
-                    ordinal=ordinal,
-                    source_text=paragraph,
-                    search_text=f"{request.name}\n{paragraph}",
-                    anchor=SourceAnchor(start_offset=start, end_offset=end),
-                    metadata={"business_version": request.business_version, **request.scope},
-                )
+        from cuekb.services.context import build_sections
+        from cuekb.services.parsing import parse_document
+
+        blocks = parse_document(request.content.encode(), "document.txt", "text/plain")
+        chunks = [
+            Chunk(
+                id=uuid5(version_id, str(i)),
+                kb_id=request.kb_id,
+                document_id=document_id,
+                version_id=version_id,
+                ordinal=i,
+                source_text=b.text,
+                search_text=f"{request.name}\n{' / '.join(b.title_path)}\n{b.text}",
+                title_path=b.title_path,
+                anchor=b.anchor,
+                metadata={"business_version": request.business_version, **request.scope},
             )
+            for i, b in enumerate(blocks)
+        ]
+        build_sections(chunks)
         return chunks

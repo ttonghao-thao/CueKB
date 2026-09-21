@@ -4,8 +4,9 @@ import hashlib
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy.exc import IntegrityError
 
 from cuekb import __version__
 from cuekb.adapters.opensearch import OpenSearchBackend
@@ -26,6 +27,8 @@ from cuekb.schemas import (
     DocumentDetail,
     DocumentMetadata,
     DocumentSummary,
+    EntityWrite,
+    GenerationCreate,
     GrantCreate,
     HealthResponse,
     KnowledgeBaseAccess,
@@ -33,9 +36,11 @@ from cuekb.schemas import (
     ModelConfigurationStatus,
     ModelConfigurationUpdate,
     PublishRequest,
+    RelationWrite,
     SearchRequest,
     SearchResponse,
 )
+from cuekb.services.generations import validate_generation
 from cuekb.services.ingestion import IngestionService
 from cuekb.services.retrieval import RetrievalService
 
@@ -93,11 +98,17 @@ def update_model_configuration(
     principal: Principal | None = Depends(current_principal),
 ) -> ModelConfigurationStatus:
     repo = _require_model_admin(principal)
+    with repo.maintenance_guard():
+        return _save_model_configuration(repo, request)
+
+
+def _save_model_configuration(repo, request):
     settings = get_settings()
+    current = repo.get_model_configuration()
     index = OpenSearchBackend(
         settings.opensearch_url,
-        f"{settings.opensearch_index_prefix}-chunks",
-        settings.vector_dimension,
+        (current or {}).get("active_index") or f"{settings.opensearch_index_prefix}-chunks",
+        (current or {}).get("embedding_dimension") or settings.vector_dimension,
         request.embedding_model,
         settings.opensearch_timeout_ms,
     )
@@ -368,7 +379,7 @@ def search(
     if isinstance(service.repository, PostgreSQLRepository):
         service.repository.require_role(principal, request.kb_ids, "read")
     try:
-        result = service.search_evidence(request)
+        result = service.search_evidence(request, principal=principal)
         if isinstance(service.repository, PostgreSQLRepository):
             if principal and principal.api_key_id:
                 service.repository.assert_api_key_active(principal.api_key_id)
@@ -428,3 +439,147 @@ def revoke_access(
     repo.require_role(principal, [kb_id], "admin")
     if not repo.revoke_grant(kb_id, principal_id):
         raise HTTPException(404, "grant_not_found")
+
+
+# M3 management keeps authorization in the API and authoritative checks in PostgreSQL.
+def _knowledge_repository(principal, kb_id, role):
+    repo = repository()
+    if not isinstance(repo, PostgreSQLRepository):
+        raise HTTPException(409, "knowledge_management_requires_production_backend")
+    repo.require_role(principal, [kb_id], role)
+    if repo.get_knowledge_base(kb_id) is None:
+        raise HTTPException(404, "knowledge_base_not_found")
+    return repo
+
+
+@router.get("/knowledge-bases/{kb_id}/entities", tags=["knowledge"])
+def list_entities(
+    kb_id: UUID,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    principal: Principal | None = Depends(current_principal),
+):
+    repo = _knowledge_repository(principal, kb_id, "read")
+    with repo.read_snapshot() as scoped:
+        scoped.require_role(principal, [kb_id], "read")
+        return scoped.list_entities(kb_id, limit, offset)
+
+
+@router.put("/knowledge-bases/{kb_id}/entities/{entity_id}", status_code=204, tags=["knowledge"])
+def put_entity(
+    kb_id: UUID,
+    entity_id: UUID,
+    request: EntityWrite,
+    principal: Principal | None = Depends(current_principal),
+):
+    repo = _knowledge_repository(principal, kb_id, "admin")
+    try:
+        repo.put_entity(kb_id, entity_id, request)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(409, "entity_conflict") from exc
+
+
+@router.get("/knowledge-bases/{kb_id}/relations", tags=["knowledge"])
+def list_relations(
+    kb_id: UUID,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    principal: Principal | None = Depends(current_principal),
+):
+    repo = _knowledge_repository(principal, kb_id, "read")
+    with repo.read_snapshot() as scoped:
+        scoped.require_role(principal, [kb_id], "read")
+        return scoped.list_relations(kb_id, limit, offset)
+
+
+@router.put("/knowledge-bases/{kb_id}/relations/{relation_id}", status_code=204, tags=["knowledge"])
+def put_relation(
+    kb_id: UUID,
+    relation_id: UUID,
+    request: RelationWrite,
+    principal: Principal | None = Depends(current_principal),
+):
+    repo = _knowledge_repository(principal, kb_id, "admin")
+    try:
+        repo.put_relation(kb_id, relation_id, request)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(409, "relation_conflict") from exc
+
+
+@router.delete(
+    "/knowledge-bases/{kb_id}/relations/{relation_id}", status_code=204, tags=["knowledge"]
+)
+def delete_relation(
+    kb_id: UUID, relation_id: UUID, principal: Principal | None = Depends(current_principal)
+):
+    if not _knowledge_repository(principal, kb_id, "admin").delete_relation(kb_id, relation_id):
+        raise HTTPException(404, "relation_not_found")
+
+
+@router.get("/index-generations", tags=["system"])
+def list_generations(principal: Principal | None = Depends(current_principal)):
+    return _require_model_admin(principal).list_generations()
+
+
+@router.post("/index-generations", status_code=202, tags=["system"])
+def create_generation(
+    request: GenerationCreate, principal: Principal | None = Depends(current_principal)
+):
+    settings = get_settings()
+    try:
+        generation_id = _require_model_admin(principal).queue_generation(
+            request, settings.opensearch_index_prefix, settings.vector_dimension
+        )
+        return {"id": generation_id, "status": "queued"}
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/index-generations/{generation_id}/activate", status_code=204, tags=["system"])
+def activate_generation(
+    generation_id: UUID, principal: Principal | None = Depends(current_principal)
+):
+    try:
+        _require_model_admin(principal).activate_generation(
+            generation_id, lambda row: validate_generation(get_settings(), row)
+        )
+    except (ValueError, RuntimeError) as exc:
+        from cuekb.adapters.generations import MaintenanceBusy
+
+        if isinstance(exc, MaintenanceBusy):
+            raise
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/index-generations/{generation_id}/rollback", status_code=202, tags=["system"])
+def rollback_generation(
+    generation_id: UUID, principal: Principal | None = Depends(current_principal)
+):
+    settings = get_settings()
+    try:
+        new_id = _require_model_admin(principal).rollback_generation(
+            generation_id, settings.opensearch_index_prefix, settings.vector_dimension
+        )
+        return {"id": new_id, "status": "queued"}
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.delete("/index-generations/{generation_id}", status_code=204, tags=["system"])
+def cancel_generation(
+    generation_id: UUID, principal: Principal | None = Depends(current_principal)
+):
+    if not _require_model_admin(principal).cancel_generation(generation_id):
+        raise HTTPException(409, "generation_not_cancellable")
+
+
+@router.delete("/knowledge-bases/{kb_id}/entities/{entity_id}", status_code=204, tags=["knowledge"])
+def delete_entity(
+    kb_id: UUID, entity_id: UUID, principal: Principal | None = Depends(current_principal)
+):
+    if not _knowledge_repository(principal, kb_id, "admin").delete_entity(kb_id, entity_id):
+        raise HTTPException(404, "entity_not_found")

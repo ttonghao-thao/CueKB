@@ -29,20 +29,25 @@ def repository() -> Any:
     return result
 
 
-@lru_cache(maxsize=4)
-def _search_backend(model_name: str) -> Any:
+@lru_cache(maxsize=16)
+def _search_backend(model_name: str, index_name: str = "", dimension: int = 0) -> Any:
     settings = get_settings()
     if settings.backend == "memory":
         return InMemorySearchBackend()
     result = OpenSearchBackend(
         settings.opensearch_url,
-        f"{settings.opensearch_index_prefix}-chunks",
-        settings.vector_dimension,
+        index_name or f"{settings.opensearch_index_prefix}-chunks",
+        dimension or settings.vector_dimension,
         model_name,
         settings.opensearch_timeout_ms,
     )
     if model_name:
-        result.ensure_index()
+        if index_name:
+            if not result.client.indices.exists(index=index_name):
+                raise RuntimeError("active_generation_index_missing")
+            result.validate_existing_index()
+        else:
+            result.ensure_index()
     return result
 
 
@@ -51,7 +56,15 @@ def search_backend() -> Any:
     if settings.backend == "memory":
         return _search_backend("")
     config = repository().get_model_configuration()
-    return _search_backend(config["embedding_model"] if config else "")
+    return (
+        _search_backend(
+            config["embedding_model"],
+            config.get("active_index") or "",
+            config.get("embedding_dimension") or 0,
+        )
+        if config
+        else _search_backend("")
+    )
 
 
 @lru_cache
@@ -94,7 +107,11 @@ def retrieval_service() -> Iterator[RetrievalService]:
     try:
         yield RetrievalService(
             repo,
-            _search_backend(config["embedding_model"]),
+            _search_backend(
+                config["embedding_model"],
+                config.get("active_index") or "",
+                config.get("embedding_dimension") or 0,
+            ),
             settings,
             model,
             reranker_configured=bool(config["reranker_base_url"]),

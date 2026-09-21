@@ -86,11 +86,12 @@ class SearchFilters(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
-    kb_ids: list[UUID] = Field(min_length=1)
+    kb_ids: list[UUID] = Field(min_length=1, max_length=50)
     mode: RetrievalMode = RetrievalMode.AUTO
     top_k: int = Field(default=8, ge=1, le=20)
     filters: SearchFilters = Field(default_factory=SearchFilters)
     include_context: bool = True
+    relations: "RelationQuery" = Field(default_factory=lambda: RelationQuery())
 
     @model_validator(mode="after")
     def unique_kbs(self) -> "SearchRequest":
@@ -110,6 +111,9 @@ class SearchHit(BaseModel):
     anchor: SourceAnchor
     metadata: dict[str, Any]
     retrieval_sources: list[str]
+    context_parts: list["ContextPart"] = Field(default_factory=list)
+    context_truncated: bool = False
+    relations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):
@@ -202,3 +206,87 @@ class DocumentDetail(BaseModel):
     created_at: datetime
     active_version_id: UUID | None = None
     versions: list[DocumentVersionInfo]
+
+
+RelationType = Literal[
+    "belongs_to",
+    "adjacent_to",
+    "alias_of",
+    "revises",
+    "replaces",
+    "references",
+    "depends_on",
+    "applies_to",
+]
+
+
+class EntityWrite(BaseModel):
+    name: str = Field(min_length=1, max_length=200, pattern=r"\S")
+    kind: str = Field(default="term", min_length=1, max_length=100)
+    aliases: list[str] = Field(default_factory=list, max_length=50)
+    mention_chunk_ids: list[UUID] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_aliases(self) -> "EntityWrite":
+        self.name = self.name.strip()
+        if any(not a.strip() or len(a) > 200 for a in self.aliases):
+            raise ValueError("invalid_alias")
+        self.aliases = sorted({a.strip() for a in self.aliases})
+        return self
+
+
+class RelationEvidenceWrite(BaseModel):
+    chunk_id: UUID
+    stance: Literal["supports", "refutes"] = "supports"
+
+
+class RelationWrite(BaseModel):
+    subject_id: UUID
+    object_id: UUID
+    relation_type: RelationType
+    evidence: list[RelationEvidenceWrite] = Field(min_length=1, max_length=50)
+    conditions: dict[Literal["product_model", "software_version"], str] = Field(
+        default_factory=dict
+    )
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> "RelationWrite":
+        if self.subject_id == self.object_id:
+            raise ValueError("self_relation_not_allowed")
+        for value in (self.valid_from, self.valid_until):
+            if value is not None and value.tzinfo is None:
+                raise ValueError("relation_time_requires_timezone")
+        if self.valid_from and self.valid_until and self.valid_until <= self.valid_from:
+            raise ValueError("invalid_relation_interval")
+        return self
+
+
+class RelationQuery(BaseModel):
+    entity_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    types: list[RelationType] = Field(default_factory=list, max_length=8)
+    direction: Literal["outgoing", "incoming", "both"] = "outgoing"
+    at: datetime | None = None
+
+    @model_validator(mode="after")
+    def aware_time(self) -> "RelationQuery":
+        if self.at is not None and self.at.tzinfo is None:
+            raise ValueError("relation_time_requires_timezone")
+        return self
+
+
+class GenerationCreate(ModelConfigurationUpdate):
+    dimension: int = Field(ge=1, le=65536)
+    chunking_version: Literal["structured-v1"] = "structured-v1"
+
+
+class ContextPart(BaseModel):
+    chunk_id: UUID
+    source_text: str
+    anchor: SourceAnchor
+    title_path: list[str]
+
+
+SearchRequest.model_rebuild()
+SearchHit.model_rebuild()

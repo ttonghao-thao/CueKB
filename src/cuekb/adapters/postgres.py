@@ -9,6 +9,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
+from cuekb.adapters.generations import GenerationOperations
+from cuekb.adapters.knowledge import KnowledgeOperations
 from cuekb.domain.models import (
     Chunk,
     Job,
@@ -17,6 +19,7 @@ from cuekb.domain.models import (
     SourceAnchor,
 )
 from cuekb.security import hash_api_key
+from cuekb.services.context import build_sections
 
 ROLE_LEVEL = {"read": 1, "write": 2, "admin": 3}
 
@@ -25,14 +28,14 @@ class ConflictError(RuntimeError):
     pass
 
 
-class PostgreSQLRepository:
+class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
     def __init__(self, database_url: str, pepper: str, model_config_key: str) -> None:
         self.engine: Engine = create_engine(database_url, pool_pre_ping=True)
         self.pepper = pepper
         self.model_config_key = model_config_key
 
     def get_model_configuration(self) -> dict | None:
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             row = (
                 conn.execute(
                     text(
@@ -40,7 +43,7 @@ class PostgreSQLRepository:
                         "AS embedding_api_key,embedding_model,reranker_base_url,"
                         "CASE WHEN reranker_api_key IS NULL THEN NULL ELSE "
                         "pgp_sym_decrypt(reranker_api_key,:key) END AS reranker_api_key,"
-                        "reranker_model,revision,updated_at FROM model_configurations WHERE id=1"
+                        "reranker_model,revision,updated_at,active_index,embedding_dimension FROM model_configurations WHERE id=1"
                     ),
                     {"key": self.model_config_key},
                 )
@@ -58,8 +61,13 @@ class PostgreSQLRepository:
         reranker_api_key: str | None,
         reranker_model: str,
     ) -> dict:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             conn.execute(text("SELECT pg_advisory_xact_lock(1129663299)"))
+            established = conn.execute(
+                text("SELECT embedding_model FROM model_configurations WHERE id=1")
+            ).scalar()
+            if established and established != embedding_model:
+                raise ValueError("embedding_change_requires_generation")
             existing = (
                 conn.execute(
                     text(
@@ -142,7 +150,7 @@ class PostgreSQLRepository:
 
     def authenticate(self, api_key: str) -> Principal | None:
         digest = hash_api_key(api_key, self.pepper)
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             row = (
                 conn.execute(
                     text(
@@ -156,7 +164,7 @@ class PostgreSQLRepository:
         return Principal(**row) if row else None
 
     def assert_api_key_active(self, key_id: UUID) -> None:
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             active = conn.execute(
                 text("SELECT 1 FROM api_keys WHERE id=:id AND revoked_at IS NULL"),
                 {"id": key_id},
@@ -231,7 +239,7 @@ class PostgreSQLRepository:
             raise PermissionError("authentication_required")
         if principal.is_system_admin:
             return
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             rows = conn.execute(
                 text(
                     "SELECT kb_id,role::text role FROM kb_grants WHERE principal_id=:p AND kb_id=ANY(:ids)"
@@ -245,7 +253,7 @@ class PostgreSQLRepository:
     def create_knowledge_base(
         self, kb: KnowledgeBase, principal: Principal | None = None
     ) -> KnowledgeBase:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             conn.execute(
                 text(
                     "INSERT INTO knowledge_bases(id,name,description,content_revision,acl_revision,created_at) VALUES (:id,:name,:description,0,0,:created_at)"
@@ -262,7 +270,7 @@ class PostgreSQLRepository:
         return kb
 
     def get_knowledge_base(self, kb_id: UUID) -> KnowledgeBase | None:
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             row = (
                 conn.execute(text("SELECT * FROM knowledge_bases WHERE id=:id"), {"id": kb_id})
                 .mappings()
@@ -273,7 +281,7 @@ class PostgreSQLRepository:
     def list_knowledge_bases(self, principal: Principal | None) -> list[dict]:
         if principal is None:
             raise PermissionError("authentication_required")
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             if principal.is_system_admin:
                 rows = conn.execute(
                     text(
@@ -290,7 +298,7 @@ class PostgreSQLRepository:
             return [dict(row) for row in rows]
 
     def list_documents(self, kb_id: UUID, limit: int, offset: int) -> list[dict]:
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             rows = conn.execute(
                 text(
                     """
@@ -320,7 +328,7 @@ class PostgreSQLRepository:
             return [dict(row) for row in rows]
 
     def get_document_detail(self, document_id: UUID) -> dict | None:
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             document = (
                 conn.execute(
                     text(
@@ -362,7 +370,7 @@ class PostgreSQLRepository:
         document_id: UUID | None,
         auto_publish: bool,
     ) -> Job:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             conn.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                 {"key": f"{principal_id}:{kb_id}:{idempotency_key}"},
@@ -441,7 +449,7 @@ class PostgreSQLRepository:
         return self._job(row)
 
     def get_job(self, job_id: UUID) -> Job | None:
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             row = (
                 conn.execute(text("SELECT * FROM ingestion_jobs WHERE id=:id"), {"id": job_id})
                 .mappings()
@@ -450,7 +458,7 @@ class PostgreSQLRepository:
         return self._job(row) if row else None
 
     def claim_job(self, owner: str, lease_seconds: int, max_attempts: int) -> dict | None:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             row = (
                 conn.execute(
                     text(
@@ -476,7 +484,7 @@ class PostgreSQLRepository:
             return dict(row)
 
     def save_ready(self, job_id: UUID, owner: str, chunks: Sequence[Chunk]) -> bool:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             job = (
                 conn.execute(
                     text(
@@ -490,10 +498,19 @@ class PostgreSQLRepository:
             if not job:
                 raise ConflictError("worker_lease_lost")
             conn.execute(text("DELETE FROM chunks WHERE version_id=:v"), {"v": job["version_id"]})
+            sections = build_sections(chunks)
+            conn.execute(text("DELETE FROM sections WHERE version_id=:v"), {"v": job["version_id"]})
+            for section in sections:
+                conn.execute(
+                    text(
+                        "INSERT INTO sections(id,version_id,parent_id,ordinal,title_path,content) VALUES (:id,:version_id,:parent_id,:ordinal,CAST(:title_path AS jsonb),:content)"
+                    ),
+                    {**section.model_dump(), "title_path": json.dumps(section.title_path)},
+                )
             for chunk in chunks:
                 conn.execute(
                     text(
-                        "INSERT INTO chunks(id,kb_id,document_id,version_id,ordinal,source_text,search_text,source_anchor,metadata,content_sha256) VALUES (:id,:kb,:d,:v,:o,:st,:search,CAST(:anchor AS jsonb),CAST(:meta AS jsonb),:sha)"
+                        "INSERT INTO chunks(id,kb_id,document_id,version_id,section_id,ordinal,source_text,search_text,source_anchor,metadata,content_sha256) VALUES (:id,:kb,:d,:v,:section,:o,:st,:search,CAST(:anchor AS jsonb),CAST(:meta AS jsonb),:sha)"
                     ),
                     {
                         "id": chunk.id,
@@ -501,6 +518,7 @@ class PostgreSQLRepository:
                         "d": chunk.document_id,
                         "v": chunk.version_id,
                         "o": chunk.ordinal,
+                        "section": chunk.section_id,
                         "st": chunk.source_text,
                         "search": chunk.search_text,
                         "anchor": chunk.anchor.model_dump_json(),
@@ -508,6 +526,10 @@ class PostgreSQLRepository:
                         "sha": hashlib.sha256(chunk.source_text.encode()).hexdigest(),
                     },
                 )
+            conn.execute(
+                text("UPDATE knowledge_bases SET content_revision=content_revision+1 WHERE id=:kb"),
+                {"kb": job["kb_id"]},
+            )
             conn.execute(
                 text("UPDATE document_versions SET status='ready' WHERE id=:v"),
                 {"v": job["version_id"]},
@@ -529,7 +551,7 @@ class PostgreSQLRepository:
             return auto_publish
 
     def renew_lease(self, job_id: UUID, owner: str, lease_seconds: int) -> bool:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             return bool(
                 conn.execute(
                     text(
@@ -544,7 +566,7 @@ class PostgreSQLRepository:
     ) -> None:
         status = "queued" if retry else "failed"
         stage = "retry_wait" if retry else "failed"
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             conn.execute(
                 text(
                     "UPDATE ingestion_jobs SET status=CAST(:status AS job_status),stage=:stage,error_code=:c,error_message=:m,lease_owner=NULL,lease_until=NULL,next_attempt_at=now()+(:delay * interval '1 second'),updated_at=now() WHERE id=:id"
@@ -567,7 +589,7 @@ class PostgreSQLRepository:
                 )
 
     def publish(self, document_id: UUID, version_id: UUID, scope_key: str) -> None:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             self._publish_locked(conn, document_id, version_id, scope_key)
 
     @staticmethod
@@ -629,7 +651,7 @@ class PostgreSQLRepository:
     def load_chunks(self, ids: Sequence[UUID], kb_ids: Sequence[UUID]) -> list[Chunk]:
         if not ids:
             return []
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             rows = conn.execute(
                 text(
                     "SELECT c.* FROM chunks c JOIN documents d ON d.id=c.document_id JOIN document_publications p ON p.document_id=c.document_id AND p.active_version_id=c.version_id WHERE c.id=ANY(:ids) AND c.kb_id=ANY(:kb) AND d.deleted_at IS NULL"
@@ -639,7 +661,7 @@ class PostgreSQLRepository:
             return [self._chunk(row) for row in rows]
 
     def visible_chunks(self, kb_ids: Sequence[UUID]) -> list[Chunk]:
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             rows = conn.execute(
                 text(
                     "SELECT c.* FROM chunks c JOIN documents d ON d.id=c.document_id JOIN document_publications p ON p.document_id=c.document_id AND p.active_version_id=c.version_id WHERE c.kb_id=ANY(:kb) AND d.deleted_at IS NULL"
@@ -649,7 +671,7 @@ class PostgreSQLRepository:
             return [self._chunk(row) for row in rows]
 
     def delete_document(self, document_id: UUID) -> UUID:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             kb = conn.execute(
                 text(
                     "UPDATE documents SET deleted_at=now() WHERE id=:d AND deleted_at IS NULL RETURNING kb_id"
@@ -671,7 +693,7 @@ class PostgreSQLRepository:
             return kb
 
     def get_document_kb(self, document_id: UUID) -> UUID:
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             kb = conn.execute(
                 text("SELECT kb_id FROM documents WHERE id=:d AND deleted_at IS NULL"),
                 {"d": document_id},
@@ -681,7 +703,7 @@ class PostgreSQLRepository:
         return kb
 
     def get_source(self, document_id: UUID, version_id: UUID | None = None) -> dict:
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             if version_id:
                 row = (
                     conn.execute(
@@ -708,8 +730,19 @@ class PostgreSQLRepository:
             raise KeyError("document_source_not_found")
         return dict(row)
 
+    def superseded_versions(self, document_id: UUID) -> list[UUID]:
+        with self._read() as conn:
+            return list(
+                conn.execute(
+                    text(
+                        "SELECT id FROM document_versions WHERE document_id=:id AND status='superseded' ORDER BY id"
+                    ),
+                    {"id": document_id},
+                ).scalars()
+            )
+
     def claim_outbox(self, owner: str, lease_seconds: int, max_attempts: int) -> dict | None:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             row = (
                 conn.execute(
                     text(
@@ -731,7 +764,7 @@ class PostgreSQLRepository:
             return dict(row)
 
     def complete_outbox(self, event_id: UUID, owner: str) -> None:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             conn.execute(
                 text(
                     "UPDATE outbox_events SET processed_at=now(),lease_owner=NULL,lease_until=NULL WHERE id=:id AND lease_owner=:owner"
@@ -740,7 +773,7 @@ class PostgreSQLRepository:
             )
 
     def fail_outbox(self, event_id: UUID, owner: str, message: str, delay_seconds: int) -> None:
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             conn.execute(
                 text(
                     "UPDATE outbox_events SET lease_owner=NULL,lease_until=NULL,last_error=:error,next_attempt_at=now()+(:delay * interval '1 second') WHERE id=:id AND lease_owner=:owner"
@@ -765,6 +798,8 @@ class PostgreSQLRepository:
             document_id=row["document_id"],
             version_id=row["version_id"],
             ordinal=row["ordinal"],
+            section_id=row["section_id"],
+            title_path=row["source_anchor"].get("heading_path", []),
             source_text=row["source_text"],
             search_text=row["search_text"],
             anchor=SourceAnchor(**row["source_anchor"]),

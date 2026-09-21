@@ -156,6 +156,24 @@ class InMemoryRepository:
             if chunk.id in allowed_ids and chunk.kb_id in allowed_kbs
         ]
 
+    def context_chunks(self, chunk, limit):
+        candidates = [
+            c
+            for c in self.visible_chunks([chunk.kb_id])
+            if c.version_id == chunk.version_id
+            and (
+                c.title_path == chunk.title_path
+                or c.title_path == chunk.title_path[:-1]
+                or abs(c.ordinal - chunk.ordinal) <= 1
+            )
+        ]
+        return sorted(
+            candidates, key=lambda c: (c.id != chunk.id, abs(c.ordinal - chunk.ordinal), c.ordinal)
+        )[:limit]
+
+    def related_chunks(self, request, seed_ids, limit, timeout_ms):
+        return []
+
 
 class InMemorySearchBackend:
     """Deterministic test/dev retrieval; not the production OpenSearch adapter."""

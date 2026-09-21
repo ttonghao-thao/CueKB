@@ -17,6 +17,7 @@
         <button class="nav-item active" data-view="documents">文档管理</button>
         <button class="nav-item" data-view="upload">导入文档</button>
         <button class="nav-item" data-view="search">检索验证</button>
+        <button class="nav-item" data-view="knowledge">实体与关系</button>
         <button class="nav-item" data-view="models" id="models-nav" hidden>模型配置</button>
       </nav>
       <div class="sidebar-footer">
@@ -74,13 +75,44 @@
         <form id="search-form" class="panel search-panel">
           <textarea id="query" maxlength="2000" placeholder="输入客服问题或关键词…" required></textarea>
           <div class="search-options">
-            <label><span>检索模式</span><select id="search-mode"><option value="auto">自动</option><option value="exact">精确</option><option value="hybrid">混合</option></select></label>
+            <label><span>检索模式</span><select id="search-mode"><option value="auto">自动</option><option value="exact">精确</option><option value="hybrid">混合</option><option value="related">关系（一跳）</option></select></label>
             <label><span>返回数量</span><select id="top-k"><option>5</option><option selected>8</option><option>10</option><option>20</option></select></label>
             <button class="primary" type="submit">开始检索</button>
           </div>
         </form>
+        <div class="panel form-panel"><p>关系查询范围（可选）</p><div class="field-grid">
+          <label><span>起始实体 ID（逗号分隔）</span><input id="search-entities"></label>
+          <label><span>方向</span><select id="search-direction"><option value="outgoing">从起点向外</option><option value="incoming">指向起点</option><option value="both">双向</option></select></label>
+          <label><span>关系类型（逗号分隔，留空为全部）</span><input id="search-relation-types"></label>
+          <label><span>查询时间（含时区，留空为当前）</span><input id="search-at"></label>
+          <label><span>型号过滤</span><input id="search-product"></label><label><span>软件版本过滤</span><input id="search-software"></label>
+        </div></div>
         <div id="search-summary"></div>
         <div id="search-results" class="results"></div>
+      </section>
+
+      <section id="view-knowledge" class="view">
+        <div class="page-heading"><div><p class="eyebrow">有出处的知识</p><h1>实体与关系</h1><p>仅知识库管理员可维护。关系必须引用当前发布原文；相似度不会自动变为事实。</p></div><button id="refresh-knowledge" class="secondary">刷新</button></div>
+        <div id="knowledge-list" class="panel form-panel"></div>
+        <form id="entity-form" class="panel form-panel">
+          <h2>保存实体</h2>
+          <label><span>实体 ID（更新已有实体时填写）</span><input id="entity-id" placeholder="留空创建"></label>
+          <div class="field-grid"><label><span>名称</span><input id="entity-name" required maxlength="200"></label><label><span>类型</span><input id="entity-kind" value="term" required maxlength="100"></label></div>
+          <label><span>已审核别名（每行一个）</span><textarea id="entity-aliases"></textarea></label>
+          <label><span>提及该实体的原文块 ID（每行一个，可从检索结果复制）</span><textarea id="entity-mentions"></textarea></label>
+          <button class="primary" type="submit">保存实体</button>
+        </form>
+        <form id="relation-form" class="panel form-panel">
+          <h2>保存关系</h2>
+          <label><span>关系 ID（更新已有关系时填写）</span><input id="relation-id" placeholder="留空创建"></label>
+          <div class="field-grid"><label><span>起点实体 ID</span><input id="relation-subject" required></label><label><span>终点实体 ID</span><input id="relation-object" required></label></div>
+          <label><span>关系类型</span><select id="relation-type"><option>references</option><option>belongs_to</option><option>adjacent_to</option><option>alias_of</option><option>revises</option><option>replaces</option><option>depends_on</option><option>applies_to</option></select></label>
+          <div class="field-grid"><label><span>适用型号（可选）</span><input id="relation-product"></label><label><span>适用软件版本（可选）</span><input id="relation-software"></label></div>
+          <div class="field-grid"><label><span>有效起点（可选，含时区的 ISO 时间）</span><input id="relation-from" placeholder="2026-09-20T00:00:00+08:00"></label><label><span>有效终点（不含，可选）</span><input id="relation-until" placeholder="2027-01-01T00:00:00+08:00"></label></div>
+          <label><span>支持证据块 ID（每行一个）</span><textarea id="relation-supports"></textarea></label>
+          <label><span>反驳证据块 ID（每行一个；至少填写一种证据）</span><textarea id="relation-refutes"></textarea></label>
+          <button class="primary" type="submit">保存关系</button>
+        </form>
       </section>
 
       <section id="view-models" class="view">
@@ -104,6 +136,12 @@
           <p class="muted model-note">Embedding Model 与现有 OpenSearch 索引绑定。更换模型需要先按索引重建流程处理，不能直接覆盖旧索引。</p>
           <div class="form-actions"><button id="save-model-config" class="primary" type="submit">保存配置</button></div>
         </form>
+        <div class="panel form-panel">
+          <h2>索引 generation</h2><p>在上方填写目标模型配置，再创建重建任务。重建期间暂停内容写入；查询继续使用原索引。校验完成后手动切换；回退会用旧模型重新构建当前内容。</p>
+          <label><span>目标向量维度</span><input id="generation-dimension" type="number" value="1024" min="1" max="65536"></label>
+          <div class="form-actions"><button id="create-generation" class="primary">创建重建任务</button><button id="refresh-generations" class="secondary">刷新状态</button></div>
+          <div id="generation-list"></div>
+        </div>
       </section>
     </main>
   </div>

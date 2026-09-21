@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     worker_model_timeout_ms: int = Field(default=120000, ge=1000, le=600000)
     rerank_min_remaining_ms: int = Field(default=180, ge=10, le=5000)
     rerank_enabled: bool = True
+    relation_candidates: int = Field(default=30, ge=1, le=100)
+    relation_timeout_ms: int = Field(default=100, ge=10, le=1000)
+    context_max_chars: int = Field(default=12000, ge=1200, le=50000)
+    context_per_hit_chars: int = Field(default=4000, ge=1200, le=10000)
+    context_max_chunks: int = Field(default=8, ge=1, le=20)
     exact_identifier_pattern: str = (
         r"^(?:[A-Za-z][A-Za-z0-9_.:/+-]*\d[A-Za-z0-9_.:/+-]*|[A-Z][A-Z0-9_./:-]{2,})$"
     )

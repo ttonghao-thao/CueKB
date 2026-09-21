@@ -69,6 +69,10 @@ class OpenSearchBackend:
             raise ValueError("document vectors are required")
         actions = []
         for chunk, vector in zip(chunks, vectors, strict=True):
+            import math
+
+            if len(vector) != self.dimension or any(not math.isfinite(v) for v in vector):
+                raise ValueError("invalid_document_vector")
             actions.append(
                 {
                     "_op_type": "index",
@@ -145,19 +149,28 @@ class OpenSearchBackend:
             params={"refresh": "true", "conflicts": "proceed"},
         )
 
-    def delete_inactive_versions(self, document_id: UUID, active_version_id: UUID) -> None:
-        self.client.delete_by_query(
-            index=self.index_name,
-            body={
-                "query": {
-                    "bool": {
-                        "filter": [{"term": {"document_id": str(document_id)}}],
-                        "must_not": [{"term": {"version_id": str(active_version_id)}}],
+    def delete_versions(self, document_id: UUID, version_ids: Sequence[UUID]) -> None:
+        for offset in range(0, len(version_ids), 100):
+            self.client.delete_by_query(
+                index=self.index_name,
+                body={
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {"term": {"document_id": str(document_id)}},
+                                {
+                                    "terms": {
+                                        "version_id": [
+                                            str(v) for v in version_ids[offset : offset + 100]
+                                        ]
+                                    }
+                                },
+                            ]
+                        }
                     }
-                }
-            },
-            params={"refresh": "true", "conflicts": "proceed"},
-        )
+                },
+                params={"refresh": "true", "conflicts": "proceed"},
+            )
 
     @staticmethod
     def _hits(response: dict) -> list[tuple[UUID, float]]:
