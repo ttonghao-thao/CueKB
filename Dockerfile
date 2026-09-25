@@ -3,20 +3,23 @@
 FROM python:3.12.10-slim AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_LINK_MODE=copy \
-    UV_PYTHON_DOWNLOADS=0
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
-COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
-COPY pyproject.toml uv.lock README.md ./
+RUN python -m venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+COPY pyproject.toml requirements.lock README.md ./
 COPY src/ ./src/
 
 FROM builder AS api-builder
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable --extra api
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --constraint requirements.lock '.[api]'
 
 FROM builder AS worker-builder
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable --extra ingestion
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --constraint requirements.lock \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --no-deps torch \
+    && python -m pip install --constraint requirements.lock '.[ingestion]'
 
 FROM python:3.12.10-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \

@@ -1,7 +1,5 @@
 # CueKB 对外API接入说明
 
-当前接口说明，更新：2026-09-22。字段以`schemas.py`、`api/routes.py`及运行实例OpenAPI为准；未实现方案见[M4](plans/M4.md)，部署见[运行手册](OPERATIONS.md)。
-
 第三方系统只需要服务方提供的Base URL、API Key和`kb_id`。每次请求携带：
 
 ```http
@@ -52,7 +50,7 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 }
 ```
 
-轮询`GET /v1/jobs/{job_id}`。可检索完成状态为`status=succeeded`且`stage=published`；`stage=ready`表示处理完成但尚未发布。失败时读取`error_code`和`error_message`，不要在未知结果时换一个幂等键盲目重传。
+轮询`GET /v1/jobs/{id}`。可检索完成状态为`status=succeeded`且`stage=published`；`stage=ready`表示处理完成但尚未发布。失败时读取`error_code`和`error_message`，不要在未知结果时换一个幂等键盲目重传。
 
 ### 文本JSON接口
 
@@ -139,9 +137,7 @@ curl --fail-with-body "$CUEKB_URL/v1/documents" \
 
 `retrieval_path`、`executed_stages`和`skipped_stages`说明本次真实执行路径。例如exact请求的`executed_stages`不应包含`embedding`；未配置重排地址时记录`reranker_service_unconfigured`，其他跳过原因包括显式关闭、候选不足和剩余预算不足。
 
-这些选择不是调用模型临时猜测，也不是只能改源码的硬编码。调用方可用`mode`明确选择exact或hybrid；auto根据服务端可配置的标识符规则确定路径。Embedding服务的`base_url`、`api_key`和`model`由系统管理员在门户保存；配置完成前导入和检索返回`409 embedding_service_not_configured`。外部API契约及model校验见[模型集成](MODEL_INTEGRATION.md)。重排默认不执行；服务端完整配置Reranker后，还会检查`CUEKB_RERANK_ENABLED`、候选数量、`CUEKB_RERANK_MIN_REMAINING_MS`和剩余阶段预算（目前不是端到端硬截止）。外部重排服务返回429或其他调用错误时，检索服务保留已经通过权威校验的RRF结果并标记`rerank_unavailable`。
-
-当前不支持`filters.version_policy`、历史版本检索或自动澄清；`needs_clarification`仅为预留枚举。错误仍使用`detail`，统一错误`error_code/trace_id`尚未实现。
+这些选择不是调用模型临时猜测，也不是只能改源码的硬编码。调用方可用`mode`明确选择exact或hybrid；auto根据服务端可配置的标识符规则确定路径。Embedding服务的`base_url`、`api_key`和`model`由系统管理员在门户保存；配置完成前导入和检索返回`409 embedding_service_not_configured`。外部API契约及model校验见[系统设计](SYSTEM_DESIGN.md#222-外部模型-api-契约)。重排默认不执行；服务端完整配置Reranker后，还会检查`CUEKB_RERANK_ENABLED`、候选数量、`CUEKB_RERANK_MIN_REMAINING_MS`和请求总deadline。重排模型繁忙时会快速返回429，检索服务保留已经通过权威校验的RRF结果并标记`rerank_unavailable`。
 
 原件可通过`GET /v1/documents/{document_id}/source`下载当前发布版本；指定历史版本可附`?version_id=<UUID>`，仍执行知识库读权限和删除状态检查。
 

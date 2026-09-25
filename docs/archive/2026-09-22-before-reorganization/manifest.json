@@ -1,0 +1,37 @@
+{
+  "AGENTS.md": {
+    "snapshot": "AGENTS.md",
+    "sha256": "dab6b44e3d8e1f1fec48e669d909051f08223a17025a35d2d0f3b97b4c0bd464",
+    "bytes": 1969
+  },
+  "PROJECT_CORE.md": {
+    "snapshot": "PROJECT_CORE.md",
+    "sha256": "eb8c62ba86d4743b6e9ee57d7ec3ff5da7dbc3bb2269575bb829a600d497858d",
+    "bytes": 4913
+  },
+  "TASK_BOARD.md": {
+    "snapshot": "TASK_BOARD.md",
+    "sha256": "6b58bbcbdc7505468d0fd20a1d17fef2b4612cd6d2f6dc350078e651d3254aff",
+    "bytes": 30111
+  },
+  "README.md": {
+    "snapshot": "README.md",
+    "sha256": "bc2886d204123d833a787289abeed8a2e4537b43e25694bf3421e0a60d8ad1de",
+    "bytes": 13246
+  },
+  "DECISIONS.md": {
+    "snapshot": "DECISIONS.md",
+    "sha256": "668915bc2ae8b52e82e3a863a76f8d8a0f4c7c2bd3d7efad78c97a916c8461b3",
+    "bytes": 5221
+  },
+  "docs/SYSTEM_DESIGN.md": {
+    "snapshot": "SYSTEM_DESIGN.md",
+    "sha256": "c65a4d647af0ef9261527b58ba83ce6cd1a36e5fcdd2435702380d8b813e19f9",
+    "bytes": 50473
+  },
+  "docs/API_GUIDE.md": {
+    "snapshot": "API_GUIDE.md",
+    "sha256": "2e529c470b930d8cbcecb2ae6fc26f3c07c1f2a6ab4a9e917caeaaf06f5ca00d",
+    "bytes": 13561
+  }
+}
