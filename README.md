@@ -33,6 +33,8 @@
 
 完整阅读路径见[文档导航](docs/README.md)。
 
+自动知识关联的离线实验入口和合成示例见[C-lite实验说明](experiments/associations/README.md)。该工具独立于API/Worker，不改变现有检索路径；真实语料质量和生产性能仍需另行评测。
+
 ### M3 PostgreSQL集成测试
 
 ```bash

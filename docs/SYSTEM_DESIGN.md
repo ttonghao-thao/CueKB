@@ -82,3 +82,9 @@ query/文档向量保持同模型和编码配置。RRF按排名融合；重排�
 优先完成[M4](plans/M4.md)中的错误追踪、硬截止、资源隔离、指标、评测和证据评估；再用测量决定分块/OCR优化。不引入生成式检索循环或新的基础设施。
 
 OIDC、对象存储、多scope、文档ACL、缓存、连接器、保留和HA均保持[候选方案](plans/EXTENSIONS.md)状态。部署、恢复和性能目标见[验收设计](ACCEPTANCE.md)，已接受取舍见[决策记录](../DECISIONS.md)。
+
+## 7. 自动关联离线实验
+
+`src/cuekb/experiments/associations/`提供独立的manifest/JSONL校验、导航边与规则断言构建、一跳查询扩展和H/A/B/C候选对照。命令为`python -m cuekb.experiments.associations`；操作与限制见[实验说明](../experiments/associations/README.md)。现有API和Worker不导入该模块，不新增PG表、外部模型调用或线上行为。
+
+实验按冻结发布/权限快照与原文指纹裁决候选；它不能替代生产PG实时事务。合成示例和本地BM25/cosine只用于代码验证；真实候选可用录制文件回放，报告明确区分回放耗时和未测量HTTP性能。后续持久化/增量Worker及线上接入仍按[自动关联方案](plans/AUTOMATIC_ASSOCIATION.md)的质量门槛推进。

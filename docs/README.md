@@ -15,6 +15,7 @@
 | [OPERATIONS](OPERATIONS.md) | 构建/部署/升级/8085访问/验收脚本 | 目标环境操作 |
 | [ACCEPTANCE](ACCEPTANCE.md) | 质量、负载、恢复方法与待确认门槛 | 设计/执行验收 |
 | [M4](plans/M4.md) | 六个待完成工作包及Q01—Q04优化 | 后续实施设计 |
+| [自动关联架构评审稿](plans/AUTOMATIC_ASSOCIATION.md) | 自动知识关联、有界动态扩展、增量维护及最小对照实验；离线工具已实现，生产集成待评审 | 研究/评审新关联能力，不替代现行架构或M4 |
 | [EXTENSIONS](plans/EXTENSIONS.md) | C02—C09建议、待决参数、依赖与验收 | 确认候选能力 |
 
 ## 快速定位

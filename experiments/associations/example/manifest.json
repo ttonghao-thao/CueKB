@@ -1,0 +1,93 @@
+{
+  "schema_version": "association-experiment-v1",
+  "dataset_id": "c-lite-synthetic-smoke-v1",
+  "provenance": "synthetic_fixture",
+  "source_description": "Hand-authored fictional products and vectors for code checks only; no real manufacturer claims or quality/performance validation.",
+  "as_of": "2026-10-08T12:00:00Z",
+  "code_commit": "0ab322ffa26351d218712a845726e61decae179c",
+  "dependency_lock_sha256": "b7cf7ad800890b01e94372d3e370c45a4b2d22257834e5eaf4b2e2b4f85c72b9",
+  "binding": {
+    "model": "synthetic-vector",
+    "revision": "hand-authored-v1",
+    "dimension": 4,
+    "encoding": "hand-authored-search-text-v1",
+    "index": "fixture-only"
+  },
+  "publications": {
+    "c72ec9bf-67c6-540f-b008-8698e3f57210": "1b71f724-52dd-502c-b0d4-03ce5aea66c7",
+    "8a682cc5-d590-53b7-9347-8aafb8feb3c9": "18720e50-3d57-5c21-bad0-c9ed4e336a14",
+    "518b1b8a-99b1-5c0a-9c85-8e4e5ee3903f": "2a2a033a-d862-52a1-9e3c-7f0c144b6450",
+    "b7180e2f-dd00-5ac4-808d-bbddf2029336": "da8f72b7-7066-5b51-be9d-902f68fc124e",
+    "f5b727a5-eadb-5805-8c50-2bd5752c964b": "e083bd74-b2fa-5db2-9918-fd3b9be19848",
+    "a27f9935-2016-5288-8545-657fd740cc40": "37b066e8-c7ee-5258-90f1-d7c066bc0275",
+    "06d2de23-7866-54f1-9c1d-b4a0c5594315": "5db5c919-8b0d-5e33-ac9e-fa172a8ce334",
+    "f74d0b4a-302b-5e99-ab62-999dabf411b6": "956a9827-1b23-5c49-883f-2a386e21e3ce",
+    "7d19f0f3-d123-5e88-8123-a9f2bbe5fa6f": "ff790961-1fe9-5970-a9a2-7eb1e59f7ee8"
+  },
+  "read_grants": {
+    "d7e74e02-247e-5ebb-858f-bd49e952135c": [
+      "fb486d47-fe6e-5c84-a5cb-f535f53401b2"
+    ]
+  },
+  "content_revisions": {
+    "fb486d47-fe6e-5c84-a5cb-f535f53401b2": 1,
+    "4555ffce-aac7-5ff0-859f-a97e80ab7531": 1
+  },
+  "entities": [
+    {
+      "id": "e79807fa-8796-524a-ac26-b5d51b1c3ba6",
+      "kb_id": "fb486d47-fe6e-5c84-a5cb-f535f53401b2",
+      "name": "Bulb A1",
+      "kind": "product",
+      "aliases": []
+    },
+    {
+      "id": "9b435dcf-e676-5073-bfcd-60c4a5654b56",
+      "kb_id": "fb486d47-fe6e-5c84-a5cb-f535f53401b2",
+      "name": "Bulb A1 Pro",
+      "kind": "product",
+      "aliases": []
+    },
+    {
+      "id": "2a7ae61e-6d9d-5c38-8739-a04b9cf6dd9b",
+      "kb_id": "fb486d47-fe6e-5c84-a5cb-f535f53401b2",
+      "name": "Hub G",
+      "kind": "gateway",
+      "aliases": [
+        "HUB-G-123"
+      ]
+    },
+    {
+      "id": "13c85443-2304-5226-8892-fe942985ed5b",
+      "kb_id": "fb486d47-fe6e-5c84-a5cb-f535f53401b2",
+      "name": "Sensor S",
+      "kind": "sensor",
+      "aliases": []
+    },
+    {
+      "id": "0324dc4d-446a-582f-a882-b4154a9e1b88",
+      "kb_id": "fb486d47-fe6e-5c84-a5cb-f535f53401b2",
+      "name": "Speaker C",
+      "kind": "speaker",
+      "aliases": []
+    },
+    {
+      "id": "5302f759-040d-57cd-b2ac-81d9a7d20ab4",
+      "kb_id": "fb486d47-fe6e-5c84-a5cb-f535f53401b2",
+      "name": "Zigbee",
+      "kind": "protocol",
+      "aliases": []
+    },
+    {
+      "id": "f2cf3214-2cf1-5415-a601-5cc0ab378788",
+      "kb_id": "fb486d47-fe6e-5c84-a5cb-f535f53401b2",
+      "name": "Thread",
+      "kind": "protocol",
+      "aliases": []
+    }
+  ],
+  "policy": {
+    "keyword_candidates": 2,
+    "vector_candidates": 2
+  }
+}
