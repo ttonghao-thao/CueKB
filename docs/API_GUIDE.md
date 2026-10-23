@@ -185,7 +185,7 @@ Job包含id、kb_id、document_id、version_id、status、stage、progress、err
 | POST /v1/index-generations/{id}/rollback | system admin | 用旧模型配置重建当前PG数据；不是恢复旧事实 |
 | DELETE /v1/index-generations/{id} | system admin | 取消未激活重建 |
 
-V1 `POST /v1/search`固定D21形状：request_id、document_name/hash、score/score_type/stage_scores已存在；头部重排后可接RRF尾，不能跨score_type比较；include_context=false沿旧语义；产品/版本按文档metadata标签过滤。旧M3严格客户端不接受D21新增字段，**不能认为V1就天然兼容所有历史客户端**。新客户端明确选V2，升级和回退均显式，不自动换版本兜底。
+V1 `POST /v1/search`固定D23形状：request_id、document_name/hash、score/score_type/stage_scores已存在；头部重排后可接RRF尾，不能跨score_type比较；include_context=false沿旧语义；产品/版本按文档metadata标签过滤。旧M3严格客户端不接受D23新增字段，**不能认为V1就天然兼容所有历史客户端**。新客户端明确选V2，升级和回退均显式，不自动换版本兜底。
 
 ## 7. 错误契约
 

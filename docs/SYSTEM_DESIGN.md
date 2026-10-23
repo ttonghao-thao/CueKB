@@ -69,3 +69,9 @@ generation维护锁阻止内容写入，查询继续。重建读取PG已存事�
 解析/归属升级先重处理、人工检查并publish；Embedding/投影升级再generation。旧V1投影不具备V2字段，V2返回INDEX_UPGRADE_REQUIRED而不假装已使用新路径。旧配置rollback也重建当前PG事实，不将旧index直接当成当前内容。
 
 数据库0004新增处理快照/派生血缘/结构spans、同文档source_version FK和防重复部分索引。它不自动改写旧块归属；不可自动downgrade，执行前按[操作手册](OPERATIONS.md)备份并在测试库演练。
+
+## 7. 独立离线关联实验
+
+远端main的C-lite实验保留在`src/cuekb/experiments/associations/`，使用显式冻结manifest、JSONL语料和候选录制，比较H/H+A/H+B/H+C/H-wide。它复用领域对象和RRF，执行同KB一跳导航、规则事实验证及离线评测，不读生产配置、不调用模型、不向PG/OS写数据、不接入V2生产检索链路。
+
+使用方法见[实验说明](../experiments/associations/README.md)。真实语料、独立gold、Reranker对照、PG持久化及线上接点仍待独立验收。研究方案中的新表、自动关联参数和模型扩展不是当前对外契约；线上接入须复用V2的SearchExecution、最终权限/版本复验和预算，并单独验证兼容性。

@@ -87,11 +87,11 @@ publish.json为`{"version_id":"待发布版本UUID","scope_key":"default"}`。�
 
 ## 5. 严格客户端升级
 
-当前V1为D21形状，已含request_id与分数字段；更早的M3 strict客户端需要升级，新增字段即使为null也可能被拒绝。正确顺序：
+当前V1为D23形状，已含request_id与分数字段；更早的M3 strict客户端需要升级，新增字段即使为null也可能被拒绝。正确顺序：
 
 1. 先发布支持目标DTO的消费端，保留extra=forbid或等效严格校验。
 2. 使用已导出的契约和合成示例做解析/引用映射测试，必要归属必须进入实际模型证据包，不能被metadata allowlist丢掉。
 3. 在固定语料/权限/query下对照后显式切`/v2/search`；未知版本或坏响应明确失败，不自动重试另一个协议。
-4. 需要回退时明确配置D21 endpoint与D21 DTO；不得使用V2局部过滤解释V1文档标签过滤，也不得跨V1混合score_type比较分数。
+4. 需要回退时明确配置D23 endpoint与D23 DTO；不得使用V2局部过滤解释V1文档标签过滤，也不得跨V1混合score_type比较分数。
 
 voice-service-agent尤其需要同步请求/响应模型、Adapter、Citation/ContextPart、native evidence选择、外部LLM证据及错误映射。现有“任何空hits都视作无资料”和“完整主块可丢弃所有截断上下文”的规则不足以消费V2必要依赖。这些第三方改造由调用方执行，本仓库交付不代表其他仓库已自动完成升级。
