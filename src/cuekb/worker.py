@@ -17,9 +17,58 @@ from cuekb.adapters.storage import LocalFileStorage
 from cuekb.config import get_settings
 from cuekb.domain.models import Chunk
 from cuekb.services.generations import rebuild_once
+from cuekb.services.evidence import bind_block_dependencies, build_search_text
 from cuekb.services.parsing import ParseError, parse_document
 
 logger = logging.getLogger(__name__)
+
+
+def materialize_chunks(repository, storage, job, *, template):
+    if job.get("derivation_kind") == "restore":
+        chunks = repository.restore_chunks(job)
+    else:
+        content = storage.read(job["source_uri"])
+        blocks = parse_document(
+            content, job["original_filename"], job["media_type"],
+            processing_profile=job["processing_profile"],
+            processing_snapshot=job["processing_snapshot"], version_id=job["version_id"],
+        )
+        chunks = [Chunk(
+            id=uuid5(job["version_id"], str(index)), kb_id=job["kb_id"],
+            document_id=job["document_id"], version_id=job["version_id"], ordinal=index,
+            source_text=block.text, search_text=block.text,
+            title_path=block.title_path, anchor=block.anchor,
+            source_spans=block.source_spans, evidence_structure=block.evidence_structure,
+            processing_profile=job["processing_profile"],
+            metadata={"business_version": job["business_version"], **job["scope"]},
+            document_name=job["name"],
+        ) for index, block in enumerate(blocks)]
+        bind_block_dependencies(chunks)
+    for chunk in chunks:
+        chunk.document_name = job["name"]
+        chunk.search_text = build_search_text(chunk, job["name"], template=template)
+    return chunks
+
+
+def verify_indexed_chunks(search, chunks):
+    """A global count cannot prove that this exact restored version was refreshed."""
+    for start in range(0, len(chunks), 32):
+        batch = chunks[start:start + 32]
+        docs = search.client.mget(index=search.index_name,
+                                 body={"ids": [str(c.id) for c in batch]})["docs"]
+        indexed = {str(d.get("_id")): d for d in docs}
+        if len(indexed) != len(batch) or any(
+            not indexed.get(str(c.id), {}).get("found")
+            or indexed[str(c.id)]["_source"].get("source_text") != c.source_text
+            or indexed[str(c.id)]["_source"].get("search_text") != c.search_text
+            or indexed[str(c.id)]["_source"].get("version_id") != str(c.version_id)
+            for c in batch
+        ):
+            raise ValueError("version_projection_verification_failed")
+    count = search.client.count(index=search.index_name,
+                                body={"query": {"term": {"version_id": str(chunks[0].version_id)}}})["count"]
+    if count != len(chunks):
+        raise ValueError("version_projection_chunk_count_mismatch")
 
 
 class Runtime(NamedTuple):
@@ -72,8 +121,8 @@ def _process_outbox(current: Runtime) -> bool:
         current.repository.complete_outbox(event["id"], current.owner)
     except Exception as exc:
         attempts = int(event["attempt_count"]) + 1
-        current.repository.fail_outbox(event["id"], current.owner, str(exc), min(60, 2**attempts))
-        logger.exception("outbox event failed", extra={"event_id": str(event["id"])})
+        current.repository.fail_outbox(event["id"], current.owner, type(exc).__name__, min(60, 2**attempts))
+        logger.error("outbox_event_failed", extra={"event_id": str(event["id"]), "error_type": type(exc).__name__})
     return True
 
 
@@ -154,23 +203,15 @@ def _run_ingestion_once() -> bool:
 
         thread = threading.Thread(target=heartbeat, daemon=True)
         thread.start()
-        content = current.storage.read(job["source_uri"])
-        blocks = parse_document(content, job["original_filename"], job["media_type"])
-        chunks = [
-            Chunk(
-                id=uuid5(job["version_id"], str(index)),
-                kb_id=job["kb_id"],
-                document_id=job["document_id"],
-                version_id=job["version_id"],
-                ordinal=index,
-                source_text=block.text,
-                search_text=f"{job['name']}\n{' / '.join(block.title_path)}\n{block.text}",
-                title_path=block.title_path,
-                anchor=block.anchor,
-                metadata={"business_version": job["business_version"], **job["scope"]},
-            )
-            for index, block in enumerate(blocks)
-        ]
+        stage_started = time.perf_counter()
+        if model_search.client.indices.exists(index=model_search.index_name):
+            mapping = model_search.client.indices.get_mapping(index=model_search.index_name)[model_search.index_name]["mappings"]
+            template = mapping.get("_meta", {}).get("input_template_revision", "structured-v1")
+        else:
+            template = "evidence-v2"
+        chunks = materialize_chunks(current.repository, current.storage, job, template=template)
+        logger.info("ingestion_stage_finished", extra={"job_id": str(job["id"]), "stage": "parse", "duration_ms": (time.perf_counter() - stage_started) * 1000, "chunk_count": len(chunks)})
+        stage_started = time.perf_counter()
         vectors = []
         for start in range(0, len(chunks), 32):
             vectors.extend(
@@ -179,6 +220,7 @@ def _run_ingestion_once() -> bool:
                     settings.worker_model_timeout_ms,
                 )
             )
+        logger.info("ingestion_stage_finished", extra={"job_id": str(job["id"]), "stage": "embedding", "duration_ms": (time.perf_counter() - stage_started) * 1000})
         if lease_lost.is_set():
             raise RuntimeError("worker_lease_lost")
         if model_config["active_index"] and not model_search.client.indices.exists(
@@ -186,8 +228,16 @@ def _run_ingestion_once() -> bool:
         ):
             raise RuntimeError("active_generation_index_missing")
         model_search.ensure_index()
+        stage_started = time.perf_counter()
         model_search.index(chunks, vectors)
-        current.repository.save_ready(job["id"], current.owner, chunks)
+        verify_indexed_chunks(model_search, chunks)
+        logger.info("ingestion_stage_finished", extra={"job_id": str(job["id"]), "stage": "index", "duration_ms": (time.perf_counter() - stage_started) * 1000})
+        if lease_lost.is_set():
+            raise RuntimeError("worker_lease_lost")
+        stage_started = time.perf_counter()
+        current.repository.save_ready(job["id"], current.owner, chunks,
+                                      expected_model_revision=model_config["revision"])
+        logger.info("ingestion_stage_finished", extra={"job_id": str(job["id"]), "stage": "ready_or_publish", "duration_ms": (time.perf_counter() - stage_started) * 1000})
         stopped.set()
         thread.join(timeout=2)
         return True
@@ -202,6 +252,7 @@ def _run_ingestion_once() -> bool:
             str(exc),
             retry=exc.retryable and attempts < settings.worker_max_attempts,
             delay_seconds=min(60, 2**attempts),
+            owner=current.owner,
         )
     except Exception as exc:
         attempts = int(job["attempt_count"]) + 1
@@ -211,11 +262,14 @@ def _run_ingestion_once() -> bool:
         current.repository.fail_job(
             job["id"],
             "processing_failed",
-            str(exc),
+            f"processing_failed:{type(exc).__name__}",
             retry=attempts < settings.worker_max_attempts,
             delay_seconds=min(60, 2**attempts),
+            owner=current.owner,
         )
-        logger.exception("ingestion job failed", extra={"job_id": str(job["id"])})
+        # SQL/provider exceptions can contain complete request parameters. Keep
+        # routine diagnostics correlated without persisting private content.
+        logger.error("ingestion_job_failed", extra={"job_id": str(job["id"]), "error_type": type(exc).__name__})
     finally:
         if models is not None:
             models.close()

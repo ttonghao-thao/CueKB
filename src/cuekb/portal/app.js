@@ -13,17 +13,18 @@ const dateText = (value) => value ? new Intl.DateTimeFormat("zh-CN", { dateStyle
 const roleText = { read: "只读", write: "可编辑", admin: "管理员" };
 const statusText = { uploaded: "已上传", parsing: "解析中", needs_review: "待复核", indexing: "索引中", ready: "待发布", published: "已发布", superseded: "已替换", failed: "失败", queued: "排队中", running: "处理中", succeeded: "成功" };
 
-async function api(path, options = {}) {
+async function api(path, options = {}, version = "v1") {
   const headers = new Headers(options.headers || {});
   if (state.apiKey) headers.set("Authorization", `Bearer ${state.apiKey}`);
   if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
-  const response = await fetch(`/v1${path}`, { ...options, headers });
+  const response = await fetch(`/${version}${path}`, { ...options, headers });
   if (response.status === 204) return null;
   const contentType = response.headers.get("content-type") || "";
   const body = contentType.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) {
     const detail = body?.detail || body || `HTTP ${response.status}`;
     const error = new Error(Array.isArray(detail) ? detail.map((item) => item.msg).join("；") : detail);
+    if (body?.trace_id) error.message += ` · trace ${body.trace_id}`;
     error.status = response.status;
     throw error;
   }
@@ -268,9 +269,10 @@ async function search(event) {
   if (!state.currentKb) return toast("请先选择知识库", "error");
   $("#search-results").innerHTML = '<div class="loading">正在检索…</div>';
   try {
-    const result = await api("/search", { method: "POST", body: JSON.stringify({ query: $("#query").value.trim(), kb_ids: [state.currentKb.id], mode: $("#search-mode").value, top_k: Number($("#top-k").value), include_context: true, filters: { product_model: $("#search-product").value.trim() || null, software_version: $("#search-software").value.trim() || null }, relations: { entity_ids: splitValues($("#search-entities").value), types: splitValues($("#search-relation-types").value), direction: $("#search-direction").value, at: $("#search-at").value.trim() || null } }) });
+    const result = await api("/search", { method: "POST", body: JSON.stringify({ query: $("#query").value.trim(), kb_ids: [state.currentKb.id], mode: $("#search-mode").value, top_k: Number($("#top-k").value), include_context: true, filters: { product_model: $("#search-product").value.trim() || null, software_version: $("#search-software").value.trim() || null }, relations: { entity_ids: splitValues($("#search-entities").value), types: splitValues($("#search-relation-types").value), direction: $("#search-direction").value, at: $("#search-at").value.trim() || null } }) }, $("#search-contract").value);
     $("#search-summary").textContent = `${result.hits.length} 条证据${result.scope_limited ? " · 仅有界一跳，不代表全部影响范围" : ""} · 路径 ${result.retrieval_path} · ${(result.timings_ms.total || 0).toFixed(1)} ms${result.degraded_reasons.length ? ` · 降级：${result.degraded_reasons.join(", ")}` : ""}`;
-    $("#search-results").innerHTML = result.hits.length ? result.hits.map((hit) => `<article class="panel result-card"><div class="result-meta"><span>#${hit.rank}</span><span>文档 ${shortId(hit.document_id)}</span><span>${escapeHtml(hit.title_path.join(" / ") || "正文")}</span><span>${escapeHtml(hit.retrieval_sources.join(" + "))}</span></div><p>${escapeHtml(hit.context || hit.source_text)}</p><p class="muted">块 ID：${escapeHtml(hit.chunk_id)}${hit.context_truncated ? " · 上下文受预算截断" : ""}</p>${(hit.relations || []).map(r => `<p class="muted">${escapeHtml(r.relation_type)} · ${escapeHtml(r.stance)} · ${escapeHtml(r.subject_id)} → ${escapeHtml(r.object_id)}</p>`).join("")}</article>`).join("") : '<div class="panel empty">没有找到匹配证据</div>';
+    if (result.ranking_method) $("#search-summary").textContent += ` · 排序 ${result.ranking_method} · 证据状态 ${result.evidence_status} · ${result.diagnostics.sizes.hits_bytes} bytes`;
+    $("#search-results").innerHTML = result.hits.length ? result.hits.map((hit) => `<article class="panel result-card"><div class="result-meta"><span>#${hit.rank}</span><span>文档 ${escapeHtml(hit.document_name || shortId(hit.document_id))}</span><span>${escapeHtml(hit.title_path.join(" / ") || "正文")}</span><span>${escapeHtml(hit.retrieval_sources.join(" + "))}</span></div>${hit.applicability ? `<p class="muted">归属：${escapeHtml(hit.applicability.subjects.map(s => s.display_name).join("、") || "未确定")} (${escapeHtml(hit.applicability.status)}) · 上下文 ${escapeHtml(hit.context_state)}</p>` : ""}<p>${escapeHtml(hit.context || hit.source_text)}</p><p class="muted">块 ID：${escapeHtml(hit.chunk_id)}${hit.context_truncated ? " · 上下文受预算截断" : ""}</p>${(hit.relations || []).map(r => `<p class="muted">${escapeHtml(r.relation_type)} · ${escapeHtml(r.stance)} · ${escapeHtml(r.subject_id)} → ${escapeHtml(r.object_id)}</p>`).join("")}</article>`).join("") : `<div class="panel empty">本次没有可返回证据 · ${escapeHtml(result.retrieval_status)}</div>`;
   } catch (error) { $("#search-results").innerHTML = ""; handleError(error, "检索失败"); }
 }
 
@@ -367,7 +369,7 @@ $("#create-generation").addEventListener("click",async event => {
   if (!state.isSystemAdmin || !$("#model-config-form").reportValidity()) return;
   event.currentTarget.disabled=true;
   try {
-    await api("/index-generations",{method:"POST",body:JSON.stringify({embedding_base_url:$("#embedding-base-url").value.trim(),embedding_model:$("#embedding-model").value.trim(),embedding_api_key:$("#embedding-api-key").value || null,reranker_base_url:$("#reranker-base-url").value.trim(),reranker_model:$("#reranker-base-url").value.trim() ? $("#reranker-model").value.trim() : "",reranker_api_key:$("#reranker-api-key").value || null,dimension:Number($("#generation-dimension").value),chunking_version:"structured-v1"})});
+    await api("/index-generations",{method:"POST",body:JSON.stringify({embedding_base_url:$("#embedding-base-url").value.trim(),embedding_model:$("#embedding-model").value.trim(),embedding_api_key:$("#embedding-api-key").value || null,reranker_base_url:$("#reranker-base-url").value.trim(),reranker_model:$("#reranker-base-url").value.trim() ? $("#reranker-model").value.trim() : "",reranker_api_key:$("#reranker-api-key").value || null,dimension:Number($("#generation-dimension").value)})});
     $("#embedding-api-key").value=""; $("#reranker-api-key").value="";
     toast("重建任务已创建，请刷新查看状态"); await loadGenerations();
   } catch(error) { handleError(error,"创建重建任务失败"); } finally { $("#create-generation").disabled=false; }

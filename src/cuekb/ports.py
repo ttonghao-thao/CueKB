@@ -24,7 +24,12 @@ class SearchBackend(Protocol):
         self, chunks: Sequence[Chunk], vectors: Sequence[Sequence[float]] | None = None
     ) -> None: ...
     def keyword_search(
-        self, query: str, kb_ids: Sequence[UUID], filters: dict[str, Any], limit: int
+        self,
+        query: str,
+        kb_ids: Sequence[UUID],
+        filters: dict[str, Any],
+        limit: int,
+        phrase: bool = False,
     ) -> list[tuple[UUID, float]]: ...
     def vector_search(
         self, vector: Sequence[float], kb_ids: Sequence[UUID], filters: dict[str, Any], limit: int

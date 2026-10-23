@@ -117,6 +117,9 @@ class RetrievalService:
                 budget = self.settings.context_max_chars
                 for rank, hit in enumerate(result.hits, 1):
                     hit.rank = rank
+                    chunk = current[hit.chunk_id]
+                    hit.document_name = chunk.document_name
+                    hit.content_sha256 = chunk.content_sha256
                     hit.relations = [r for r in relations if r["chunk_id"] == hit.chunk_id]
                     if not hit.relations:
                         hit.retrieval_sources = [
@@ -125,7 +128,6 @@ class RetrievalService:
                     hit.context = None
                     hit.context_parts = []
                     if request.include_context:
-                        chunk = current[hit.chunk_id]
                         neighbors = latest.context_chunks(chunk, self.settings.context_max_chunks)
                         hit.context, hit.context_parts, hit.context_truncated = assemble_context(
                             chunk, neighbors, min(budget, self.settings.context_per_hit_chars)
@@ -170,7 +172,11 @@ class RetrievalService:
         def keyword_call():
             mark = perf_counter()
             value = self.search.keyword_search(
-                request.query, request.kb_ids, filters, self.settings.keyword_candidates
+                request.query,
+                request.kb_ids,
+                filters,
+                self.settings.keyword_candidates,
+                phrase=path == "exact",
             )
             timings["keyword"] = (perf_counter() - mark) * 1000
             return value
@@ -207,6 +213,7 @@ class RetrievalService:
             else:
                 skipped.append({"stage": "embedding", "reason": "exact_path"})
 
+        keyword_scores, vector_scores = dict(keyword), dict(vector)
         rankings = [[item_id for item_id, _ in keyword]]
         if vector:
             rankings.append([item_id for item_id, _ in vector])
@@ -254,6 +261,7 @@ class RetrievalService:
         ]
         rerank_head = ordered[: self.settings.rerank_candidates]
         tail = ordered[self.settings.rerank_candidates :]
+        rerank_scores: dict[UUID, float] = {}
 
         remaining_ms = (deadline - perf_counter()) * 1000
         can_rerank = (
@@ -274,6 +282,7 @@ class RetrievalService:
                     [by_id[item].source_text for item in rerank_head],
                     min(self.settings.model_timeout_ms, int(remaining_ms)),
                 )
+                rerank_scores = dict(zip(rerank_head, values, strict=True))
                 rerank_head = [
                     item
                     for _, item in sorted(
@@ -323,6 +332,14 @@ class RetrievalService:
                 )
                 truncated = truncated or len(parts) >= self.settings.context_max_chunks
                 context_budget -= len(context)
+            stage_scores: dict[str, float] = {}
+            if chunk_id in keyword_scores:
+                stage_scores["keyword"] = keyword_scores[chunk_id]
+            if chunk_id in vector_scores:
+                stage_scores["vector"] = vector_scores[chunk_id]
+            stage_scores["rrf"] = scores[chunk_id]
+            if chunk_id in rerank_scores:
+                stage_scores["rerank"] = rerank_scores[chunk_id]
             hits.append(
                 SearchHit(
                     chunk_id=chunk.id,
@@ -337,6 +354,11 @@ class RetrievalService:
                     title_path=chunk.title_path,
                     anchor=chunk.anchor,
                     metadata=chunk.metadata,
+                    document_name=chunk.document_name,
+                    content_sha256=chunk.content_sha256,
+                    score=rerank_scores.get(chunk_id, scores[chunk_id]),
+                    score_type="rerank" if chunk_id in rerank_scores else "rrf",
+                    stage_scores=stage_scores,
                     retrieval_sources=[
                         name
                         for name, ids in (
@@ -381,6 +403,7 @@ class RetrievalService:
         timings["total"] = (perf_counter() - started) * 1000
         return SearchResponse(
             trace_id=uuid4(),
+            request_id=request.request_id,
             retrieval_status=status,
             evidence_status=EvidenceStatus.UNASSESSED,
             degraded_reasons=degraded,
@@ -398,5 +421,5 @@ class RetrievalService:
         documents = filters.get("document_ids") or []
         return (not documents or chunk.document_id in set(documents)) and all(
             not filters.get(key) or chunk.metadata.get(key) == filters[key]
-            for key in ("product_model", "software_version")
+            for key in ("product_model", "software_version", "category")
         )

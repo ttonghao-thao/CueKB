@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 
@@ -28,6 +28,10 @@ from cuekb.schemas import (
     DocumentMetadata,
     DocumentSummary,
     EntityWrite,
+    EntityInfo,
+    RelationInfo,
+    GenerationInfo,
+    GenerationQueued,
     GenerationCreate,
     GrantCreate,
     HealthResponse,
@@ -43,8 +47,11 @@ from cuekb.schemas import (
 from cuekb.services.generations import validate_generation
 from cuekb.services.ingestion import IngestionService
 from cuekb.services.retrieval import RetrievalService
+from cuekb.api.errors import ErrorResponse
 
-router = APIRouter(prefix="/v1")
+router = APIRouter(prefix="/v1", responses={
+    code: {"model": ErrorResponse} for code in (400, 401, 403, 404, 409, 413, 415, 422, 500, 503, 504)
+})
 
 
 @router.get("/health", response_model=HealthResponse, tags=["system"])
@@ -169,6 +176,7 @@ def _queue(
     media_type: str,
     idempotency_key: str | None,
     principal: Principal | None,
+    *, processing_snapshot: dict | None = None,
 ) -> Job:
     settings = get_settings()
     if len(content) > settings.max_upload_bytes:
@@ -208,11 +216,16 @@ def _queue(
             request_sha256=request_sha,
             document_id=metadata.document_id,
             auto_publish=metadata.auto_publish,
+            processing_snapshot=processing_snapshot,
         )
     except ConflictError as exc:
         raise HTTPException(409, str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        from pydantic import ValidationError
+
+        raise HTTPException(422, "invalid_processing_metadata" if isinstance(exc, ValidationError) else str(exc)) from exc
 
 
 @router.post("/documents", response_model=Job, status_code=202, tags=["documents"])
@@ -350,7 +363,10 @@ def delete_document(
         raise HTTPException(404, str(exc)) from exc
 
 
-@router.get("/documents/{document_id}/source", tags=["documents"])
+@router.get("/documents/{document_id}/source", response_class=FileResponse,
+    responses={200: {"description": "Authorized original file. Content-Type follows the stored media type.",
+                     "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}},
+    tags=["documents"])
 def download_source(
     document_id: UUID,
     version_id: UUID | None = None,
@@ -373,13 +389,16 @@ def download_source(
 @router.post("/search", response_model=SearchResponse, tags=["search"])
 def search(
     request: SearchRequest,
+    http_request: Request,
     principal: Principal | None = Depends(current_principal),
     service: RetrievalService = Depends(retrieval_service),
 ) -> SearchResponse:
+    http_request.state.request_id = request.request_id
     if isinstance(service.repository, PostgreSQLRepository):
         service.repository.require_role(principal, request.kb_ids, "read")
     try:
         result = service.search_evidence(request, principal=principal)
+        result.trace_id = http_request.state.trace_id
         if isinstance(service.repository, PostgreSQLRepository):
             if principal and principal.api_key_id:
                 service.repository.assert_api_key_active(principal.api_key_id)
@@ -452,7 +471,7 @@ def _knowledge_repository(principal, kb_id, role):
     return repo
 
 
-@router.get("/knowledge-bases/{kb_id}/entities", tags=["knowledge"])
+@router.get("/knowledge-bases/{kb_id}/entities", response_model=list[EntityInfo], tags=["knowledge"])
 def list_entities(
     kb_id: UUID,
     limit: int = Query(50, ge=1, le=200),
@@ -481,7 +500,7 @@ def put_entity(
         raise HTTPException(409, "entity_conflict") from exc
 
 
-@router.get("/knowledge-bases/{kb_id}/relations", tags=["knowledge"])
+@router.get("/knowledge-bases/{kb_id}/relations", response_model=list[RelationInfo], tags=["knowledge"])
 def list_relations(
     kb_id: UUID,
     limit: int = Query(50, ge=1, le=200),
@@ -520,12 +539,12 @@ def delete_relation(
         raise HTTPException(404, "relation_not_found")
 
 
-@router.get("/index-generations", tags=["system"])
+@router.get("/index-generations", response_model=list[GenerationInfo], tags=["system"])
 def list_generations(principal: Principal | None = Depends(current_principal)):
     return _require_model_admin(principal).list_generations()
 
 
-@router.post("/index-generations", status_code=202, tags=["system"])
+@router.post("/index-generations", response_model=GenerationQueued, status_code=202, tags=["system"])
 def create_generation(
     request: GenerationCreate, principal: Principal | None = Depends(current_principal)
 ):
@@ -555,7 +574,7 @@ def activate_generation(
         raise HTTPException(409, str(exc)) from exc
 
 
-@router.post("/index-generations/{generation_id}/rollback", status_code=202, tags=["system"])
+@router.post("/index-generations/{generation_id}/rollback", response_model=GenerationQueued, status_code=202, tags=["system"])
 def rollback_generation(
     generation_id: UUID, principal: Principal | None = Depends(current_principal)
 ):

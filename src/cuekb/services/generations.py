@@ -1,8 +1,11 @@
 """Worker execution for one bounded-attempt, paginated generation rebuild."""
 
+from collections import Counter
+
 from cuekb.adapters.generations import MaintenanceBusy
 from cuekb.adapters.model_client import HttpModelClient
 from cuekb.adapters.opensearch import OpenSearchBackend
+from cuekb.services.evidence import build_search_text
 
 
 def backend(settings, row):
@@ -51,7 +54,13 @@ def rebuild_once(repo, settings):
                 revisions = repo.generation_revisions()
                 after = None
                 count = 0
+                profiles = Counter()
                 while chunks := repo.generation_page(after, 32):
+                    for chunk in chunks:
+                        chunk.search_text = build_search_text(
+                            chunk, chunk.document_name or "", template="evidence-v2"
+                        )
+                        profiles[chunk.processing_profile] += 1
                     vectors = model.embed(
                         [c.search_text for c in chunks], settings.worker_model_timeout_ms
                     )
@@ -69,7 +78,7 @@ def rebuild_once(repo, settings):
                 search.client.indices.refresh(index=search.index_name)
                 if search.client.count(index=search.index_name)["count"] != count:
                     raise ValueError("generation_chunk_count_mismatch")
-                repo.generation_ready(row["id"], count, revisions)
+                repo.generation_ready(row["id"], count, revisions, dict(profiles))
             except Exception:
                 repo.generation_failed(row["id"], settings.worker_max_attempts)
                 # Deliberately persist a safe code, never provider messages/credentials.

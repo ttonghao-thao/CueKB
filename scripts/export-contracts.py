@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Export the running application's contracts without connecting to any service."""
+import argparse
+import json
+from pathlib import Path
+
+from cuekb.main import create_app
+from cuekb.schemas import V2SearchRequest, V2SearchResponse
+
+
+def examples():
+    from uuid import UUID
+    from cuekb.adapters.memory import InMemoryRepository, InMemorySearchBackend
+    from cuekb.config import Settings
+    from cuekb.domain.models import (Applicability, ApplicableSubject, Chunk, Document,
+        DocumentVersion, EvidenceStructure, KnowledgeBase, SourceAnchor, SourceSpan)
+    from cuekb.services.execution import SearchExecution
+    from cuekb.services.retrieval_v2 import V2RetrievalService, encode_v2_response
+    kb_id = UUID("11111111-1111-4111-8111-111111111111")
+    doc_id = UUID("33333333-3333-4333-8333-333333333333")
+    version_id = UUID("44444444-4444-4444-8444-444444444444")
+    repo, backend = InMemoryRepository(), InMemorySearchBackend()
+    repo.create_knowledge_base(KnowledgeBase(id=kb_id, name="Illustrative contract fixture"))
+    repo.documents[doc_id] = Document(id=doc_id, kb_id=kb_id, name="Illustrative manual")
+    repo.versions[version_id] = DocumentVersion(id=version_id, document_id=doc_id,
+        content_sha256="a" * 64, status="published")
+    body = "Input voltage: 12 V. Do not exceed 30 C."
+    anchor = SourceAnchor(start_offset=0, end_offset=len(body), heading_path=["Product A"])
+    chunk = Chunk(id=UUID("55555555-5555-4555-8555-555555555555"), kb_id=kb_id,
+        document_id=doc_id, version_id=version_id, ordinal=0, source_text=body, search_text=body,
+        title_path=["Product A"], anchor=anchor, document_name="Illustrative manual",
+        content_sha256="a" * 64, processing_profile="evidence-v2:" + "b" * 64,
+        source_spans=[SourceSpan(text=body, anchor=anchor)],
+        evidence_structure=EvidenceStructure(source_unit_id="unit:illustrative",
+            applicability=Applicability(status="resolved", subjects=[
+                ApplicableSubject(display_name="Product A", product_model="A", source_kind="curated")
+            ])))
+    repo.chunks[chunk.id] = chunk
+    backend.index([chunk])
+    request = V2SearchRequest(query="Input voltage", kb_ids=[kb_id], mode="exact",
+        request_id="contract-example", filters={"product_model": "A"})
+    execution = SearchExecution.create(10000, UUID("22222222-2222-4222-8222-222222222222"))
+    result = V2RetrievalService(repo, backend, Settings()).search_evidence(request, execution=execution)
+    result.timings_ms = {key: 0.0 for key in result.timings_ms}
+    return {"search-v2-request.json": request.model_dump(mode="json"),
+            "search-v2-response.json": json.loads(encode_v2_response(result))}
+
+
+def contracts():
+    return {
+        "openapi.json": create_app().openapi(),
+        "search-v2-request.schema.json": V2SearchRequest.model_json_schema(),
+        "search-v2-response.schema.json": V2SearchResponse.model_json_schema(),
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", default="docs/contracts")
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    target = Path(args.output)
+    if not args.check:
+        target.mkdir(parents=True, exist_ok=True)
+    for filename, value in contracts().items():
+        content = json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+        path = target / filename
+        if args.check:
+            if not path.exists() or path.read_text() != content:
+                raise SystemExit(f"Contract out of date: {path}")
+        else:
+            path.write_text(content)
+    example_dir = target.parent / "examples"
+    if not args.check:
+        example_dir.mkdir(parents=True, exist_ok=True)
+    for filename, value in examples().items():
+        content = json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+        path = example_dir / filename
+        if args.check:
+            if not path.exists() or path.read_text() != content:
+                raise SystemExit(f"Example out of date: {path}")
+        else:
+            path.write_text(content)
+    print("Contracts verified" if args.check else f"Contracts exported to {target}")
+
+
+if __name__ == "__main__":
+    main()

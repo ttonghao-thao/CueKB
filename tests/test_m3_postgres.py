@@ -36,7 +36,9 @@ def pg():
     try:
         with engine.begin() as conn:
             conn.exec_driver_sql(Path("db/schema.sql").read_text())
-            for file in sorted(Path("migrations/versions").glob("000[23]*.py")):
+            for file in sorted(Path("migrations/versions").glob("000*.py")):
+                if file.name.startswith("0001_"):
+                    continue
                 spec = importlib.util.spec_from_file_location(file.stem, file)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
@@ -280,6 +282,7 @@ def test_pg_worker_writes_sections_and_fences_stale_ready_generation(pg):
         idempotency_key="one",
         request_sha256="c" * 64,
         auto_publish=True,
+        processing_profile="structured-v1",
     )
     assert pg.claim_job("test", 300, 3)["id"] == job.id
     chunks = [

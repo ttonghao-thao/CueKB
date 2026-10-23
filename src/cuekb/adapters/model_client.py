@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import math
 
 import httpx
 
@@ -17,6 +18,8 @@ class HttpModelClient:
     ) -> None:
         self._embedding_model = embedding_model
         self._reranker_model = reranker_model
+        self._async_embedding: httpx.AsyncClient | None = None
+        self._async_reranker: httpx.AsyncClient | None = None
         self.embedding_client = httpx.Client(
             base_url=embedding_base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {embedding_api_key}"},
@@ -34,55 +37,107 @@ class HttpModelClient:
     def embedding_model(self) -> str:
         return self._embedding_model
 
+    @property
+    def reranker_model(self) -> str:
+        return self._reranker_model
+
     def close(self) -> None:
         self.embedding_client.close()
         if self.reranker_client is not None:
             self.reranker_client.close()
 
     def embed(self, texts: Sequence[str], timeout_ms: int) -> list[list[float]]:
+        from cuekb.services.execution import remaining_timeout_ms
+
         response = self.embedding_client.post(
             "/embeddings",
             json={"model": self._embedding_model, "input": list(texts), "encoding_format": "float"},
-            timeout=timeout_ms / 1000,
+            timeout=remaining_timeout_ms(timeout_ms) / 1000,
         )
         response.raise_for_status()
-        payload = response.json()
+        return self._parse_embeddings(response.json(), len(texts))
+
+    def _parse_embeddings(self, payload: dict, count: int) -> list[list[float]]:
         if payload.get("model") != self._embedding_model:
             raise RuntimeError("embedding_model_mismatch")
-        values = self._ordered_values(payload.get("data"), "embedding", len(texts), "embedding")
+        values = self._ordered_values(payload.get("data"), "embedding", count, "embedding")
         vectors: list[list[float]] = []
         for value in values:
             if not isinstance(value, list):
                 raise TypeError("embedding_response_invalid")
             vector: list[float] = []
             for component in value:
-                if not isinstance(component, (int, float)) or isinstance(component, bool):
+                if not isinstance(component, (int, float)) or isinstance(component, bool) or not math.isfinite(component):
                     raise TypeError("embedding_response_invalid")
                 vector.append(float(component))
             vectors.append(vector)
         return vectors
 
     def rerank(self, query: str, passages: Sequence[str], timeout_ms: int) -> list[float]:
+        from cuekb.services.execution import remaining_timeout_ms
+
         if self.reranker_client is None:
             raise RuntimeError("reranker_service_unconfigured")
         response = self.reranker_client.post(
             "/rerank",
             json={"model": self._reranker_model, "query": query, "documents": list(passages)},
-            timeout=timeout_ms / 1000,
+            timeout=remaining_timeout_ms(timeout_ms) / 1000,
         )
         response.raise_for_status()
-        payload = response.json()
+        return self._parse_rerank(response.json(), len(passages))
+
+    def _parse_rerank(self, payload: dict, count: int) -> list[float]:
         if payload.get("model") != self._reranker_model:
             raise RuntimeError("reranker_model_mismatch")
         values = self._ordered_values(
-            payload.get("results"), "relevance_score", len(passages), "reranker"
+            payload.get("results"), "relevance_score", count, "reranker"
         )
         scores: list[float] = []
         for value in values:
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
                 raise TypeError("reranker_response_invalid")
             scores.append(float(value))
         return scores
+
+    async def embed_async(self, texts: Sequence[str], timeout_ms: int) -> list[list[float]]:
+        from cuekb.services.execution import remaining_timeout_ms
+
+        if self._async_embedding is None:
+            self._async_embedding = httpx.AsyncClient(
+                base_url=self.embedding_client.base_url,
+                headers={"Authorization": self.embedding_client.headers["Authorization"]},
+            )
+        response = await self._async_embedding.post(
+            "/embeddings",
+            json={"model": self._embedding_model, "input": list(texts), "encoding_format": "float"},
+            timeout=remaining_timeout_ms(timeout_ms) / 1000,
+        )
+        response.raise_for_status()
+        return self._parse_embeddings(response.json(), len(texts))
+
+    async def rerank_async(self, query: str, passages: Sequence[str], timeout_ms: int) -> list[float]:
+        from cuekb.services.execution import remaining_timeout_ms
+
+        if self.reranker_client is None:
+            raise RuntimeError("reranker_service_unconfigured")
+        if self._async_reranker is None:
+            self._async_reranker = httpx.AsyncClient(
+                base_url=self.reranker_client.base_url,
+                headers={"Authorization": self.reranker_client.headers["Authorization"]},
+            )
+        response = await self._async_reranker.post(
+            "/rerank", json={"model": self._reranker_model, "query": query, "documents": list(passages)},
+            timeout=remaining_timeout_ms(timeout_ms) / 1000,
+        )
+        response.raise_for_status()
+        return self._parse_rerank(response.json(), len(passages))
+
+    async def aclose(self) -> None:
+        for client in (self._async_embedding, self._async_reranker):
+            if client is not None:
+                await client.aclose()
+        self._async_embedding = self._async_reranker = None
+        self.close()
 
     @staticmethod
     def _ordered_values(entries: object, value_key: str, count: int, service: str) -> list[object]:

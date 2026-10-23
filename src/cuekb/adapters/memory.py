@@ -150,11 +150,21 @@ class InMemoryRepository:
 
     def load_chunks(self, ids: Sequence[UUID], kb_ids: Sequence[UUID]) -> list[Chunk]:
         allowed_ids, allowed_kbs = set(ids), set(kb_ids)
-        return [
-            chunk
-            for chunk in self.visible_chunks(kb_ids)
-            if chunk.id in allowed_ids and chunk.kb_id in allowed_kbs
-        ]
+        result = []
+        for chunk in self.visible_chunks(kb_ids):
+            if chunk.id not in allowed_ids or chunk.kb_id not in allowed_kbs:
+                continue
+            document = self.documents[chunk.document_id]
+            version = self.versions[chunk.version_id]
+            result.append(
+                chunk.model_copy(
+                    update={
+                        "document_name": document.name,
+                        "content_sha256": version.content_sha256,
+                    }
+                )
+            )
+        return result
 
     def context_chunks(self, chunk, limit):
         candidates = [
@@ -187,7 +197,12 @@ class InMemorySearchBackend:
         self._chunks.update({chunk.id: chunk for chunk in chunks})
 
     def keyword_search(
-        self, query: str, kb_ids: Sequence[UUID], filters: dict, limit: int
+        self,
+        query: str,
+        kb_ids: Sequence[UUID],
+        filters: dict,
+        limit: int,
+        phrase: bool = False,
     ) -> list[tuple[UUID, float]]:
         query_tokens = tokens(query)
         if not query_tokens:
@@ -195,8 +210,26 @@ class InMemorySearchBackend:
         query_counts = Counter(query_tokens)
         scored: list[tuple[UUID, float]] = []
         allowed = set(kb_ids)
+        lowered = query.lower()
         for chunk in self._chunks.values():
             if chunk.kb_id not in allowed or not _matches(chunk, filters):
+                continue
+            local = filters.get("_local_applicability", False)
+            if local and chunk.evidence_structure.block_kind == "heading":
+                continue
+            if phrase:
+                if local:
+                    identifier_hit = any(
+                        query in {s.product_model, s.software_version}
+                        for s in chunk.evidence_structure.applicability.subjects
+                    ) and chunk.evidence_structure.applicability.status == "resolved"
+                else:
+                    identifier_hit = any(
+                        chunk.metadata.get(key) == query
+                        for key in ("product_model", "software_version")
+                    )
+                if lowered in chunk.search_text.lower() or identifier_hit:
+                    scored.append((chunk.id, 1.0))
                 continue
             document_tokens = tokens(chunk.search_text)
             counts = Counter(document_tokens)
@@ -215,6 +248,12 @@ class InMemorySearchBackend:
         # Vector search is deliberately unavailable in memory development mode.
         raise NotImplementedError("vector search adapter is not configured")
 
+    async def keyword_search_async(self, query, kb_ids, filters, limit, phrase=False):
+        return self.keyword_search(query, kb_ids, filters, limit, phrase)
+
+    async def vector_search_async(self, vector, kb_ids, filters, limit):
+        return self.vector_search(vector, kb_ids, filters, limit)
+
     def delete_document(self, document_id: UUID) -> None:
         self._chunks = {
             key: value for key, value in self._chunks.items() if value.document_id != document_id
@@ -223,7 +262,15 @@ class InMemorySearchBackend:
 
 def _matches(chunk: Chunk, filters: dict) -> bool:
     document_ids = filters.get("document_ids") or []
+    if filters.get("_local_applicability"):
+        from cuekb.services.evidence import scope_matches
+
+        return (
+            (not document_ids or chunk.document_id in set(document_ids))
+            and (not filters.get("category") or chunk.metadata.get("category") == filters["category"])
+            and scope_matches(chunk, filters.get("product_model"), filters.get("software_version"))
+        )
     return (not document_ids or chunk.document_id in set(document_ids)) and all(
         not filters.get(key) or chunk.metadata.get(key) == filters[key]
-        for key in ("product_model", "software_version")
+        for key in ("product_model", "software_version", "category")
     )

@@ -24,15 +24,17 @@
 | D18 | generation由PG指针切换并使用维护锁（2026-09-21） | 模型和物理索引在同一PG事务更新，避免跨系统别名/模型切换不一致；重建期间暂停内容写入、查询继续，回退用旧配置重建当前数据；当前注册分块版本为structured-v1 |
 | D19 | CueKB专注检索，生成式回答完全由外部系统决定并集成（2026-09-22） | 用户明确CueKB是被外部系统集成的知识库，目标是快速检索准确结果；为保持集成灵活性，不提供内置回答服务、回答API、生成式模型配置或门户问答。外部系统自主决定直接使用结果还是交给自己的LLM。此决策收紧D02并取代原C01可选回答计划；Embedding、Reranker、检索证据评估和管理门户范围不变 |
 | D20 | Python环境与镜像构建只使用标准`venv`和pip（2026-09-25） | 用户确认额外依赖管理器对本项目没有收益且引入不必要工具和文件；生产版本由单一`requirements.lock`约束，API/Worker仍按D16分角色安装，Worker先从PyTorch CPU索引安装锁定的Torch；开发、测试和Docker构建链路均不再依赖额外依赖管理器 |
+| D21 | 检索接口增量补全并收紧输入校验（2026-10-21） | 用户确认先补全检索接口能力且不按外部要求字段改名：保持`mode`、`source_text`、`anchor`、`version_id`等既有命名不变，增量新增`request_id`接收与回传、hit的`document_name`/`content_sha256`/`score`/`score_type`/`stage_scores`、`filters.category`（取上传scope元数据，与product_model同模式）和exact真精确匹配（正文短语匹配加product_model/software_version字段精确相等）；检索请求未知字段（含嵌套filters/relations）返回422拒绝，避免接入方误判能力已启用。各阶段分数量纲不可跨阶段比较，不改变`unassessed`口径；存量索引需generation重建后category的OpenSearch层过滤才生效 |
+| D22 | V2可追溯证据检索与处理快照（2026-10-23） | 用户授权实施：显式`/v2/search`隔离新契约，V1保留D21形状；BM25/k-NN等权RRF是真实分数，Reranker可选，成功重排不拼异量纲尾部。局部归属、真实spans、必要依赖及整组字节预算优先于无关近邻；unknown/ambiguous和unassessed诚实保留。冻结evidence-v2处理快照，reprocess/restore创建新版本及块ID；generation只重建PG事实并记录源profiles，此条扩展D18的旧单一分块注册状态。在线异步transport、绝对deadline与最终新快照复验保持PG权威。没有强制分类器、答案模型、全局配额或缓存。当前规范取代已失效方案，历史用Git追溯；生产质量/负载和语音验收独立执行 |
 
 ## 已知假设与默认处理
 
 | 项目 | 处理方式 | 状态 |
 | --- | --- | --- |
 | 项目目录 | 已在`/Users/snowking/Documents/CueKB`创建工程 | **已完成** |
-| 标准库/模型/解析版本 | Python依赖冻结，Embedding和reranker通过明确的 OpenAI-compatible `model`标识调用 | **已完成** |
+| 标准库/模型/解析版本 | Python依赖冻结；外部模型采用明确model标识及校验协议，但同名模型权重不可变仍依赖运行方 | 代码已完成，真实模型与解析质量待验收 |
 | 真实语料规模与扫描件比例 | 用真实样本建立基线，再制定容量计划 | 验证活动**待开始** |
-| 并发与QPS | 初始建议10万内容块、5 QPS稳态和10 QPS短时负载 | 条件**待确认** |
+| 并发与QPS | 本期要求测量10并发；语料规模、目标QPS及延迟阈值须按真实环境测量后确定 | 真实负载验收待执行 |
 | 可用模型硬件 | 确定目标主机或独立模型服务的CPU/GPU与内存 | **待确认** |
 | Web门户 | 首期管理门户由API服务内置并使用知识库ACL | **已完成** |
 | 生产身份系统 | 知识库范围API Key已完成；OIDC适配范围另行确定 | API Key**已完成**；OIDC**待确认** |

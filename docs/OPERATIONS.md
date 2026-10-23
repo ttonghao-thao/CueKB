@@ -1,109 +1,72 @@
-# CueKB 部署与运行手册
+# 部署与操作手册
 
-更新：2026-09-25。本文维护现有部署操作；执行记录只在[任务板](../TASK_BOARD.md)维护。地址来自既有配置记录，本次未验证远端可达性。
+更新：2026-10-23。下列是运行步骤，不是本轮已部署的证据。真实环境执行记录在[任务板](../TASK_BOARD.md)。
 
-## 生产组件
+## 1. 环境与配置
 
-单机Compose部署包含PostgreSQL、OpenSearch、迁移任务、API和入库Worker。PostgreSQL保存权威内容/权限/发布版本及模型服务配置；OpenSearch保存BM25和向量索引；Embedding与重排均通过外部 OpenAI-compatible HTTP API调用，模型部署、权重缓存、容量和可用性不属于本项目。启动后由系统管理员在门户填写Embedding的`base_url`、`api_key`、`model`；重排默认关闭，可在同一页面配置。原文件、数据库和索引使用独立命名卷。
+Python 3.11以上；Docker镜像基于Python 3.12，Compose使用PostgreSQL 17.6、OpenSearch 3.0单节点。应用分API和CPU Docling Worker，Embedding与Reranker由运行方单独提供。详细模型协议见[模型接入](MODEL_INTEGRATION.md)。
 
-生产模式有以下强制门禁：API Key密钥材料和`CUEKB_MODEL_CONFIG_KEY`不能为空；模型API Key由该密钥通过PostgreSQL `pgcrypto`加密保存，密钥需与数据库备份一同安全保管；Python生产依赖由pip按`requirements.lock`约束安装；迁移成功后API/Worker才启动；API不会回退到内存后端；PG和OpenSearch不暴露宿主机端口。未配置Embedding时API/Worker仍能启动，`/v1/ready`仍检查数据库与OpenSearch，导入和检索返回`409 embedding_service_not_configured`。生产Compose将容器内8080映射到宿主机所有IPv4接口的`8085`端口（`0.0.0.0:8085:8080`），由API直接提供门户和HTTP接口，不需要Nginx或其他反向代理，也不使用80/443端口。
+复制`deploy/production.env.example`为`.env.production`并替换所有占位密钥，权限设为600。PG密码若含URL保留字符，需与生成的数据库URL编码约束一起处理。不要提交env或把密钥放进诊断报告。
 
-### 部署
+- `CUEKB_API_KEY_PEPPER`至少32字符，`CUEKB_BOOTSTRAP_API_KEY`至少24字符；bootstrap拥有系统管理员权限，只作初始化和管理。
+- `CUEKB_MODEL_CONFIG_KEY`至少32字符，用于PG模型凭据加密，API/Worker必须相同且长期备份。更换后旧凭据不可读，不能仅靠PG备份恢复。
+- 模型地址、API Key与model由门户系统管理员配置，不能直接用任意Embedding模型覆盖既有向量。缺配置时API可启动，但相关操作明确阻断。
+- 默认API宿主端口8085；PG/OS不映射宿主端口。OS security plugin关闭，只应在隔离内部网络访问。Compose不提供TLS；对外访问由反向代理/网络层提供HTTPS与受控访问。
 
-需要Docker Engine及Compose v2。外部模型服务需要自行承载Embedding与Reranker的权重、CPU/GPU、网络和容量；具体容量必须在目标环境实测。
+检索候选、时限与容量的默认值见[系统约束](SYSTEM_CONSTRAINTS.md)和env示例。调大deadline不是性能证明；应按目标硬件和服务延迟测量。多API进程容量会叠加，Worker模型任务不受V2进程内配额约束。
 
-```bash
-cp deploy/production.env.example .env.production
-# 替换数据库密码、OpenSearch初始管理员密码、API Key pepper、bootstrap key和模型配置加密密钥
+## 2. 手动构建和启动
+
+按当前锁文件用venv/pip构建；Worker先安装CPU Torch，镜像构建和部署分离：
+
+```sh
+docker build --target api -t cuekb-api:latest .
+docker build --target worker -t cuekb-worker:latest .
 chmod 600 .env.production
-docker build --target api -t cuekb-api:latest .
-docker build --target worker -t cuekb-worker:latest .
-# Worker应显示CPU版PyTorch且不包含CUDA运行时
-docker run --rm --entrypoint python cuekb-worker:latest -c \
-  "import torch; print(torch.__version__, torch.version.cuda); assert torch.version.cuda is None"
-./scripts/deploy-production.sh .env.production
-docker compose --env-file .env.production logs -f api worker
-```
-
-构建镜像是独立的手动步骤；Compose中的API、Worker与迁移任务仅使用已存在的本地镜像，不自动构建或拉取应用镜像。OpenSearch 3即使关闭安全插件仍要求启动时提供`OPENSEARCH_INITIAL_ADMIN_PASSWORD`，项目从`.env.production`中的`CUEKB_OPENSEARCH_INITIAL_ADMIN_PASSWORD`传入；请使用随机强密码，不能留示例值。Dockerfile只使用Python内置`venv`和pip，并按角色安装依赖：API镜像不包含Docling，Worker镜像不包含FastAPI、Uvicorn和Alembic；Worker先从PyTorch CPU索引安装`requirements.lock`约束的Torch，再从PyPI安装其余依赖，避免将CPU索引用作通用包源，也避免在不运行本地GPU模型的Worker中安装CUDA运行库。构建缓存只保留在BuildKit缓存中，不进入最终runtime镜像。如使用自定义标签，同时修改`.env.production`中的`CUEKB_API_IMAGE`和`CUEKB_WORKER_IMAGE`。部署脚本会等待Worker运行、API Docker healthcheck变为`healthy`，再用bootstrap key检查`/v1/ready`；API healthcheck失败或120秒内未就绪时会输出API最近日志并退出。启动后用bootstrap API Key打开`/portal/`的“模型配置”页，填写Embedding服务地址、API Key和Model；Reranker可选。配置保存后API与Worker会读取新配置，无需重启。模型服务的网络和健康由运行方单独检查。停止服务但保留数据：
-
-```bash
-docker compose --env-file .env.production down
-```
-
-不要在没有备份确认的情况下增加`--volumes`。升级前备份PostgreSQL、原文件卷及`CUEKB_MODEL_CONFIG_KEY`；OpenSearch是可重建投影。Embedding model变化时必须使用新索引generation并重建全部向量，配置接口会拒绝与现有索引不匹配的Model，不能直接复用旧索引；使用门户“模型配置”下的generation重建、验证、切换和回退流程；当前支持已注册的`structured-v1`分块版本，不接受未知分块算法。旧版本环境变量`CUEKB_EMBEDDING_*`和`CUEKB_RERANKER_*`不再读取；升级后需要在门户重新配置。
-
-### 云主机访问地址（直接使用8085端口）
-
-当前公网IP为`122.51.233.77`，域名为`th.ppy123.xyz`。将域名的DNS A记录指向`122.51.233.77`，并在云主机安全组和系统防火墙中允许所需客户端访问TCP `8085`。公网IP通常由云平台映射到主机，不需要将它写入容器监听地址。私网访问要求客户端与云主机私网可路由。
-
-此前提供的私网地址`10.0.05`不是标准四段IPv4写法，请以云控制台显示的真实私网IP为准；下表中的`<私网IP>`必须替换后使用。若实际为`10.0.0.5`，API基地址就是`http://10.0.0.5:8085`。
-
-| 访问方式 | 管理门户 | API基地址 | 检索接口 |
-| --- | --- | --- | --- |
-| 私网IP | `http://<私网IP>:8085/portal/` | `http://<私网IP>:8085` | `POST http://<私网IP>:8085/v1/search` |
-| 公网IP | `http://122.51.233.77:8085/portal/` | `http://122.51.233.77:8085` | `POST http://122.51.233.77:8085/v1/search` |
-| 域名 | `http://th.ppy123.xyz:8085/portal/` | `http://th.ppy123.xyz:8085` | `POST http://th.ppy123.xyz:8085/v1/search` |
-
-三种地址访问同一服务，API路径、Bearer API Key鉴权和知识库权限完全一致；接口契约见[API接入说明](API_GUIDE.md)。门户使用当前访问地址下的`/v1/`接口，无需单独配置前端API地址。生产Compose中的数据库和OpenSearch继续使用内部服务名，不改成公网或私网IP，也不开放它们的宿主机端口。
-
-当前直接提供HTTP，未配置TLS；访问时使用`http://`，API Key和内容在传输层不加密。管理门户使用现有的API Key，Embedding/Reranker仍在门户“模型配置”中维护。
-
-已部署实例更新端口映射后，在项目目录执行以下命令重建API容器即可，无需重新构建应用镜像或重置数据库、密钥：
-
-```bash
-docker compose --env-file .env.production up -d --no-build --no-deps api
-# 在云主机本机检查依赖就绪情况
-curl --fail-with-body http://127.0.0.1:8085/v1/ready
-```
-
-从外部电脑验证公网IP和域名入口：
-
-```bash
-curl --fail-with-body http://122.51.233.77:8085/v1/ready
-curl --fail-with-body http://th.ppy123.xyz:8085/v1/ready
-# 鉴权接口示例：先在客户端设置已有的 CUEKB_API_KEY
-curl --fail-with-body \
-  -H "Authorization: Bearer $CUEKB_API_KEY" \
-  http://th.ppy123.xyz:8085/v1/knowledge-bases
-```
-
-私网客户端可将上述基地址替换为`http://<私网IP>:8085`；公网IP也可用于相同的鉴权API调用。若本机就绪检查失败，查看`docker compose --env-file .env.production logs --tail 100 api worker`；本机正常而远端超时，则检查安全组、防火墙和网络路由；仅域名失败时检查DNS解析。
-
-### M3升级与索引重建
-
-M3新增`0003_relations_generations`迁移，保留既有文档/块ID，按已保存标题路径补齐历史章节。升级前备份数据库、原文件和稳定的`CUEKB_MODEL_CONFIG_KEY`，先停止旧API/Worker，避免新旧代码混跑；构建新镜像后执行迁移与部署：
-
-```bash
-docker compose --env-file .env.production stop api worker
-docker build --target api -t cuekb-api:latest .
-docker build --target worker -t cuekb-worker:latest .
-docker compose --env-file .env.production run --rm migrate
 ./scripts/deploy-production.sh .env.production
 ```
 
-知识库管理员通过“实体与关系”维护实体、审核别名、原文提及与支持/反驳证据；检索验证选择`related`可执行有界一跳查询。普通检索可返回带锚点的章节和相邻上下文；新解析的长表格在每段保留原有表头与单位。旧文档的解析缺失不会被迁移凭空修复，需要重新导入修订后的文档。精确字段见[API接入说明](API_GUIDE.md)。
+自定义镜像标签须写入env中的`CUEKB_API_IMAGE`/`CUEKB_WORKER_IMAGE`。部署脚本只做Compose检查及`up --no-build`，不自动构建或拉取应用镜像。`migrate`先执行`alembic upgrade head`，成功后API/Worker启动；健康检查不代表模型质量已验收。
 
-更换Embedding模型或维度时，在“模型配置”填写目标三元组及维度，点击“创建重建任务”，由Worker从PostgreSQL权威块分页重新计算向量、创建独立物理索引并校验。`ready`后点击“切换使用”；数据库在同一事务中切换模型配置和索引指针。当前generation记录`structured-v1`分块版本，重建复用权威块，不重新解析文件或任意改写分块。新增分块算法需另行注册和数据迁移，不能伪装成同一版本。
+检查`GET /v1/health`、`GET /v1/ready`与`/portal/`。生产业务API使用Bearer Key；健康和ready公开但不返回凭据。创建业务Key并授予目标KB read/write/admin，第三方查询不要使用bootstrap。
 
-- 重建/切换持有数据库维护锁：内容及模型配置写入返回`409 index_maintenance_in_progress`，查询继续读旧索引。API Key吊销和知识库授权/撤权仍可立即执行。
-- 重建自动重试不超过`CUEKB_WORKER_MAX_ATTEMPTS`，采用有界退避；Worker崩溃后重新构建同一未激活索引。错误记录仅保存代码，不保存外部模型密钥。
-- 从重建到切换之间若内容或模型配置变化，切换返回`409 generation_stale_rebuild_required`。取消该任务并重新创建；不会忽略差异切换。
-- 回退选择`retired`记录，使用其加密保存的旧模型配置创建新重建任务，再校验和切换。回退不恢复旧内容/旧权限，也不直接启用过期索引；旧模型服务仍须可访问。
-- 原有物理索引保留以支持在途查询，不自动删除。失败/取消的索引也保留供排查；容量规划和确认无引用后的清理由运行方负责。
+## 3. 0004升级和投影切换
 
-M3提供默认上限：每次最多50个知识库、20个起始实体、一跳30条证据（可配置至100）、关系SQL默认100ms；上下文最多8块/命中、4000字符/命中、12000字符/响应。环境变量分别为`CUEKB_RELATION_CANDIDATES`、`CUEKB_RELATION_TIMEOUT_MS`、`CUEKB_CONTEXT_MAX_CHUNKS`、`CUEKB_CONTEXT_PER_HIT_CHARS`和`CUEKB_CONTEXT_MAX_CHARS`。关系与上下文仍执行知识库权限、删除和发布版本校验，不将得分标记为事实置信度。
+本次数据库head为`0004_evidence_processing`。已运行实例升级前安排维护窗口，停止API/Worker写入并备份；先在隔离恢复库演练迁移、旧数据读取、发布、恢复与清理。
 
-### 生产验收
-
-只在专用验收实例执行以下脚本；它会创建并删除自己的测试文档、授权和API Key：
-
-```bash
-set -a
-. ./.env.production
-set +a
-.venv/bin/python scripts/acceptance-production.py \
-  --bootstrap-key "$CUEKB_BOOTSTRAP_API_KEY"
+```sh
+.venv/bin/alembic current
+.venv/bin/alembic upgrade head
 ```
 
-验收前先在门户配置Embedding。验收覆盖API Key、ACL、幂等上传、Worker处理、原文下载、exact跳过Embedding和重排、hybrid执行Embedding、默认跳过或按配置执行重排、版本切换、撤权和删除。实际执行记录独立维护在[任务板的验证活动](../TASK_BOARD.md#验证活动)，不改变功能编码状态。
+命令需正确的生产数据库设置及模型加密密钥，禁止误指向工作数据库做破坏性测试。0004保留旧版本与旧块，新增profile/快照/血缘/spans/结构字段，并用部分唯一索引允许显式restore。downgrade故意拒绝；失败回退采用已验证的PG/原件/密钥备份及匹配旧镜像，不靠删字段回退。
+
+旧OS index不能直接服务V2：由系统管理员通过`POST /v1/index-generations`用实际模型三元组创建重建任务，省略`chunking_version`，等待ready并检查generation源profile，再activate。维护锁期间内容写入409，查询继续。激活前旧V1可继续服务；V2对旧投影返回409 INDEX_UPGRADE_REQUIRED。即使投影升级，旧structured-v1正文的产品归属仍可能unknown。
+
+需要新的解析/归属时，对文档单独执行V2 reprocess，检查新版本再publish；generation不会自动重切块。想恢复旧事实则用restore生成全新块ID、等待ready后发布。generation rollback只重建当前事实的旧模型投影。
+
+## 4. 文档日常操作
+
+1. 上传前整理清晰章节/表头；多产品映射用scope_bindings，不能把全篇metadata标签当成局部证据。
+2. `POST /v2/documents`带幂等键，默认auto_publish=false。轮询Job，failed处理具体错误，ready检查归属、原文与索引后显式publish。
+3. 更新时传document_id；发布前旧published仍可见。未成功入索引的任务不能切发布指针。
+4. 下载原件用授权接口，不直接暴露存储目录。删除首先使PG不可见，OS通过outbox清理；原件与备份的物理保留另按运行方策略处理。
+5. reprocess/restore的幂等重试保持原payload/key；未知结果先查询Job。不要反复生成新key创建重复任务。
+
+## 5. 备份与恢复
+
+备份包括PG（正文、版本、ACL、模型配置、任务、关系）、原件volume、模型加密密钥、API Key pepper和部署配置；OS可重建，不替代权威备份。备份包含私有内容，需加密与访问控制。
+
+灾难恢复先恢复PG、原件和同一密钥，使用匹配应用/迁移版本，在隔离网络核对发布与权限。使用generation重建投影，确认ready后再开放业务。不将旧OS快照直接连到较新PG并视为已一致。
+
+## 6. 诊断
+
+按trace_id检查HTTP状态、retrieval_status、degraded_reasons、executed/skipped stages、backend_calls、timings和字节。Worker记录parse/embedding/index/ready_or_publish阶段耗时及任务失败；不需要收集完整原文或全量候选作常规诊断。
+
+- INDEX_UPGRADE_REQUIRED：先重建V2 projection，不调整调用方分数阈值掩盖。
+- SEARCH_CONFIGURATION_CHANGED：模型/索引在请求中变更，有界重试新请求；不得复用旧向量。
+- SEARCH_CAPACITY_EXCEEDED：检查每进程容量、调用方并发及模型延迟；避免无限排队重试。
+- DATABASE/SEARCH_BACKEND_UNAVAILABLE：检查连接、磁盘、OS只读block和健康，再重试；不把503转成无答案。
+- degraded：看实际失败或省略原因；未配Reranker正常跳过，不应因此降级。
+
+OpenSearch磁盘水位、索引只读block或服务不健康时先修复资源，重跑失败的幂等任务并验证PG发布状态，不手工发布半成品。不得清理仍被PG可见指针引用的数据。性能测量流程见[验收方法](ACCEPTANCE.md)。

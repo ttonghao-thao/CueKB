@@ -1,6 +1,8 @@
 """Durable index rebuild state and maintenance fencing."""
 
+import hashlib
 import json
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
@@ -12,6 +14,16 @@ from sqlalchemy.engine import Engine
 # Shared by content mutations and ingestion; exclusive during generation builds/switches.
 MAINTENANCE_LOCK = 1129663300
 _owned: ContextVar[tuple[Engine, bool] | None] = ContextVar("cuekb_maintenance_lock", default=None)
+
+
+def profile_inventory_version(profiles):
+    for profile, count in profiles.items():
+        if (profile != "structured-v1" and not re.fullmatch(r"evidence-v2:[0-9a-f]{64}", profile)) or count < 0:
+            raise ValueError("unsupported_generation_source_profile")
+    if len(profiles) <= 1:
+        return next(iter(profiles), "structured-v1")
+    encoded = json.dumps(profiles, sort_keys=True, separators=(",", ":"))
+    return "mixed:" + hashlib.sha256(encoded.encode()).hexdigest()
 
 
 class MaintenanceBusy(RuntimeError):
@@ -27,7 +39,7 @@ class GenerationOperations:
                 raise MaintenanceBusy("cannot_upgrade_shared_maintenance_lock")
             yield
             return
-        with self.engine.connect() as conn:
+        with self._connection() as conn:
             suffix = "" if exclusive else "_shared"
             if not conn.execute(
                 text(f"SELECT pg_try_advisory_lock{suffix}({MAINTENANCE_LOCK})")
@@ -44,7 +56,7 @@ class GenerationOperations:
 
     @contextmanager
     def _write(self: Any):
-        with self.engine.begin() as conn:
+        with self._connection() as conn, conn.begin():
             owned = _owned.get()
             if (
                 not (owned and owned[0] is self.engine)
@@ -78,6 +90,10 @@ class GenerationOperations:
             ):
                 raise ValueError("model_api_key_required")
             with self._write() as conn:
+                profiles = self._profile_inventory(conn)
+                requested_profile = getattr(request, "chunking_version", None)
+                if requested_profile is not None and requested_profile != profile_inventory_version(profiles):
+                    raise ValueError("generation_processing_profile_mismatch")
                 if conn.execute(
                     text(
                         "SELECT 1 FROM index_generations WHERE status IN ('queued','building','ready')"
@@ -124,10 +140,11 @@ class GenerationOperations:
     def _insert_generation(
         self: Any, conn, generation_id, index_name, dimension, config, status, revision
     ):
+        profiles = self._profile_inventory(conn)
         conn.execute(
             text("""INSERT INTO index_generations(id,index_name,embedding_model,dimension,chunking_version,
-            configuration,status,source_revision) VALUES (:id,:name,:model,:dimension,'structured-v1',
-            pgp_sym_encrypt(:config,:key,'cipher-algo=aes256'),:status,:revision)"""),
+            configuration,status,source_revision,build_source_profiles) VALUES (:id,:name,:model,:dimension,:profile,
+            pgp_sym_encrypt(:config,:key,'cipher-algo=aes256'),:status,:revision,CAST(:profiles AS jsonb))"""),
             {
                 "id": generation_id,
                 "name": index_name,
@@ -137,8 +154,20 @@ class GenerationOperations:
                 "key": self.model_config_key,
                 "status": status,
                 "revision": revision,
+                "profile": profile_inventory_version(profiles),
+                "profiles": json.dumps(profiles),
             },
         )
+
+    @staticmethod
+    def _profile_inventory(conn):
+        profiles = dict(conn.execute(text("""SELECT v.processing_profile,count(c.id)
+            FROM chunks c JOIN document_versions v ON v.id=c.version_id
+            JOIN documents d ON d.id=c.document_id
+            WHERE d.deleted_at IS NULL AND v.status IN ('ready','published')
+            GROUP BY v.processing_profile ORDER BY v.processing_profile""")).all())
+        profile_inventory_version(profiles)
+        return profiles
 
     def list_generations(self: Any, limit=50):
         with self._read() as conn:
@@ -146,7 +175,7 @@ class GenerationOperations:
                 dict(r)
                 for r in conn.execute(
                     text("""SELECT id,index_name,embedding_model,dimension,chunking_version,status,
-              source_revision,chunk_count,attempt_count,error_code,created_at,updated_at
+              source_revision,chunk_count,attempt_count,error_code,created_at,updated_at,build_source_profiles
               FROM index_generations ORDER BY created_at DESC LIMIT :n"""),
                     {"n": limit},
                 ).mappings()
@@ -177,7 +206,8 @@ class GenerationOperations:
     def generation_page(self: Any, after, limit=100):
         with self._read() as conn:
             rows = conn.execute(
-                text("""SELECT c.* FROM chunks c JOIN documents d ON d.id=c.document_id
+                text("""SELECT c.*,d.name document_name,v.content_sha256 version_content_sha256,
+                  v.processing_profile FROM chunks c JOIN documents d ON d.id=c.document_id
               JOIN document_versions v ON v.id=c.version_id
               WHERE d.deleted_at IS NULL AND v.status IN ('ready','published')
                 AND (CAST(:after AS uuid) IS NULL OR c.id>:after) ORDER BY c.id LIMIT :n"""),
@@ -185,13 +215,17 @@ class GenerationOperations:
             ).mappings()
             return [self._chunk(r) for r in rows]
 
-    def generation_ready(self: Any, generation_id, count, revisions):
+    def generation_ready(self: Any, generation_id, count, revisions, profiles=None):
         with self._write() as conn:
+            profiles = self._profile_inventory(conn) if profiles is None else profiles
+            if sum(profiles.values()) != count:
+                raise ValueError("generation_profile_count_mismatch")
             conn.execute(
                 text(
-                    "UPDATE index_generations SET status='ready',chunk_count=:n,content_revisions=CAST(:r AS jsonb),error_code=NULL,updated_at=now() WHERE id=:id AND status='building'"
+                    "UPDATE index_generations SET status='ready',chunk_count=:n,content_revisions=CAST(:r AS jsonb),build_source_profiles=CAST(:profiles AS jsonb),chunking_version=:profile,error_code=NULL,updated_at=now() WHERE id=:id AND status='building'"
                 ),
-                {"id": generation_id, "n": count, "r": json.dumps(revisions)},
+                {"id": generation_id, "n": count, "r": json.dumps(revisions),
+                 "profiles": json.dumps(profiles), "profile": profile_inventory_version(profiles)},
             )
 
     def generation_failed(self: Any, generation_id, max_attempts=3):
@@ -277,5 +311,5 @@ class GenerationOperations:
             )
         if not row:
             raise ValueError("retired_generation_not_found")
-        request = GenerationCreate(**json.loads(row["config"]), dimension=row["dimension"])
+        request = GenerationCreate(**json.loads(row["config"]), dimension=row["dimension"], chunking_version=None)
         return self.queue_generation(request, prefix, default_dimension)

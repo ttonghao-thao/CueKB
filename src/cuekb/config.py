@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     context_max_chars: int = Field(default=12000, ge=1200, le=50000)
     context_per_hit_chars: int = Field(default=4000, ge=1200, le=10000)
     context_max_chunks: int = Field(default=8, ge=1, le=20)
+    v2_max_evidence_bytes: int = Field(default=128000, ge=4096, le=128000)
+    v2_max_inflight: int = Field(default=16, ge=1, le=128)
+    v2_refill_min_remaining_ms: int = Field(default=180, ge=10, le=5000)
     exact_identifier_pattern: str = (
         r"^(?:[A-Za-z][A-Za-z0-9_.:/+-]*\d[A-Za-z0-9_.:/+-]*|[A-Z][A-Z0-9_./:-]{2,})$"
     )

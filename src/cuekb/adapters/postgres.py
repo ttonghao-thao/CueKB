@@ -4,7 +4,7 @@ import hashlib
 import json
 import secrets
 from collections.abc import Sequence
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
@@ -30,7 +30,12 @@ class ConflictError(RuntimeError):
 
 class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
     def __init__(self, database_url: str, pepper: str, model_config_key: str) -> None:
-        self.engine: Engine = create_engine(database_url, pool_pre_ping=True)
+        # Short checkout intervals let a request recheck its absolute deadline;
+        # server statement/lock timeouts are applied before each read statement.
+        self.engine: Engine = create_engine(
+            database_url, pool_size=10, max_overflow=10, pool_timeout=0.05,
+            connect_args={"connect_timeout": 1, "tcp_user_timeout": 1000},
+        )
         self.pepper = pepper
         self.model_config_key = model_config_key
 
@@ -343,7 +348,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                 return None
             rows = conn.execute(
                 text(
-                    "SELECT id,content_sha256,business_version,scope,status::text status,original_filename,media_type,created_at FROM document_versions WHERE document_id=:id ORDER BY created_at DESC,id DESC"
+                    "SELECT id,content_sha256,business_version,scope,status::text status,original_filename,media_type,created_at,processing_profile,processing_snapshot,derivation_kind,source_version_id FROM document_versions WHERE document_id=:id ORDER BY created_at DESC,id DESC"
                 ),
                 {"id": document_id},
             ).mappings()
@@ -369,6 +374,10 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
         request_sha256: str,
         document_id: UUID | None,
         auto_publish: bool,
+        processing_profile: str = "evidence-v2",
+        processing_snapshot: dict | None = None,
+        derivation_kind: str = "ingest",
+        source_version_id: UUID | None = None,
     ) -> Job:
         with self._write() as conn:
             conn.execute(
@@ -389,6 +398,22 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                 if existing["request_sha256"] != request_sha256:
                     raise ConflictError("idempotency_key_payload_mismatch")
                 return self._job(existing)
+            if derivation_kind not in {"ingest", "reprocess", "restore"}:
+                raise ValueError("unsupported_derivation_kind")
+            if derivation_kind == "restore":
+                original = conn.execute(
+                    text("""SELECT processing_profile,processing_snapshot FROM document_versions
+                        WHERE id=:v AND document_id=:d AND status IN ('ready','published','superseded')"""),
+                    {"v": source_version_id, "d": document_id},
+                ).mappings().first()
+                if original is None:
+                    raise ConflictError("source_version_not_restorable")
+                profile, snapshot = original["processing_profile"], original["processing_snapshot"]
+            else:
+                profile, snapshot = self._processing_snapshot(
+                    conn, kb_id, processing_profile, processing_snapshot,
+                    origin_version_id=source_version_id,
+                )
             doc_id = document_id or uuid4()
             if document_id is None:
                 conn.execute(
@@ -397,23 +422,23 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                 )
             else:
                 found = conn.execute(
-                    text("SELECT 1 FROM documents WHERE id=:d AND kb_id=:k AND deleted_at IS NULL"),
+                    text("SELECT 1 FROM documents WHERE id=:d AND kb_id=:k AND deleted_at IS NULL FOR UPDATE"),
                     {"d": doc_id, "k": kb_id},
                 ).scalar()
                 if not found:
                     raise KeyError("document_not_found")
                 duplicate = conn.execute(
                     text(
-                        "SELECT 1 FROM document_versions WHERE document_id=:d AND content_sha256=:sha"
+                        "SELECT 1 FROM document_versions WHERE document_id=:d AND content_sha256=:sha AND processing_profile=:profile AND derivation_kind IN ('ingest','reprocess')"
                     ),
-                    {"d": doc_id, "sha": content_sha256},
+                    {"d": doc_id, "sha": content_sha256, "profile": profile},
                 ).scalar()
-                if duplicate:
+                if duplicate and derivation_kind != "restore":
                     raise ConflictError("duplicate_document_version")
             version_id, job_id = uuid4(), uuid4()
             conn.execute(
                 text(
-                    "INSERT INTO document_versions(id,document_id,content_sha256,business_version,scope,source_uri,media_type,original_filename,auto_publish) VALUES (:id,:d,:sha,:bv,CAST(:scope AS jsonb),:uri,:mt,:fn,:auto)"
+                    "INSERT INTO document_versions(id,document_id,content_sha256,business_version,scope,source_uri,media_type,original_filename,auto_publish,processing_profile,processing_snapshot,derivation_kind,source_version_id) VALUES (:id,:d,:sha,:bv,CAST(:scope AS jsonb),:uri,:mt,:fn,:auto,:profile,CAST(:snapshot AS jsonb),:derivation,:source_version)"
                 ),
                 {
                     "id": version_id,
@@ -425,6 +450,10 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                     "mt": media_type,
                     "fn": filename,
                     "auto": auto_publish,
+                    "profile": profile,
+                    "snapshot": json.dumps(snapshot),
+                    "derivation": derivation_kind,
+                    "source_version": source_version_id,
                 },
             )
             conn.execute(
@@ -457,12 +486,200 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             )
         return self._job(row) if row else None
 
+    @staticmethod
+    def _processing_snapshot(conn, kb_id, requested, supplied=None, origin_version_id=None):
+        """Freeze the actual non-secret parsing inputs, never a live-table reference."""
+        from cuekb.domain.models import ApplicableCondition, ApplicableSubject
+        from cuekb.services.evidence import PROCESSING_REVISION
+
+        if requested not in {"structured-v1", "evidence-v2"}:
+            raise ValueError("unsupported_processing_profile")
+        supplied = supplied or {}
+        if set(supplied) - {"scope_bindings", "document_default"}:
+            raise ValueError("unsupported_processing_snapshot_input")
+        bindings = supplied.get("scope_bindings", [])
+        if not isinstance(bindings, list) or len(bindings) > 200:
+            raise ValueError("scope_bindings_limit")
+
+        def declaration(value):
+            if not isinstance(value, dict) or set(value) - {
+                "title_path", "source_unit_id", "subjects", "conditions"
+            }:
+                raise ValueError("invalid_scope_binding")
+            subjects = value.get("subjects", [])
+            conditions = value.get("conditions", [])
+            if not 1 <= len(subjects) <= 8 or len(conditions) > 20:
+                raise ValueError("scope_binding_cardinality")
+            result = {
+                "subjects": [ApplicableSubject.model_validate({**s, "source_kind": "curated", "source_spans": []}).model_dump(mode="json") for s in subjects],
+                "conditions": [ApplicableCondition.model_validate({**c, "source_kind": "curated", "source_spans": []}).model_dump(mode="json") for c in conditions],
+            }
+            for key in ("title_path", "source_unit_id"):
+                if value.get(key) is not None:
+                    result[key] = value[key]
+            if "title_path" in result and (
+                not isinstance(result["title_path"], list)
+                or len(result["title_path"]) > 20
+                or any(not isinstance(p, str) or not 1 <= len(p) <= 500 for p in result["title_path"])
+            ):
+                raise ValueError("invalid_scope_binding_title_path")
+            if "source_unit_id" in result and (
+                not isinstance(result["source_unit_id"], str)
+                or not 1 <= len(result["source_unit_id"]) <= 200
+            ):
+                raise ValueError("invalid_scope_binding_source_unit")
+            return result
+
+        snapshot = {
+            "profile_revision": requested,
+            "parser_revision": PROCESSING_REVISION if requested == "evidence-v2" else requested,
+            "chunker_revision": PROCESSING_REVISION if requested == "evidence-v2" else requested,
+            "structure_revision": PROCESSING_REVISION if requested == "evidence-v2" else "legacy-unknown",
+            "max_chunk_chars": 1200,
+            "scope_bindings": [declaration(b) for b in bindings],
+            "approved_entities": [],
+        }
+        if any(not (b.get("title_path") or b.get("source_unit_id")) for b in snapshot["scope_bindings"]):
+            raise ValueError("scope_binding_selector_required")
+        unit_selectors = {b["source_unit_id"] for b in snapshot["scope_bindings"] if b.get("source_unit_id")}
+        if unit_selectors:
+            if origin_version_id is None:
+                raise ValueError("source_unit_mapping_requires_source_version")
+            known = set(conn.execute(
+                text("SELECT DISTINCT evidence_structure->>'source_unit_id' FROM chunks WHERE version_id=:v"),
+                {"v": origin_version_id},
+            ).scalars())
+            if not unit_selectors <= known:
+                raise ValueError("source_unit_mapping_not_in_source_version")
+            snapshot["origin_version_id"] = str(origin_version_id)
+        if supplied.get("document_default") is not None:
+            default = declaration(supplied["document_default"])
+            if "title_path" in default or "source_unit_id" in default:
+                raise ValueError("document_default_must_cover_document")
+            snapshot["document_default"] = default
+        entities = conn.execute(
+            text("""SELECT e.id,e.name,e.kind,
+                ARRAY(SELECT alias FROM entity_aliases a WHERE a.entity_id=e.id ORDER BY alias) aliases
+                FROM entities e WHERE kb_id=:kb ORDER BY e.id LIMIT 1001"""),
+            {"kb": kb_id},
+        ).mappings().all()
+        if len(entities) > 1000 or any(len(e["aliases"]) > 100 for e in entities):
+            raise ValueError("processing_entity_snapshot_limit")
+        snapshot["approved_entities"] = [
+            {"entity_id": str(e["id"]), "display_name": e["name"], "aliases": e["aliases"]}
+            for e in entities
+        ]
+        names = {str(e["id"]): e["name"] for e in entities}
+        declarations = [*snapshot["scope_bindings"]]
+        if snapshot.get("document_default"):
+            declarations.append(snapshot["document_default"])
+        for binding in declarations:
+            for subject in binding["subjects"]:
+                entity_id = subject.get("entity_id")
+                if entity_id is not None:
+                    if entity_id not in names:
+                        raise ValueError("scope_entity_must_belong_to_knowledge_base")
+                    subject["display_name"] = names[entity_id]
+        encoded = json.dumps(snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode()) > 512000:
+            raise ValueError("processing_snapshot_too_large")
+        # A legacy profile cannot introduce new structure even when an entity changes.
+        if requested == "structured-v1":
+            return requested, snapshot
+        return f"{requested}:{hashlib.sha256(encoded.encode()).hexdigest()}", snapshot
+
+    def _source_version_for_derivation(self, document_id, source_version_id):
+        with self._read() as conn:
+            row = conn.execute(
+                text("""SELECT v.*,d.kb_id,d.name FROM documents d
+                    JOIN document_versions v ON v.document_id=d.id
+                    WHERE d.id=:d AND d.deleted_at IS NULL
+                    AND ((CAST(:v AS uuid) IS NOT NULL AND v.id=:v) OR
+                        (CAST(:v AS uuid) IS NULL AND v.id=(SELECT active_version_id
+                         FROM document_publications WHERE document_id=d.id AND scope_key='default')))
+                    LIMIT 1"""),
+                {"d": document_id, "v": source_version_id},
+            ).mappings().first()
+        if row is None or not row["source_uri"]:
+            raise KeyError("document_source_not_found")
+        return dict(row)
+
+    def create_reprocess_job(
+        self, *, principal_id, document_id, source_version_id=None,
+        target_profile="evidence-v2", processing_snapshot=None,
+        idempotency_key, request_sha256, auto_publish=False,
+    ):
+        source = self._source_version_for_derivation(document_id, source_version_id)
+        return self.create_ingestion_job(
+            principal_id=principal_id, kb_id=source["kb_id"], name=source["name"],
+            source_uri=source["source_uri"], media_type=source["media_type"],
+            filename=source["original_filename"], content_sha256=source["content_sha256"],
+            business_version=source["business_version"], scope=source["scope"],
+            idempotency_key=idempotency_key, request_sha256=request_sha256,
+            document_id=document_id, auto_publish=auto_publish,
+            processing_profile=target_profile, processing_snapshot=processing_snapshot,
+            derivation_kind="reprocess", source_version_id=source["id"],
+        )
+
+    def create_restore_job(
+        self, *, principal_id, document_id, source_version_id,
+        idempotency_key, request_sha256,
+    ):
+        source = self._source_version_for_derivation(document_id, source_version_id)
+        if source["status"] not in {"ready", "published", "superseded"}:
+            raise ConflictError("source_version_not_restorable")
+        return self.create_ingestion_job(
+            principal_id=principal_id, kb_id=source["kb_id"], name=source["name"],
+            source_uri=source["source_uri"], media_type=source["media_type"],
+            filename=source["original_filename"], content_sha256=source["content_sha256"],
+            business_version=source["business_version"], scope=source["scope"],
+            idempotency_key=idempotency_key, request_sha256=request_sha256,
+            document_id=document_id, auto_publish=False,
+            processing_profile=source["processing_profile"],
+            processing_snapshot=source["processing_snapshot"],
+            derivation_kind="restore", source_version_id=source["id"],
+        )
+
+    def restore_chunks(self, job):
+        """Copy immutable PG facts into a new identity space; never reuse old projections."""
+        from cuekb.services.evidence import source_unit_id, validate_evidence_links
+
+        with self._read() as conn:
+            rows = conn.execute(
+                text("""SELECT c.*,v.processing_profile FROM chunks c
+                    JOIN document_versions v ON v.id=c.version_id
+                    JOIN documents d ON d.id=c.document_id
+                    WHERE c.version_id=:v AND c.document_id=:d AND d.deleted_at IS NULL
+                    ORDER BY c.ordinal"""),
+                {"v": job["source_version_id"], "d": job["document_id"]},
+            ).mappings().all()
+        originals = [self._chunk(r) for r in rows]
+        if not originals:
+            raise ConflictError("source_version_has_no_chunks")
+        identifiers = {c.id: uuid5(job["version_id"], str(c.ordinal)) for c in originals}
+        chunks = []
+        for original in originals:
+            structure = original.evidence_structure.model_copy(deep=True)
+            if structure.source_unit_id:
+                structure.source_unit_id = source_unit_id(structure.source_unit_id, job["version_id"])
+            for link in structure.context_links:
+                if link.chunk_id not in identifiers:
+                    raise ValueError("restore_dependency_not_in_source_version")
+                link.chunk_id = identifiers[link.chunk_id]
+            chunks.append(original.model_copy(update={
+                "id": identifiers[original.id], "version_id": job["version_id"],
+                "section_id": None, "evidence_structure": structure,
+                "document_name": None, "content_sha256": None,
+            }))
+        validate_evidence_links(chunks)
+        return chunks
+
     def claim_job(self, owner: str, lease_seconds: int, max_attempts: int) -> dict | None:
         with self._write() as conn:
             row = (
                 conn.execute(
                     text(
-                        "SELECT j.*,v.source_uri,v.media_type,v.original_filename,v.business_version,v.scope,v.auto_publish,d.name FROM ingestion_jobs j JOIN document_versions v ON v.id=j.version_id JOIN documents d ON d.id=j.document_id WHERE j.attempt_count<:max AND j.next_attempt_at<=now() AND (j.status='queued' OR (j.status='running' AND j.lease_until<now())) ORDER BY j.created_at FOR UPDATE SKIP LOCKED LIMIT 1"
+                        "SELECT j.*,v.source_uri,v.media_type,v.original_filename,v.business_version,v.scope,v.auto_publish,v.processing_profile,v.processing_snapshot,v.derivation_kind,v.source_version_id,d.name FROM ingestion_jobs j JOIN document_versions v ON v.id=j.version_id JOIN documents d ON d.id=j.document_id WHERE d.deleted_at IS NULL AND j.attempt_count<:max AND j.next_attempt_at<=now() AND (j.status='queued' OR (j.status='running' AND j.lease_until<now())) ORDER BY j.created_at FOR UPDATE SKIP LOCKED LIMIT 1"
                     ),
                     {"max": max_attempts},
                 )
@@ -483,7 +700,13 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             )
             return dict(row)
 
-    def save_ready(self, job_id: UUID, owner: str, chunks: Sequence[Chunk]) -> bool:
+    def save_ready(
+        self, job_id: UUID, owner: str, chunks: Sequence[Chunk],
+        expected_model_revision: int | None = None,
+    ) -> bool:
+        from cuekb.services.evidence import validate_evidence_links
+
+        validate_evidence_links(chunks)
         with self._write() as conn:
             job = (
                 conn.execute(
@@ -497,6 +720,25 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             )
             if not job:
                 raise ConflictError("worker_lease_lost")
+            if not conn.execute(
+                text("SELECT 1 FROM documents WHERE id=:id AND deleted_at IS NULL FOR UPDATE"),
+                {"id": job["document_id"]},
+            ).scalar():
+                raise ConflictError("document_deleted_during_processing")
+            if expected_model_revision is not None and conn.execute(
+                text("SELECT revision FROM model_configurations WHERE id=1 FOR SHARE")
+            ).scalar() != expected_model_revision:
+                raise ConflictError("model_configuration_changed_during_processing")
+            if not chunks or any(
+                (c.kb_id, c.document_id, c.version_id)
+                != (job["kb_id"], job["document_id"], job["version_id"])
+                for c in chunks
+            ):
+                raise ValueError("chunks_must_belong_to_job_version")
+            profile = conn.execute(text("SELECT processing_profile FROM document_versions WHERE id=:id"),
+                                   {"id": job["version_id"]}).scalar()
+            if any(c.processing_profile != profile for c in chunks):
+                raise ValueError("chunk_processing_profile_mismatch")
             conn.execute(text("DELETE FROM chunks WHERE version_id=:v"), {"v": job["version_id"]})
             sections = build_sections(chunks)
             conn.execute(text("DELETE FROM sections WHERE version_id=:v"), {"v": job["version_id"]})
@@ -510,7 +752,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             for chunk in chunks:
                 conn.execute(
                     text(
-                        "INSERT INTO chunks(id,kb_id,document_id,version_id,section_id,ordinal,source_text,search_text,source_anchor,metadata,content_sha256) VALUES (:id,:kb,:d,:v,:section,:o,:st,:search,CAST(:anchor AS jsonb),CAST(:meta AS jsonb),:sha)"
+                        "INSERT INTO chunks(id,kb_id,document_id,version_id,section_id,ordinal,source_text,search_text,source_anchor,metadata,content_sha256,evidence_structure,source_spans) VALUES (:id,:kb,:d,:v,:section,:o,:st,:search,CAST(:anchor AS jsonb),CAST(:meta AS jsonb),:sha,CAST(:structure AS jsonb),CAST(:spans AS jsonb))"
                     ),
                     {
                         "id": chunk.id,
@@ -524,6 +766,8 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                         "anchor": chunk.anchor.model_dump_json(),
                         "meta": json.dumps(chunk.metadata),
                         "sha": hashlib.sha256(chunk.source_text.encode()).hexdigest(),
+                        "structure": chunk.evidence_structure.model_dump_json(),
+                        "spans": json.dumps([s.model_dump(mode="json") for s in chunk.source_spans]),
                     },
                 )
             conn.execute(
@@ -562,14 +806,15 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             )
 
     def fail_job(
-        self, job_id: UUID, code: str, message: str, retry: bool, delay_seconds: int = 0
+        self, job_id: UUID, code: str, message: str, retry: bool, delay_seconds: int = 0,
+        owner: str | None = None,
     ) -> None:
         status = "queued" if retry else "failed"
         stage = "retry_wait" if retry else "failed"
         with self._write() as conn:
-            conn.execute(
+            updated = conn.execute(
                 text(
-                    "UPDATE ingestion_jobs SET status=CAST(:status AS job_status),stage=:stage,error_code=:c,error_message=:m,lease_owner=NULL,lease_until=NULL,next_attempt_at=now()+(:delay * interval '1 second'),updated_at=now() WHERE id=:id"
+                    "UPDATE ingestion_jobs SET status=CAST(:status AS job_status),stage=:stage,error_code=:c,error_message=:m,lease_owner=NULL,lease_until=NULL,next_attempt_at=now()+(:delay * interval '1 second'),updated_at=now() WHERE id=:id AND (CAST(:owner AS text) IS NULL OR (lease_owner=:owner AND status='running' AND lease_until>now())) RETURNING id"
                 ),
                 {
                     "status": status,
@@ -578,9 +823,10 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                     "m": message[:1000],
                     "delay": delay_seconds,
                     "id": job_id,
+                    "owner": owner,
                 },
-            )
-            if not retry:
+            ).scalar()
+            if updated and not retry:
                 conn.execute(
                     text(
                         "UPDATE document_versions SET status='failed' WHERE id=(SELECT version_id FROM ingestion_jobs WHERE id=:id)"
@@ -654,7 +900,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
         with self._read() as conn:
             rows = conn.execute(
                 text(
-                    "SELECT c.* FROM chunks c JOIN documents d ON d.id=c.document_id JOIN document_publications p ON p.document_id=c.document_id AND p.active_version_id=c.version_id WHERE c.id=ANY(:ids) AND c.kb_id=ANY(:kb) AND d.deleted_at IS NULL"
+                    "SELECT c.*, d.name AS document_name, v.content_sha256 AS version_content_sha256, v.processing_profile FROM chunks c JOIN documents d ON d.id=c.document_id JOIN document_versions v ON v.id=c.version_id JOIN document_publications p ON p.document_id=c.document_id AND p.active_version_id=c.version_id WHERE c.id=ANY(:ids) AND c.kb_id=ANY(:kb) AND d.deleted_at IS NULL"
                 ),
                 {"ids": list(ids), "kb": list(kb_ids)},
             ).mappings()
@@ -804,4 +1050,9 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             search_text=row["search_text"],
             anchor=SourceAnchor(**row["source_anchor"]),
             metadata=row["metadata"],
+            evidence_structure=row.get("evidence_structure") or {},
+            source_spans=row.get("source_spans") or [],
+            processing_profile=row.get("processing_profile", "structured-v1"),
+            document_name=row.get("document_name"),
+            content_sha256=row.get("version_content_sha256"),
         )

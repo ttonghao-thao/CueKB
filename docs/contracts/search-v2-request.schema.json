@@ -1,0 +1,196 @@
+{
+  "$defs": {
+    "RelationQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "At"
+        },
+        "direction": {
+          "default": "outgoing",
+          "enum": [
+            "outgoing",
+            "incoming",
+            "both"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "entity_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Entity Ids",
+          "type": "array"
+        },
+        "types": {
+          "items": {
+            "enum": [
+              "belongs_to",
+              "adjacent_to",
+              "alias_of",
+              "revises",
+              "replaces",
+              "references",
+              "depends_on",
+              "applies_to"
+            ],
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Types",
+          "type": "array"
+        }
+      },
+      "title": "RelationQuery",
+      "type": "object"
+    },
+    "RetrievalMode": {
+      "enum": [
+        "auto",
+        "exact",
+        "hybrid",
+        "related"
+      ],
+      "title": "RetrievalMode",
+      "type": "string"
+    },
+    "V2SearchFilters": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Category"
+        },
+        "document_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Document Ids",
+          "type": "array"
+        },
+        "product_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Product Model"
+        },
+        "software_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Software Version"
+        }
+      },
+      "title": "V2SearchFilters",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "filters": {
+      "$ref": "#/$defs/V2SearchFilters"
+    },
+    "include_context": {
+      "default": true,
+      "title": "Include Context",
+      "type": "boolean"
+    },
+    "include_diagnostics": {
+      "default": false,
+      "title": "Include Diagnostics",
+      "type": "boolean"
+    },
+    "kb_ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "maxItems": 50,
+      "minItems": 1,
+      "title": "Kb Ids",
+      "type": "array"
+    },
+    "max_evidence_bytes": {
+      "default": 48000,
+      "maximum": 128000,
+      "minimum": 4096,
+      "title": "Max Evidence Bytes",
+      "type": "integer"
+    },
+    "mode": {
+      "$ref": "#/$defs/RetrievalMode",
+      "default": "auto"
+    },
+    "query": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Query",
+      "type": "string"
+    },
+    "relations": {
+      "$ref": "#/$defs/RelationQuery"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Request Id"
+    },
+    "top_k": {
+      "default": 8,
+      "maximum": 20,
+      "minimum": 1,
+      "title": "Top K",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "query",
+    "kb_ids"
+  ],
+  "title": "V2SearchRequest",
+  "type": "object"
+}

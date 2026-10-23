@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def utc_now() -> datetime:
@@ -74,6 +74,10 @@ class DocumentVersion(BaseModel):
     content_sha256: str = Field(min_length=64, max_length=64)
     business_version: str | None = None
     scope: dict[str, Any] = Field(default_factory=dict)
+    processing_profile: str = "structured-v1"
+    processing_snapshot: dict[str, Any] = Field(default_factory=dict)
+    derivation_kind: Literal["ingest", "reprocess", "restore"] = "ingest"
+    source_version_id: UUID | None = None
     status: VersionStatus = VersionStatus.UPLOADED
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -84,6 +88,69 @@ class SourceAnchor(BaseModel):
     start_offset: int | None = Field(default=None, ge=0)
     end_offset: int | None = Field(default=None, ge=0)
     bbox: dict[str, float | str] | None = None
+
+
+class StructureModel(BaseModel):
+    """Trusted structure is a closed contract, separate from upload metadata."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SourceSpan(StructureModel):
+    label: str = Field(default="text", min_length=1, max_length=100)
+    text: str = Field(min_length=1, max_length=32768)
+    anchor: SourceAnchor = Field(default_factory=SourceAnchor)
+    parser_item_id: str | None = Field(default=None, max_length=500)
+    span_id: str | None = Field(default=None, max_length=100)
+    row_index: int | None = Field(default=None, ge=0)
+    column_index: int | None = Field(default=None, ge=0)
+
+
+class ApplicableSubject(StructureModel):
+    entity_id: UUID | None = None
+    display_name: str = Field(min_length=1, max_length=200)
+    product_model: str | None = Field(default=None, min_length=1, max_length=200)
+    software_version: str | None = Field(default=None, min_length=1, max_length=200)
+    source_kind: Literal["curated", "reviewed_alias", "parser"] = "curated"
+    provenance_id: str | None = Field(default=None, max_length=500)
+    source_spans: list[SourceSpan] = Field(default_factory=list, max_length=20)
+
+
+class ApplicableCondition(StructureModel):
+    text: str = Field(min_length=1, max_length=2000)
+    source_spans: list[SourceSpan] = Field(default_factory=list, max_length=20)
+    source_kind: Literal["curated", "parser"] = "curated"
+    provenance_id: str | None = Field(default=None, max_length=500)
+
+
+class Applicability(StructureModel):
+    status: Literal["resolved", "unknown", "ambiguous"] = "unknown"
+    subjects: list[ApplicableSubject] = Field(default_factory=list, max_length=8)
+    conditions: list[ApplicableCondition] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def resolved_has_subject(self) -> "Applicability":
+        if self.status == "resolved" and not self.subjects:
+            raise ValueError("resolved_applicability_requires_subject")
+        return self
+
+
+ContextRole = Literal["attribution", "table_header", "condition", "exception", "continuation"]
+
+
+class ContextLink(StructureModel):
+    chunk_id: UUID
+    role: ContextRole
+    required: bool = True
+
+
+class EvidenceStructure(StructureModel):
+    block_kind: Literal["text", "list", "table", "heading"] = "text"
+    source_unit_id: str | None = Field(default=None, max_length=200)
+    applicability: Applicability = Field(default_factory=Applicability)
+    context_links: list[ContextLink] = Field(default_factory=list, max_length=20)
+    structure_revision: str = Field(default="legacy-unknown", min_length=1, max_length=100)
+    dependency_unresolved: bool = False
 
 
 class Chunk(BaseModel):
@@ -98,6 +165,12 @@ class Chunk(BaseModel):
     search_text: str = Field(min_length=1)
     anchor: SourceAnchor = Field(default_factory=SourceAnchor)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    source_spans: list[SourceSpan] = Field(default_factory=list, max_length=64)
+    evidence_structure: EvidenceStructure = Field(default_factory=EvidenceStructure)
+    processing_profile: str = "structured-v1"
+    # Transport-only fields joined from documents/document_versions on authoritative reads.
+    document_name: str | None = None
+    content_sha256: str | None = None
 
 
 class Job(BaseModel):
