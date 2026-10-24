@@ -45,6 +45,7 @@ function showView(name) {
   if (name === "documents") loadDocuments();
   if (name === "models" && state.isSystemAdmin) { loadModelConfig(); loadGenerations(); }
   if (name === "knowledge") loadKnowledge();
+  if (name === "knowledge-bases") renderKnowledgeBaseManagement();
 }
 
 async function connect(apiKey) {
@@ -68,11 +69,16 @@ async function connect(apiKey) {
     renderKnowledgeBases();
     $("#key-dialog").close();
     $("#key-error").textContent = "";
-    await loadDocuments();
+    await selectKnowledgeBase(state.currentKb?.id);
     $("#knowledge-list").textContent = "";
     $("#generation-list").textContent = "";
+    if (!state.currentKb) showView("knowledge-bases");
   } catch (error) {
     state.apiKey = "";
+    state.isSystemAdmin = false;
+    state.knowledgeBases = [];
+    renderKnowledgeBases();
+    $("#models-nav").hidden = true;
     sessionStorage.removeItem("cuekb_api_key");
     $("#key-error").textContent = error.status === 401 ? "API Key 无效或已被吊销" : `连接失败：${error.message}`;
     if (!$("#key-dialog").open) $("#key-dialog").showModal();
@@ -122,16 +128,17 @@ async function saveModelConfig(event) {
   finally { button.disabled = false; }
 }
 
-function renderKnowledgeBases() {
+function renderKnowledgeBases(preferredId) {
   const select = $("#kb-select");
   select.disabled = !state.knowledgeBases.length;
   select.innerHTML = state.knowledgeBases.length
-    ? state.knowledgeBases.map((kb) => `<option value="${kb.id}">${escapeHtml(kb.name)}</option>`).join("")
+    ? state.knowledgeBases.map((kb) => `<option value="${kb.id}">${escapeHtml(kb.name)} · ${kb.id.slice(0, 8)}</option>`).join("")
     : "<option>没有可访问的知识库</option>";
-  const remembered = sessionStorage.getItem("cuekb_kb_id");
+  const remembered = preferredId || sessionStorage.getItem("cuekb_kb_id");
   state.currentKb = state.knowledgeBases.find((kb) => kb.id === remembered) || state.knowledgeBases[0] || null;
   if (state.currentKb) select.value = state.currentKb.id;
   renderRole();
+  renderKnowledgeBaseManagement();
 }
 
 function renderRole() {
@@ -140,16 +147,105 @@ function renderRole() {
   badge.textContent = state.currentKb ? roleText[state.currentKb.role] : "";
 }
 
+function renderKnowledgeBaseManagement() {
+  $("#kb-create-form").hidden = !state.isSystemAdmin;
+  $("#kb-create-permission").hidden = state.isSystemAdmin;
+  $("#knowledge-base-list").innerHTML = state.knowledgeBases.length
+    ? state.knowledgeBases.map((kb) => `<article class="panel kb-card">
+      <div class="kb-card-heading"><h2>${escapeHtml(kb.name)}</h2><span class="role-badge">${roleText[kb.role]}</span></div>
+      <p class="muted">${escapeHtml(kb.description || "未填写描述")}</p><p>知识库 ID：<code>${escapeHtml(kb.id)}</code></p>
+      <div class="kb-card-actions"><button class="secondary" data-select-kb="${kb.id}">${kb.id === state.currentKb?.id ? "当前知识库" : "选择此知识库"}</button><button class="secondary" data-copy-kb="${kb.id}">复制 ID</button></div>
+    </article>`).join("")
+    : '<div class="panel empty">没有可访问的知识库。系统管理员可在上方创建，其他用户请联系管理员授权。</div>';
+  $$('[data-select-kb]').forEach((button) => button.addEventListener("click", () => selectKnowledgeBase(button.dataset.selectKb)));
+  $$('[data-copy-kb]').forEach((button) => button.addEventListener("click", () => copyText(button.dataset.copyKb)));
+  $("#kb-integration").hidden = !state.currentKb;
+  $("#kb-base-url").value = window.location.origin;
+  $("#kb-display-name").value = state.currentKb?.name || "";
+  $("#kb-full-id").value = state.currentKb?.id || "";
+  $("#kb-request-example").value = state.currentKb ? JSON.stringify({
+    query: "What information is available?", kb_ids: [state.currentKb.id], mode: "hybrid", top_k: 8,
+  }, null, 2) : "";
+}
+
+async function refreshKnowledgeBases() {
+  const apiKey = state.apiKey;
+  try {
+    const preferredId = state.currentKb?.id;
+    const knowledgeBases = await api("/knowledge-bases");
+    if (apiKey !== state.apiKey) return;
+    state.knowledgeBases = knowledgeBases;
+    renderKnowledgeBases(preferredId);
+    await selectKnowledgeBase(state.currentKb?.id);
+  } catch (error) { if (apiKey === state.apiKey) handleError(error, "刷新知识库失败"); }
+}
+
+async function selectKnowledgeBase(id) {
+  state.currentKb = state.knowledgeBases.find((kb) => kb.id === id) || null;
+  if (state.currentKb) {
+    sessionStorage.setItem("cuekb_kb_id", id);
+    $("#kb-select").value = id;
+  } else sessionStorage.removeItem("cuekb_kb_id");
+  renderRole();
+  renderKnowledgeBaseManagement();
+  $("#knowledge-list").textContent = "";
+  $("#search-results").textContent = "";
+  $("#search-summary").textContent = "";
+  $("#existing-document-id").value = "";
+  state.documents = [];
+  await loadDocuments();
+  if ($("#view-knowledge").classList.contains("active")) loadKnowledge();
+}
+
+async function createKnowledgeBase(event) {
+  event.preventDefault();
+  if (!state.isSystemAdmin) return toast("仅系统管理员可以创建知识库", "error");
+  const name = $("#kb-name").value.trim();
+  if (!name) return toast("知识库名称不能为空", "error");
+  const button = $("#create-kb");
+  const apiKey = state.apiKey;
+  button.disabled = true;
+  try {
+    const kb = await api("/knowledge-bases", { method: "POST", body: JSON.stringify({
+      name, description: $("#kb-description").value.trim(),
+    }) });
+    if (apiKey !== state.apiKey) return;
+    state.knowledgeBases.push({ ...kb, role: "admin" });
+    state.knowledgeBases.sort((left, right) => left.name.localeCompare(right.name));
+    renderKnowledgeBases(kb.id);
+    await selectKnowledgeBase(kb.id);
+    $("#kb-create-form").reset();
+    toast("知识库已创建，请导入并发布文档");
+  } catch (error) { if (apiKey === state.apiKey) handleError(error, "创建失败；结果不确定时请先刷新列表再重试"); }
+  finally { button.disabled = false; }
+}
+
+async function copyText(value) {
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    toast("已复制");
+  } catch {
+    $("#copy-value").value = value;
+    $("#copy-dialog").showModal();
+    $("#copy-value").select();
+  }
+}
+
 async function loadDocuments() {
   if (!state.currentKb) {
     $("#document-list").innerHTML = '<div class="empty">当前账号没有可访问的知识库</div>';
     return;
   }
+  const kbId = state.currentKb.id;
+  const apiKey = state.apiKey;
   $("#document-list").innerHTML = '<div class="loading">正在读取文档…</div>';
   try {
-    state.documents = await api(`/documents?kb_id=${encodeURIComponent(state.currentKb.id)}&limit=200`);
+    const documents = await api(`/documents?kb_id=${encodeURIComponent(kbId)}&limit=200`);
+    if (apiKey !== state.apiKey || state.currentKb?.id !== kbId) return;
+    state.documents = documents;
     renderDocuments();
-  } catch (error) { handleError(error, "读取文档失败"); }
+  } catch (error) { if (apiKey === state.apiKey && state.currentKb?.id === kbId) handleError(error, "读取文档失败"); }
 }
 
 function renderDocuments() {
@@ -285,7 +381,11 @@ $$('.nav-item').forEach((button) => button.addEventListener("click", () => showV
 $$('[data-go]').forEach((button) => button.addEventListener("click", () => showView(button.dataset.go)));
 $("#change-key").addEventListener("click", () => { $("#api-key").value = ""; $("#key-dialog").showModal(); });
 $("#key-form").addEventListener("submit", (event) => { event.preventDefault(); connect($("#api-key").value); });
-$("#kb-select").addEventListener("change", async (event) => { state.currentKb = state.knowledgeBases.find((kb) => kb.id === event.target.value); sessionStorage.setItem("cuekb_kb_id", event.target.value); renderRole(); $("#knowledge-list").textContent = ""; await loadDocuments(); if ($("#view-knowledge").classList.contains("active")) loadKnowledge(); });
+$("#kb-select").addEventListener("change", (event) => selectKnowledgeBase(event.target.value));
+$("#refresh-knowledge-bases").addEventListener("click", refreshKnowledgeBases);
+$("#kb-create-form").addEventListener("submit", createKnowledgeBase);
+$("#copy-kb-id").addEventListener("click", () => copyText(state.currentKb?.id));
+$("#copy-kb-request").addEventListener("click", () => copyText($("#kb-request-example").value));
 $("#document-filter").addEventListener("input", renderDocuments);
 $("#refresh-documents").addEventListener("click", loadDocuments);
 $("#drop-zone").addEventListener("click", () => $("#file-input").click());

@@ -14,6 +14,7 @@
       <a class="brand" href="/portal/"><span class="brand-mark">C</span><span>CueKB</span></a>
       <p class="brand-subtitle">知识库管理门户</p>
       <nav aria-label="主要导航">
+        <button class="nav-item" data-view="knowledge-bases">知识库管理</button>
         <button class="nav-item active" data-view="documents">文档管理</button>
         <button class="nav-item" data-view="upload">导入文档</button>
         <button class="nav-item" data-view="search">检索验证</button>
@@ -37,6 +38,35 @@
         </div>
         <div id="kb-role" class="role-badge" hidden></div>
       </header>
+
+      <section id="view-knowledge-bases" class="view">
+        <div class="page-heading">
+          <div><p class="eyebrow">知识库与接入</p><h1>知识库管理</h1><p>创建知识库，查看完整 ID，并准备第三方接入信息。</p></div>
+          <button id="refresh-knowledge-bases" class="secondary">刷新列表</button>
+        </div>
+        <form id="kb-create-form" class="panel form-panel kb-panel" hidden>
+          <h2>创建知识库</h2>
+          <p class="muted">名称用于展示；系统自动分配 UUID。创建后仍需导入并发布文档。</p>
+          <label><span>知识库名称（必填）</span><input id="kb-name" maxlength="200" required placeholder="例如：产品资料库"></label>
+          <label class="model-secret"><span>描述（可选）</span><textarea id="kb-description" maxlength="2000" rows="3" placeholder="说明用途、内容范围或维护人"></textarea></label>
+          <div class="form-actions"><button id="create-kb" class="primary" type="submit">创建知识库</button></div>
+        </form>
+        <p id="kb-create-permission" class="muted">仅系统管理员可以创建知识库；下方列出当前 Key 可访问的知识库。</p>
+        <div id="knowledge-base-list" class="kb-list"></div>
+        <div id="kb-integration" class="panel form-panel kb-panel" hidden>
+          <h2>当前知识库的接入信息</h2>
+          <p>第三方检索配置完整 UUID，不能用名称代替。业务 Key 还须获得该知识库的 read 权限。</p>
+          <label><span>当前浏览器 Base URL</span><input id="kb-base-url" readonly></label>
+          <p class="muted">请确认第三方服务器能访问此地址。第三方容器中的 localhost 指向第三方容器自身。</p>
+          <div class="field-grid">
+            <label><span>知识库名称（展示用）</span><input id="kb-display-name" readonly></label>
+            <label><span>知识库 ID（检索用）</span><input id="kb-full-id" readonly></label>
+          </div>
+          <label class="model-secret"><span>POST /v2/search 请求示例</span><textarea id="kb-request-example" rows="9" readonly></textarea></label>
+          <p class="muted">Authorization: Bearer &lt;受限业务 API Key&gt;。业务 Key 的创建和授权命令见项目 README；不要交付管理员 Key。</p>
+          <div class="form-actions"><button id="copy-kb-id" type="button" class="secondary">复制知识库 ID</button><button id="copy-kb-request" type="button" class="secondary">复制检索请求</button></div>
+        </div>
+      </section>
 
       <section id="view-documents" class="view active">
         <div class="page-heading">
@@ -159,6 +189,11 @@
 
   <dialog id="document-dialog" class="wide-dialog">
     <div id="document-detail"></div>
+    <div class="dialog-actions"><button class="secondary" data-close-dialog>关闭</button></div>
+  </dialog>
+  <dialog id="copy-dialog" class="wide-dialog">
+    <h2>复制接入信息</h2><p>浏览器未允许自动复制。请选中文本后按 Ctrl/Cmd+C 复制。</p>
+    <textarea id="copy-value" rows="9" readonly aria-label="待复制的接入信息"></textarea>
     <div class="dialog-actions"><button class="secondary" data-close-dialog>关闭</button></div>
   </dialog>
   <div id="toast-region" class="toast-region" aria-live="polite"></div>

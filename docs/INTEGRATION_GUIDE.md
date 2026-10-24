@@ -1,22 +1,24 @@
 # 第三方接入与使用说明
 
-更新：2026-10-23。配合[接口规范](API_GUIDE.md)、[系统约束](SYSTEM_CONSTRAINTS.md)及[OpenAPI](contracts/openapi.json)使用。本文不要求调用方安装CueKB服务代码。
+更新：2026-10-24。配合[接口规范](API_GUIDE.md)、[系统约束](SYSTEM_CONSTRAINTS.md)及[OpenAPI](contracts/openapi.json)使用。本文不要求调用方安装CueKB服务代码。
 
 ## 1. 获取接入资料
 
 向运行方取得base URL、受限API Key、授权KB UUID、服务器搜索预算和已启用契约版本。第三方只读应用使用read Key，不使用bootstrap/system admin Key。业务用户的KB范围由集成服务端校验，不能把前端提交的kb_ids直接当作用户授权。
 
+知识库名称只用于展示，可以重复；请求的`kb_ids`必须填写创建结果的`id`（UUID）。运行方通过Portal或后台命令创建KB、签发业务Key并授权，完整步骤及交接清单见[README](../README.md#创建知识库与第三方配置)。创建Key返回的`id`是Key ID，`principal_id`用于KB授权，都不能代替KB UUID或密钥。
+
 先请求`GET /v1/health`和`GET /v1/ready`确认路径/依赖；ready不证明模型已配置或质量通过。使用Bearer Key调用`GET /v1/knowledge-bases`，确认KB ID和role。生产未配置Embedding时导入/搜索会409；旧投影未升级时V2会`INDEX_UPGRADE_REQUIRED`，应让管理员重建generation，不自动退回V1掩盖问题。
 
 ## 2. 最小搜索调用
 
-在调用方环境设置`CUEKB_URL`、`CUEKB_API_KEY`。示例request.json中的KB UUID必须替换为被授权的真实值；不要把示例业务内容当成生产知识。
+在调用方环境设置`CUEKB_BASE_URL`、`CUEKB_API_KEY`、`CUEKB_KB_ID`；这些是示例变量，实际变量名由客户端实现决定。Base URL不带`/v1`或`/v2`。示例request.json中的KB UUID必须替换为被授权的真实值；不要把示例业务内容当成生产知识。
 
 ```bash
-curl --fail-with-body "$CUEKB_URL/v1/knowledge-bases" \
+curl --fail-with-body "$CUEKB_BASE_URL/v1/knowledge-bases" \
   -H "Authorization: Bearer $CUEKB_API_KEY"
 
-curl --fail-with-body "$CUEKB_URL/v2/search" \
+curl --fail-with-body "$CUEKB_BASE_URL/v2/search" \
   -H "Authorization: Bearer $CUEKB_API_KEY" \
   -H 'Content-Type: application/json' --data-binary @request.json
 ```
@@ -28,7 +30,7 @@ import asyncio, os, uuid
 import httpx
 
 async def main():
-    async with httpx.AsyncClient(base_url=os.environ["CUEKB_URL"], timeout=10) as client:
+    async with httpx.AsyncClient(base_url=os.environ["CUEKB_BASE_URL"], timeout=10) as client:
         response = await client.post("/v2/search",
             headers={"Authorization": "Bearer " + os.environ["CUEKB_API_KEY"]},
             json={"query": "What are the storage conditions after opening?",
@@ -67,7 +69,7 @@ CueKB max_evidence_bytes约束API hits数组；调用方的模型包可能还有
 向`POST /v2/documents`提交file和metadata字符串，必须有write权限与Idempotency-Key。metadata样例在[接口规范](API_GUIDE.md#5-导入归属映射更新与恢复)。
 
 ```bash
-curl --fail-with-body "$CUEKB_URL/v2/documents" \
+curl --fail-with-body "$CUEKB_BASE_URL/v2/documents" \
   -H "Authorization: Bearer $CUEKB_WRITE_KEY" \
   -H 'Idempotency-Key: manual-import-20261023-1' \
   -F 'metadata=<metadata.json' -F 'file=@manual.md;type=text/markdown'
@@ -76,7 +78,7 @@ curl --fail-with-body "$CUEKB_URL/v2/documents" \
 记录202返回的Job ID；通过`GET /v1/jobs/{id}`轮询。失败记录error_code；ready时使用`GET /v2/documents/{document_id}`检查新版本/profile，需要时下载原件核对。随后用write权限调用publish：
 
 ```bash
-curl --fail-with-body "$CUEKB_URL/v1/documents/$CUEKB_DOCUMENT_ID/publish" \
+curl --fail-with-body "$CUEKB_BASE_URL/v1/documents/$CUEKB_DOCUMENT_ID/publish" \
   -H "Authorization: Bearer $CUEKB_WRITE_KEY" -H 'Content-Type: application/json' \
   --data-binary @publish.json
 ```

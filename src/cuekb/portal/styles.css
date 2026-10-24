@@ -6,6 +6,7 @@
   color: var(--ink); background: var(--canvas); font-synthesis: none;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; min-width: 320px; }
 button, input, select, textarea { font: inherit; }
 button, select { cursor: pointer; }
@@ -70,6 +71,14 @@ tr[data-document]:hover { background: #f8fbf9; }
 .check-row { display: flex; align-items: center; gap: 9px; margin-top: 18px; color: var(--ink); }
 .check-row input { width: auto; }
 .form-actions { display: flex; justify-content: flex-end; margin-top: 24px; }
+.kb-panel { margin-bottom: 20px; }
+.kb-list { display: grid; gap: 14px; margin-bottom: 24px; }
+.kb-card { padding: 22px; }
+.kb-card-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.kb-card h2 { font-size: 19px; margin: 0; overflow-wrap: anywhere; }
+.kb-card p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.kb-card code { user-select: all; overflow-wrap: anywhere; }
+.kb-card-actions, #kb-integration .form-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .job-list { display: grid; gap: 10px; margin-top: 18px; }
 .job-main { flex: 1; min-width: 0; }
 .job-main strong, .job-main span { display: block; overflow: hidden; text-overflow: ellipsis; }

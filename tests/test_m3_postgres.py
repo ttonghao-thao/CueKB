@@ -81,6 +81,30 @@ def seed(repo, kb=None, body="evidence"):
     )
 
 
+def test_pg_kb_creation_and_business_key_access(pg):
+    pg.bootstrap("local-test-bootstrap-key")
+    creator = pg.authenticate("local-test-bootstrap-key")
+    first = pg.create_knowledge_base(KnowledgeBase(name="same name", description="first KB"), creator)
+    second = pg.create_knowledge_base(KnowledgeBase(name="same name"), creator)
+    assert first.id != second.id
+    assert pg.get_knowledge_base(first.id).description == "first KB"
+    _, principal_id, key = pg.create_api_key("third-party", "read")
+    reader = pg.authenticate(key)
+    assert pg.list_knowledge_bases(reader) == []
+    with pytest.raises(PermissionError):
+        pg.require_role(reader, [first.id], "read")
+    pg.grant(first.id, principal_id, "read")
+    pg.require_role(reader, [first.id], "read")
+    assert [(row["id"], row["role"]) for row in pg.list_knowledge_bases(reader)] == [(first.id, "read")]
+    with pytest.raises(PermissionError):
+        pg.require_role(reader, [first.id], "write")
+    with pytest.raises(PermissionError):
+        pg.require_role(reader, [second.id], "read")
+    with pg._read() as conn:
+        assert conn.execute(text("SELECT role::text FROM kb_grants WHERE kb_id=:k AND principal_id=:p"),
+                            {"k": first.id, "p": creator.id}).scalar_one() == "admin"
+
+
 def test_pg_relations_direction_aliases_and_deleted_evidence(pg):
     kb, c = seed(pg)
     _, other = seed(pg, kb, "supporting passage")

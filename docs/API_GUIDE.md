@@ -1,6 +1,6 @@
 # CueKB 第三方接口规范
 
-更新：2026-10-23。本文描述当前代码契约，不是性能或模型质量承诺。新集成使用V2证据检索；管理能力同时复用V1。不要按版本号猜字段兼容性。
+更新：2026-10-24。本文描述当前代码契约，不是性能或模型质量承诺。新集成使用V2证据检索；管理能力同时复用V1。不要按版本号猜字段兼容性。
 
 ## 1. 契约文件与通用约定
 
@@ -158,6 +158,14 @@ Job包含id、kb_id、document_id、version_id、status、stage、progress、err
 ## 6. 公共管理接口目录
 
 以下V1管理路径继续有效。所有请求/响应的完整嵌套字段以[OpenAPI](contracts/openapi.json)为准；不要将V2检索DTO用于这些接口。
+
+### 知识库创建与标识
+
+`POST /v1/knowledge-bases`请求为`{"name":"产品资料库","description":"客服原文"}`。name去除首尾空白后1–200字符，description可省略（默认空串，最多2000字符）；生产仅system admin可创建。成功HTTP201返回`id`（新UUID）、name、description、content_revision、acl_revision、created_at，并授予创建者该KB的admin权限。创建无需模型配置，但空库尚无可检索证据。
+
+name允许重复，仅作展示；第三方检索必须用返回的id填`kb_ids`，上传则填`kb_id`。不能按名称唯一定位，不会自动按同名返回旧库。创建不支持幂等键，未知结果先查询`GET /v1/knowledge-bases`确认，不能盲目重试。
+
+`GET /v1/knowledge-bases`成功HTTP200返回当前Key可访问的列表，每项含上述字段和有效`role`；未获授权的业务Key返回空列表，system admin可见所有KB。业务Key创建和KB授权是两个独立步骤，授权使用Key返回的`principal_id`，不能使用Key ID。Portal和后台命令的操作步骤在[README](../README.md#创建知识库与第三方配置)。
 
 | 方法/路径 | 权限 | 输入/结果 |
 | --- | --- | --- |

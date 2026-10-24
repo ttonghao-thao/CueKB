@@ -16,6 +16,7 @@
 | adapters/generations.py、services/generations.py | 独立投影重建、源profile快照、维护栅栏及模型/物理索引原子切换 |
 | services/execution.py、api/v2_dependencies.py | 请求绝对时限、阶段统计、原生异步transport复用及进程内容量边界 |
 | portal/ | 同源静态管理门户，显式选择V2或V1检索 |
+| admin.py | Portal之外的HTTP管理命令，创建/列举KB、签发业务Key及授权；不绕过API直接写库 |
 
 OpenSearch只返回候选ID/分数，不作为正文或权限权威。所有返回正文、归属、出处与关系来自PG，最终新事务复验；原件存储只供解析与授权下载。生产要求PG+OS，memory后端只为开发与测试。
 

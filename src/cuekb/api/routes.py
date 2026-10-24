@@ -154,6 +154,11 @@ def create_knowledge_base(
     request: KnowledgeBaseCreate,
     principal: Principal | None = Depends(current_principal),
 ) -> KnowledgeBase:
+    """Create an empty KB. Use its returned UUID in kb_ids; names are display labels.
+
+    Production requires a system admin and grants the creator KB admin access.
+    Creation is not idempotent; check the KB list before retrying an unknown result.
+    """
     repo = repository()
     if isinstance(repo, PostgreSQLRepository):
         if not principal or not principal.is_system_admin:
@@ -166,6 +171,7 @@ def create_knowledge_base(
 def list_knowledge_bases(
     principal: Principal | None = Depends(current_principal),
 ) -> list[KnowledgeBaseAccess]:
+    """List accessible KBs with their full UUID, display name, description and effective role."""
     return [KnowledgeBaseAccess(**row) for row in repository().list_knowledge_bases(principal)]
 
 
@@ -440,6 +446,8 @@ def grant_access(
     if not isinstance(repo, PostgreSQLRepository):
         raise HTTPException(409, "access_management_requires_production_backend")
     repo.require_role(principal, [kb_id], "admin")
+    if repo.get_knowledge_base(kb_id) is None:
+        raise HTTPException(404, "knowledge_base_not_found")
     try:
         repo.grant(kb_id, request.principal_id, request.role)
     except KeyError as exc:

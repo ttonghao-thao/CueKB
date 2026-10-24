@@ -1227,6 +1227,7 @@
             "type": "string"
           },
           "name": {
+            "description": "Display name; not unique and not a retrieval identifier.",
             "maxLength": 200,
             "minLength": 1,
             "title": "Name",
@@ -7692,6 +7693,7 @@
     },
     "/v1/knowledge-bases": {
       "get": {
+        "description": "List accessible KBs with their full UUID, display name, description and effective role.",
         "operationId": "list_knowledge_bases_v1_knowledge_bases_get",
         "parameters": [
           {
@@ -7956,6 +7958,7 @@
         ]
       },
       "post": {
+        "description": "Create an empty KB. Use its returned UUID in kb_ids; names are display labels.\n\nProduction requires a system admin and grants the creator KB admin access.\nCreation is not idempotent; check the KB list before retrying an unknown result.",
         "operationId": "create_knowledge_base_v1_knowledge_bases_post",
         "parameters": [
           {

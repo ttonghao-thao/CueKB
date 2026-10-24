@@ -30,6 +30,8 @@ chmod 600 .env.production
 
 检查`GET /v1/health`、`GET /v1/ready`与`/portal/`。生产业务API使用Bearer Key；健康和ready公开但不返回凭据。创建业务Key并授予目标KB read/write/admin，第三方查询不要使用bootstrap。
 
+知识库通过Portal的“知识库管理”或`python -m cuekb.admin ... kb create`创建；命令复用HTTP API，不直接写数据库。创建、列举、业务Key签发和授权的可执行命令，以及第三方所需的Base URL、业务Key和KB UUID，统一见[README](../README.md#创建知识库与第三方配置)。更新应用后须重新构建API镜像才能使用新页面及命令模块。
+
 ## 3. 空库初始化与搜索投影
 
 `db/schema.sql`是完整结构的唯一来源，包含内容、权限、模型配置、关系、generation和V2证据字段及约束。Compose将它只读挂载到PostgreSQL官方初始化目录；数据库首次使用空数据目录时自动执行，无需手工数据库指令。该文件作为一个事务执行，初始化失败须先排查日志，不能将缺表数据库作为正常实例使用。
