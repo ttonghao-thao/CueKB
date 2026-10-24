@@ -55,7 +55,7 @@
 | BM25与查询向量并行；RRF常数60；重排默认头部30；关键词/向量默认各50 | [retrieval.py](../../src/cuekb/services/retrieval.py)：`_search_evidence`；[config.py](../../src/cuekb/config.py) | 复用候选和排序；同一证据不因多条关联重复加票 |
 | 一跳从显式实体、完整query名称/别名匹配、初召回块mention取最多20实体；seed块最多100；默认30条关系证据、100ms SQL预算 | [knowledge.py](../../src/cuekb/adapters/knowledge.py)：`related_chunks` | 新门控需按查询相关性选种子；当前SQL按关系/块ID排序，不是关联强度排序 |
 | 关系返回的是`relation_evidence`引用块，不是自动获取目标实体所有文档；实体、别名、mention、关系由管理API写入 | [knowledge.py](../../src/cuekb/adapters/knowledge.py)：`put_entity`、`put_relation`、`related_chunks` | 新增自动提取、归一化、验证与目标证据候选；避免误称当前已有自动知识发现 |
-| 事实类型只有belongs_to、adjacent_to、alias_of、revises、replaces、references、depends_on、applies_to；条件仅型号/软件版本精确字符串 | [schemas.py](../../src/cuekb/schemas.py)：`RelationType`、`RelationWrite`；[0003迁移](../../migrations/versions/0003_relations_generations.py) | supports/compatible_with/属性值等不能直接写入旧表；设计新的自动候选表和明确谓词契约 |
+| 事实类型只有belongs_to、adjacent_to、alias_of、revises、replaces、references、depends_on、applies_to；条件仅型号/软件版本精确字符串 | [schemas.py](../../src/cuekb/schemas.py)：`RelationType`、`RelationWrite`；[初始化schema](../../db/schema.sql) | supports/compatible_with/属性值等不能直接写入旧表；设计新的自动候选表和明确谓词契约 |
 | `supports/refutes`是证据对断言的立场；没有自动置信、审核状态、抽取方法、版本化pipeline | 同上；`relation_evidence` | 与事实谓词`supports_capability`明确区分；新增来源和状态 |
 | 单次读取用REPEATABLE READ；完成后新事务复验Key、ACL、内容修订、发布、关系与上下文；最多一次重试 | [retrieval.py](../../src/cuekb/services/retrieval.py)：`search_evidence`；[knowledge.py](../../src/cuekb/adapters/knowledge.py)：`read_snapshot` | 复用语义，增加关联修订和整条路径依赖复验；不能只校验终点块 |
 | 上下文按同文档同版本的章节/邻近块组织，默认8块/命中、4000字符/命中、12000字符/响应 | [context.py](../../src/cuekb/services/context.py)；`knowledge.context_chunks` | 保持原文上下文，跨文档证据组作为新元数据，不拼成生成结论 |
@@ -214,7 +214,7 @@ flowchart TD
 
 ### 6.2 建议逻辑表
 
-这是逻辑schema，不提供可直接执行的DDL。首轮仅实现实验必要列；迁移顺序、索引验证须作为后续实现任务单独评审。
+这是逻辑schema，不提供可直接执行的DDL。首轮仅实现实验必要列；完整建库结构、索引验证须作为后续实现任务单独评审。
 
 | 新增表/结构 | 关键字段 | 约束与用途 |
 | --- | --- | --- |
@@ -236,7 +236,7 @@ flowchart TD
 
 - `entities/entity_aliases/mentions`继续承载已审核或确定性归一的实体与提及；自动别名候选先保存在提取任务结果，不直接写入审核别名表。首轮不自动新增模糊别名。
 - `relation_assertions/relation_evidence`保留人工关系语义；新Provider将人工关系和自动claims转成统一只读候选。自动候选不双写旧关系表，避免两份事实状态漂移。
-- 选择独立claims表，是因为旧表没有审核/构建/来源状态且谓词有限。若未来决定统一，采用扩展旧表＋来源扩展表的迁移方案，须证明旧API和人工记录不会被覆盖；首轮不承担此迁移。
+- 选择独立claims表，是因为旧表没有审核/构建/来源状态且谓词有限。若未来决定统一，须单独评审完整schema、旧API与人工记录语义；首轮不承担该扩展。
 - 不直接调用现有`put_entity`自动更新实体：它会删除并重建别名和mentions。新增内部幂等upsert只追加已验证mention，人工名称/别名优先；自动结果撤回按自己的来源依赖处理。
 
 ### 6.3 索引、一致性、去重与容量
@@ -499,7 +499,7 @@ Embedding切换继续由现有generation机制负责；关联不能拖住该切�
 
 保留旧`related`的人工一跳行为。新association在`related`路径上使用同一份人工关系候选/预算，不重复执行两次`related_chunks`或给同一来源重复加RRF分；off时原有related完全沿用。H基线固定`hybrid`，而当前人工related作为额外参照组，避免把不同路由混称一个基线。
 
-模块关闭时不访问新表、不申请新增模型客户端、不改变现有普通请求JSON；旧部署不运行新迁移也能继续基础检索。启用而schema未就绪时报告明确配置故障，自动退至off或使实验入口不可用，不能假装关联已启用。关联索引/表是可重建派生数据，迁移采取增量表优先，不要求回退时删表。
+模块关闭时不访问研究中的新表、不申请新增模型客户端、不改变现有普通请求JSON。未来获准接入后，所需结构须完整纳入全新部署schema；启用而schema未就绪时报告明确配置故障，不能假装关联已启用。关联索引/表是可重建派生数据，关闭模块不要求删表。
 
 ### 11.3 故障矩阵
 
@@ -643,7 +643,7 @@ G4的1300ms是本次显式复杂实验的新目标；原2026-10-08验收草案�
 | X03：A离线导航 | 固定块、既有向量、规则特征；无新模型 | JSONL links/evidence/dependencies、候选来源及预算；只改实验目录 | H+A与H/H-wide对照；导航错误盲审；记录G1/G2/G4趋势 | 删除实验派生输出或strategy off，H不受影响 |
 | X04：B离线事实 | 同数据，白名单规则及现有实体规范；无LLM | JSONL claims、quote spans、条件/极性验证；人工gold只评分 | H+B；关系准确/召回；近型号/否定强制反例；无实体误合并 | 仅保留A或H；不以人工补边冒充自动 |
 | X05：C与动态消融 | 复用X03/X04输出，统一候选Provider | strategy开关、门控、一次扩展、证据组；离线契约 | 四主组及H-wide相同条件；按G门槛选择最简胜出方案 | 若无增益终止新架构，交付负结果 |
-| X06：PG持久化与增量 | 仅在质量有价值后；批准的新逻辑schema | 独立增量迁移、jobs/build/revision、Worker分支、管理CLI；不自动上线 | 真PG测试发布/删除/乱序/崩溃/租约/反向邻居/重复块映射；G0、G5、G6 | 停领取＋模块off，保留主索引和人工关系；不通过删库回退 |
+| X06：PG持久化与增量 | 仅在质量有价值后；批准的新逻辑schema | 完整初始化表、jobs/build/revision、Worker分支、管理CLI；不自动上线 | 真PG测试发布/删除/乱序/崩溃/租约/反向邻居/重复块映射；G0、G5、G6 | 停领取＋模块off，保留主索引和人工关系；不通过删库回退 |
 | X07：受控在线接点 | X06＋M4 deadline/取消/错误/配额契约 | 可选search字段、AssociationProvider、最终路径复验；管理HTTP按需最小化 | off行为回归；C=1/2/5/10及故障/退化；G0—G6；客户端兼容 | 一键off；不改变exact/原hybrid，必要时回退应用版本保留表 |
 | X08：有证据才扩展 | 前轮误差分解证明规则抽取/一跳不足 | 后台LLM、轻量NLP或两跳各自单独实验任务和决策修订 | 独立模型费用、抽取质量、增量收益与新风险对照，不打包多个变量 | 回到已验证recipe/one-hop或H |
 
@@ -651,7 +651,7 @@ X03和X04技术上可独立执行，但共享X01/X02，不能各自选择更有�
 
 ### 15.1 每次实验必须交付的材料
 
-运行清单包含：code commit、dirty diff摘要、依赖锁hash、PG迁移版本、语料/查询/gold hash、split、发布/ACL快照、index generation/物理索引、关联build、模型与服务修订、规则/验证器版本、完整参数、硬件/网络、随机种子、起止时间、命令和失败记录。不能只留一张汇总表。
+运行清单包含：code commit、dirty diff摘要、依赖锁hash、初始化schema内容hash、语料/查询/gold hash、split、发布/ACL快照、index generation/物理索引、关联build、模型与服务修订、规则/验证器版本、完整参数、硬件/网络、随机种子、起止时间、命令和失败记录。不能只留一张汇总表。
 
 原始query结果至少保存合法证据ID、排名、来源、路径、停止原因、各阶段耗时、调用数、错误/降级状态及评测映射；敏感正文和完整query按实验授权和保留策略处理。性能原始请求记录必须保留超时和拒绝；同一报告中将“测量值”“目标”“假设”分列。例：`P95 measured=null, target=..., status=not_run`，不能用目标值填measured。
 

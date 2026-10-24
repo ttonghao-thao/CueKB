@@ -1,6 +1,6 @@
 # 当前系统设计
 
-更新：2026-10-23。本文描述已落地代码；接口字段在[接口规范](API_GUIDE.md)，未执行验收在[任务板](../TASK_BOARD.md)。
+更新：2026-10-24。本文描述已落地代码；接口字段在[接口规范](API_GUIDE.md)，未执行验收在[任务板](../TASK_BOARD.md)。
 
 ## 1. 模块与权威边界
 
@@ -25,7 +25,7 @@ OpenSearch只返回候选ID/分数，不作为正文或权限权威。所有返�
 
 API不接受客户端伪造approved_entities、来源spans或source_kind。实体ID必须属于目标KB；显示名取冻结实体。映射选择器是章节路径前缀和/或source_unit_id，处理时未匹配即失败。映射冲突保留ambiguous；body提及某产品不能自动成为该产品事实。
 
-原件重处理复用存储文件，以新处理快照产生新版本；恢复复制旧PG事实、spans和结构，重新生成版本/块ID并重映射必要依赖，然后按当前输入模板编码。恢复不会复活被删除的文档/权限，也不迁移人工关系。普通ingest/reprocess按文档+hash+profile防重复；有意restore允许同内容的新派生。
+原件重处理复用存储文件，以新处理快照产生新版本；恢复复制旧PG事实、spans和结构，重新生成版本/块ID并重映射必要依赖，然后按当前输入模板编码。恢复不会复活被删除的文档/权限，也不复制人工关系。普通ingest/reprocess按文档+hash+profile防重复；有意restore允许同内容的新派生。
 
 任务基于PG幂等键、租约和有界重试。Worker索引后校验已写ID、版本、原文及search_text，随后在租约、删除和模型配置修订栅栏下保存ready事实；publish才改变唯一default可见指针并递增内容修订。旧投影由outbox清理，即使清理延迟也不得进入最终返回。
 
@@ -68,7 +68,7 @@ generation维护锁阻止内容写入，查询继续。重建读取PG已存事�
 
 解析/归属升级先重处理、人工检查并publish；Embedding/投影升级再generation。旧V1投影不具备V2字段，V2返回INDEX_UPGRADE_REQUIRED而不假装已使用新路径。旧配置rollback也重建当前PG事实，不将旧index直接当成当前内容。
 
-数据库0004新增处理快照/派生血缘/结构spans、同文档source_version FK和防重复部分索引。它不自动改写旧块归属；不可自动downgrade，执行前按[操作手册](OPERATIONS.md)备份并在测试库演练。
+完整数据库结构由`db/schema.sql`定义，包含处理快照、派生血缘、结构spans、同文档source_version FK、防重复部分索引、实体/关系、模型配置和generation。PostgreSQL首次在空数据目录启动时自动加载，整个建库文件在一个事务内执行；TCP健康后API/Worker才能启动。该流程不处理既有数据库，操作说明见[操作手册](OPERATIONS.md)。
 
 ## 7. 独立离线关联实验
 

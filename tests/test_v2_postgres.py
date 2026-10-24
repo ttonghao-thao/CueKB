@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import text
 
-from test_m3_postgres import pg
+from test_m3_postgres import pg, seed
 from cuekb.adapters.postgres import ConflictError
 from cuekb.domain.models import KnowledgeBase
 from cuekb.services.execution import SearchExecution, SearchDeadlineExceeded, activate_execution
@@ -14,6 +14,16 @@ from cuekb.worker import materialize_chunks
 
 
 SOURCE = b"# Product A\n\nInput voltage: 12 V. Do not exceed 30 C."
+
+
+def test_pg_initial_processing_defaults_match_domain_defaults(pg):
+    _, chunk = seed(pg)
+    with pg._read() as connection:
+        snapshot = connection.execute(text(
+            "SELECT processing_profile,processing_snapshot FROM document_versions WHERE id=:version"
+        ), {"version": chunk.version_id}).one()
+    assert snapshot.processing_profile == "structured-v1"
+    assert snapshot.processing_snapshot == {}
 
 
 def create_version(repo):

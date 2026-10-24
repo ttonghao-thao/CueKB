@@ -42,9 +42,16 @@ services:
       POSTGRES_DB: cuekb
       POSTGRES_USER: cuekb
       POSTGRES_PASSWORD: ${CUEKB_POSTGRES_PASSWORD}
-    volumes: [cuekb_pg:/var/lib/postgresql/data]
+    volumes:
+      - cuekb_pg:/var/lib/postgresql/data
+      - type: bind
+        source: ./db/schema.sql
+        target: /docker-entrypoint-initdb.d/001-cuekb.sql
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cuekb -d cuekb"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U cuekb -d cuekb"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -67,18 +74,6 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
-  migrate:
-    image: ${CUEKB_API_IMAGE:-cuekb-api:latest}
-    pull_policy: never
-    environment:
-      <<: *app-env
-      CUEKB_PROCESS_ROLE: worker
-    command: ["alembic", "upgrade", "head"]
-    depends_on:
-      postgres: {condition: service_healthy}
-    restart: "no"
-    logging: *default-logging
-
   worker:
     image: ${CUEKB_WORKER_IMAGE:-cuekb-worker:latest}
     pull_policy: never
@@ -89,7 +84,7 @@ services:
       - cuekb_files:/data/originals
       - cuekb_worker_cache:/home/cuekb/.cache
     depends_on:
-      migrate: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
       opensearch: {condition: service_healthy}
     restart: unless-stopped
     logging: *default-logging
@@ -105,7 +100,7 @@ services:
     ports: ["0.0.0.0:8085:8080"]
     volumes: [cuekb_files:/data/originals]
     depends_on:
-      migrate: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
       opensearch: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/v1/ready', timeout=3)"]

@@ -1,6 +1,6 @@
 # 部署与操作手册
 
-更新：2026-10-23。下列是运行步骤，不是本轮已部署的证据。真实环境执行记录在[任务板](../TASK_BOARD.md)。
+更新：2026-10-24。下列是全新部署的运行步骤，不是本轮已部署的证据。真实环境执行记录在[任务板](../TASK_BOARD.md)。
 
 ## 1. 环境与配置
 
@@ -26,22 +26,17 @@ chmod 600 .env.production
 ./scripts/deploy-production.sh .env.production
 ```
 
-自定义镜像标签须写入env中的`CUEKB_API_IMAGE`/`CUEKB_WORKER_IMAGE`。部署脚本只做Compose检查及`up --no-build`，不自动构建或拉取应用镜像。`migrate`先执行`alembic upgrade head`，成功后API/Worker启动；健康检查不代表模型质量已验收。
+自定义镜像标签须写入env中的`CUEKB_API_IMAGE`/`CUEKB_WORKER_IMAGE`。部署脚本只做Compose检查及`up --no-build`，不自动构建或拉取应用镜像。PostgreSQL首次在空数据目录启动时自动初始化当前完整结构；API/Worker等待PG和OS健康后启动。健康检查不代表模型质量已验收。
 
 检查`GET /v1/health`、`GET /v1/ready`与`/portal/`。生产业务API使用Bearer Key；健康和ready公开但不返回凭据。创建业务Key并授予目标KB read/write/admin，第三方查询不要使用bootstrap。
 
-## 3. 0004升级和投影切换
+## 3. 空库初始化与搜索投影
 
-本次数据库head为`0004_evidence_processing`。已运行实例升级前安排维护窗口，停止API/Worker写入并备份；先在隔离恢复库演练迁移、旧数据读取、发布、恢复与清理。
+`db/schema.sql`是完整结构的唯一来源，包含内容、权限、模型配置、关系、generation和V2证据字段及约束。Compose将它只读挂载到PostgreSQL官方初始化目录；数据库首次使用空数据目录时自动执行，无需手工数据库指令。该文件作为一个事务执行，初始化失败须先排查日志，不能将缺表数据库作为正常实例使用。
 
-```sh
-.venv/bin/alembic current
-.venv/bin/alembic upgrade head
-```
+全新部署必须使用新的空PG数据卷。已有数据目录不会重新执行初始化文件，不属于本次部署输入；需要与旧实例隔离时可为新部署设置独立`COMPOSE_PROJECT_NAME`并处理宿主端口冲突。部署脚本不清理旧容器或数据卷，也不修改已有库结构。保留仓库中的`db/schema.sql`，缺文件时Compose挂载应直接失败；仅重建应用镜像不能改变已有数据库结构。
 
-命令需正确的生产数据库设置及模型加密密钥，禁止误指向工作数据库做破坏性测试。0004保留旧版本与旧块，新增profile/快照/血缘/spans/结构字段，并用部分唯一索引允许显式restore。downgrade故意拒绝；失败回退采用已验证的PG/原件/密钥备份及匹配旧镜像，不靠删字段回退。
-
-旧OS index不能直接服务V2：由系统管理员通过`POST /v1/index-generations`用实际模型三元组创建重建任务，省略`chunking_version`，等待ready并检查generation源profile，再activate。维护锁期间内容写入409，查询继续。激活前旧V1可继续服务；V2对旧投影返回409 INDEX_UPGRADE_REQUIRED。即使投影升级，旧structured-v1正文的产品归属仍可能unknown。
+在门户配置Embedding后，Worker为新文档创建V2搜索投影。此后需要更换Embedding、维度或输入模板时，仍由系统管理员通过`POST /v1/index-generations`创建重建任务，省略`chunking_version`，等待ready后activate。维护锁期间内容写入409，查询继续；这是搜索投影重建，不改变数据库结构。
 
 需要新的解析/归属时，对文档单独执行V2 reprocess，检查新版本再publish；generation不会自动重切块。想恢复旧事实则用restore生成全新块ID、等待ready后发布。generation rollback只重建当前事实的旧模型投影。
 
@@ -57,7 +52,7 @@ chmod 600 .env.production
 
 备份包括PG（正文、版本、ACL、模型配置、任务、关系）、原件volume、模型加密密钥、API Key pepper和部署配置；OS可重建，不替代权威备份。备份包含私有内容，需加密与访问控制。
 
-灾难恢复先恢复PG、原件和同一密钥，使用匹配应用/迁移版本，在隔离网络核对发布与权限。使用generation重建投影，确认ready后再开放业务。不将旧OS快照直接连到较新PG并视为已一致。
+灾难恢复须使用同一schema及应用版本的PG、原件和密钥备份，在隔离网络核对发布与权限；该流程不兼容任意旧数据库。使用generation重建投影，确认ready后再开放业务。不将旧OS快照直接连到较新PG并视为已一致。
 
 ## 6. 诊断
 

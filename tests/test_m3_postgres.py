@@ -5,15 +5,12 @@ creates pgcrypto if necessary and drops only its randomly named test schemas.
 No model provider or OpenSearch endpoint is called.
 """
 
-import importlib.util
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from alembic.migration import MigrationContext
-from alembic.operations import Operations
 from sqlalchemy import create_engine, text
 
 from cuekb.adapters.generations import MaintenanceBusy
@@ -34,16 +31,8 @@ def pg():
         conn.execute(text(f"CREATE SCHEMA {schema}"))
     engine = create_engine(url, connect_args={"options": f"-csearch_path={schema},public"})
     try:
-        with engine.begin() as conn:
+        with engine.connect() as conn:
             conn.exec_driver_sql(Path("db/schema.sql").read_text())
-            for file in sorted(Path("migrations/versions").glob("000*.py")):
-                if file.name.startswith("0001_"):
-                    continue
-                spec = importlib.util.spec_from_file_location(file.stem, file)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                module.op = Operations(MigrationContext.configure(conn))
-                module.upgrade()
         repo = PostgreSQLRepository.__new__(PostgreSQLRepository)
         repo.engine = engine
         repo.pepper = "p" * 32
@@ -365,39 +354,3 @@ def test_pg_revocations_remain_available_during_rebuild(pg):
         pg.require_role(principal, [kb.id], "read")
     with pytest.raises(PermissionError):
         pg.assert_api_key_active(key_id)
-
-
-def test_pg_migration_backfills_existing_heading_paths(pg):
-    # Reapply only the data backfill from the migration to emulate a legacy document.
-    import ast
-
-    kb, c = seed(pg)
-    with pg._write() as conn:
-        conn.execute(
-            text("UPDATE chunks SET source_anchor=CAST(:anchor AS jsonb) WHERE id=:id"),
-            {"anchor": '{"heading_path":["Manual","Steps"]}', "id": c.id},
-        )
-        tree = ast.parse(Path("migrations/versions/0003_relations_generations.py").read_text())
-        sql = next(
-            n.args[0].value
-            for n in ast.walk(tree)
-            if isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Attribute)
-            and n.func.attr == "execute"
-        )
-        backfill = sql[
-            sql.index("    WITH paths AS") : sql.index(
-                "    CREATE INDEX chunks_section_ordinal_idx"
-            )
-        ]
-        conn.exec_driver_sql(backfill)
-        sections = (
-            conn.execute(text("SELECT * FROM sections ORDER BY jsonb_array_length(title_path)"))
-            .mappings()
-            .all()
-        )
-        assert [s["title_path"] for s in sections] == [[], ["Manual"], ["Manual", "Steps"]]
-        assert sections[1]["parent_id"] == sections[0]["id"]
-        assert sections[2]["parent_id"] == sections[1]["id"]
-        assert sections[2]["content"] == "evidence"
-    assert pg.load_chunks([c.id], [kb.id])[0].section_id == sections[2]["id"]

@@ -1,6 +1,6 @@
 # 验收与评测方法
 
-更新：2026-10-23。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
+更新：2026-10-24。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
 
 ## 1. 本地与数据库验证
 
@@ -12,9 +12,9 @@ node --check src/cuekb/portal/app.js
 sh -n scripts/deploy-production.sh
 ```
 
-真实PG测试只指向**专用测试库**，设置`CUEKB_TEST_DATABASE_URL`后运行`tests/test_m3_postgres.py`和`tests/test_v2_postgres.py`；fixture创建独立随机schema，结束后drop该schema，必要时创建public.pgcrypto，不得指向业务库。未设置时跳过，不算通过真实PG验收。
+真实PG测试只指向**专用测试库**，设置`CUEKB_TEST_DATABASE_URL`后运行`tests/test_m3_postgres.py`和`tests/test_v2_postgres.py`；fixture创建独立随机schema并直接加载完整初始化结构，结束后drop该schema，必要时创建public.pgcrypto，不得指向业务库。未设置时跳过，不算通过真实PG验收。
 
-数据库重点验证0004真实升级、不可变快照/幂等、source_version同文档FK、恢复新ID、旧清理不误删新块、发布删除/撤权竞争、pg_sleep超时取消与连接回收。OS重点验证V2映射、实际BM25、k-NN、过滤投影及索引写后校验。HTTP MockTransport仅证明适配协议，不证明真实服务质量。
+数据库测试与新部署共用完整`db/schema.sql`，重点验证空库建表、不可变快照/幂等、source_version同文档FK、恢复新ID、旧清理不误删新块、发布删除/撤权竞争、pg_sleep超时取消与连接回收。OS重点验证V2映射、实际BM25、k-NN、过滤投影及索引写后校验。HTTP MockTransport仅证明适配协议，不证明真实服务质量。
 
 ## 2. 固定验收数据
 

@@ -2,6 +2,8 @@
 
 CueKB是独立的多语言原文证据检索系统，向外部应用提供有来源、版本、归属和排序信息的多条证据。系统不生成最终答案。
 
+生产采用全新部署，PostgreSQL空数据目录首次启动自动加载`db/schema.sql`。
+
 生产架构为PostgreSQL权威存储、OpenSearch BM25/向量投影、外部Embedding与可选Reranker、确定性Worker及API内置管理门户。新增集成使用`POST /v2/search`；现有V1检索契约单独保留。
 
 ## 使用入口

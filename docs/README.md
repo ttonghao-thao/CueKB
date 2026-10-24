@@ -1,6 +1,6 @@
 # 文档导航
 
-当前规范更新于2026-10-23。源码、迁移和生成契约共同描述实现；测试结论以[任务板](../TASK_BOARD.md)为准。
+当前规范更新于2026-10-24。源码、初始化schema和生成契约共同描述实现；测试结论以[任务板](../TASK_BOARD.md)为准。
 
 | 阅读目的 | 主文档 |
 | --- | --- |
@@ -10,7 +10,7 @@
 | curl/Python、证据消费、上传发布和客户端升级 | [接入说明](INTEGRATION_GUIDE.md) |
 | 归属、充分性、负载、超时与系统限制 | [系统约束](SYSTEM_CONSTRAINTS.md) |
 | 当前模块与数据流 | [系统设计](SYSTEM_DESIGN.md) |
-| 部署、迁移、备份、索引与排错 | [操作手册](OPERATIONS.md) |
+| 全新部署、备份、索引与排错 | [操作手册](OPERATIONS.md) |
 | Embedding和可选Reranker协议 | [模型接入](MODEL_INTEGRATION.md) |
 | 质量、更新一致性和10并发测量方法 | [验收方法](ACCEPTANCE.md) |
 | 自动关联独立离线实验 | [实验说明](../experiments/associations/README.md)、[后续研究方案](plans/AUTOMATIC_ASSOCIATION.md) |

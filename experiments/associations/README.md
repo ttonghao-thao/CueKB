@@ -74,7 +74,7 @@ vector行改为`"method":"vector","vector":[...]`并省略query；向量必须�
 
 计算去重Precision@K、Recall@K、必要文档覆盖、多证据AND/OR完整覆盖、明确反例/无答案误检及按问题家族成对bootstrap区间。不同集合的金标只在评测中使用；少于5个独立家族的区间标`insufficient_families`。缺少独立关系/路径标注时准确率和错误关联率为null，已标部分必须同时报告未标数量和Wilson区间。候选池错误关联率尚未计量，不能用最终命中指标代替。
 
-`replay_cpu_ms`只测本地回放CPU墙钟时间；`http_latency_ms.measured=null`，`production_gates.status=not_evaluated`。示例的任何百分比都不能作为真实产品检索质量、延迟或生产准入证据。关系全文抽取、复杂条件、通用证据槽位、Reranker对照、实时增量任务、PG迁移及线上API均不在此阶段。
+`replay_cpu_ms`只测本地回放CPU墙钟时间；`http_latency_ms.measured=null`，`production_gates.status=not_evaluated`。示例的任何百分比都不能作为真实产品检索质量、延迟或生产准入证据。关系全文抽取、复杂条件、通用证据槽位、Reranker对照、实时增量任务、生产PG接入及线上API均不在此阶段。
 
 ```bash
 .venv/bin/pytest tests/test_association_experiments.py

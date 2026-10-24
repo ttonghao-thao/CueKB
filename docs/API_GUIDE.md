@@ -153,7 +153,7 @@ Job包含id、kb_id、document_id、version_id、status、stage、progress、err
 | 下载原件 | `GET /v1/documents/{document_id}/source?version_id=UUID`，read；省略版本下载当前published；删除/撤权后拒绝 |
 | 删除 | `DELETE /v1/documents/{document_id}`，admin，204；PG立即不可见，OpenSearch异步清理，不承诺原件/备份硬删除 |
 
-幂等键作用域为principal+KB：同键同payload返回原Job，同键不同payload返回409；重试同一写请求必须保持payload与key。普通ingest/reprocess同文档、同原件hash、同processing_profile拒绝重复；有意restore是审计过的新派生版本，允许同内容。旧版本不会因上传成功立即失效，直到新版本publish。恢复不恢复旧权限、删除状态或自动迁移人工关系。
+幂等键作用域为principal+KB：同键同payload返回原Job，同键不同payload返回409；重试同一写请求必须保持payload与key。普通ingest/reprocess同文档、同原件hash、同processing_profile拒绝重复；有意restore是审计过的新派生版本，允许同内容。旧版本不会因上传成功立即失效，直到新版本publish。恢复不恢复旧权限、删除状态或自动复制人工关系。
 
 ## 6. 公共管理接口目录
 
