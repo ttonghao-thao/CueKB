@@ -29,4 +29,4 @@
 
 完整接口、调用步骤与系统限制分别在[API_GUIDE](docs/API_GUIDE.md)、[INTEGRATION_GUIDE](docs/INTEGRATION_GUIDE.md)、[SYSTEM_CONSTRAINTS](docs/SYSTEM_CONSTRAINTS.md)维护。历史决策保留在[DECISIONS](DECISIONS.md)，已失效的方案文档不再作为接入依据。
 
-质量与性能须在固定文档版本、权限、索引、模型和配置下测量。当前没有真实语料Recall/MRR/完整率或目标主机P95达标结论；本地并发隔离测试也不能替代10并发生产验收。
+质量与性能须在固定文档版本、权限、索引、模型和配置下测量。用户TXT语料在隔离PG/OS与本地测试模型上的证据覆盖结果见任务板；尚无目标真实模型的语义质量、跨语言效果或目标主机P95达标结论，本地功能验证不能替代10并发生产验收。

@@ -92,6 +92,26 @@ chunk_ids是一个单元的OR等价ID列表；事实、必要条件分别列为A
 
 分别跑无Reranker和有Reranker，检查实际executed_stages、ranking_method及backend_calls，不只看配置开关。记录总请求数、运行时长、语料块数、目标主机CPU/GPU/内存、模型服务、网络和超时。固定query不代表每次排序完全确定，外部模型可变修订要注明。
 
+### 4.3 用户Monkey月饼语料复验
+
+`scripts/validate-monkey-corpus.py`固定用户提供的原始TXT hash与evidence-v2.3处理修订；原始文件不随仓库分发。脚本在专用本地PG中新建随机schema、在本地OS中新建随机前缀索引，启动真实API/Worker，结束后删除自己的schema/索引并停止子进程。数据库与OS必须使用loopback地址，不得指向业务实例；输出目录必须尚不存在。
+
+```sh
+CUEKB_TEST_DATABASE_URL=postgresql+psycopg://cuekb@127.0.0.1:5432/cuekb_test \
+  .venv/bin/python scripts/validate-monkey-corpus.py \
+  --input /secure/Monkey-Brand-Mooncake.txt \
+  --opensearch-url http://127.0.0.1:9200 \
+  --output /tmp/cuekb-monkey-validation
+```
+
+脚本先录制未映射结果，再按人工逐段标注重处理，保留品牌公共资料的unknown身份。覆盖必要的过敏原/配送/虚构联系方式条件、发布、下载原件与位置一致性、跨产品过滤、关系出处、generation重建与切换、restore、预算、撤权及OS投影尚未删除时的最终可见性。25个有答案场景分为exact原文短语、hybrid、adaptive、本地测试重排与Embedding故障后的真实BM25降级；exact与其他路径使用不同表达，不能把它们当成同query算法对照。
+
+Embedding与Reranker均为仅在本地运行的确定性协议fixture，向量为256维带符号词hash；它们只验证协议、真实BM25/k-NN和完整处理流程，不验证神经语义模型、跨语言召回或重排质量。无答案、中文查询英文材料和误用exact的探针单独保存。正例gold标注必要证据与少量等价单元，未穷举全部相关段落；因此不能把precision_returned当作业务相关性精度。测试deadline为5000ms，单请求闭环，不作生产900ms或10并发达标结论。
+
+独立业务断言检查双产品源单元是否将蛋黄100g/42元规格带入鲜肉产品filter；发现时在summary.business_findings、failed_checks记录并退出非零。gold覆盖与块标签一致性不能替代事实级归属验收，修复状态见任务板。
+
+输出summary.json、checks.json、review.json、frozen-cases.jsonl、quality.jsonl及responses.jsonl；后者包含用户语料原文，只保存在受控测试目录，不自动提交。场景、标注与重跑方法在脚本维护，当前实测结果在任务板维护。这里只覆盖原始TXT，DOCX/PDF/OCR及真实模型按各自验收另行执行。
+
 ## 5. 端到端独立验收
 
 CueKB验收只证明本次返回的原文证据。voice-service-agent必须独立升级严格DTO和引用映射，保留必要依赖、按预算取证，验证复合问题逐项回答、比例口述、否定/例外表达及实际播放。调用方裁剪后遗漏条件不能由CueKB的top_k或未裁剪响应承担保证。
