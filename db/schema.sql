@@ -59,8 +59,9 @@ CREATE TABLE document_versions (
   media_type text,
   original_filename text,
   auto_publish boolean NOT NULL DEFAULT false,
-  processing_profile text NOT NULL DEFAULT 'structured-v1',
-  processing_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb
+  processing_profile text NOT NULL DEFAULT 'evidence-v2:beaab5502495a35e109b598235cbfd9553a3bce0a4756d74681195a09a9a28b0'
+    CHECK(processing_profile ~ '^evidence-v2:[0-9a-f]{64}$'),
+  processing_snapshot jsonb NOT NULL DEFAULT '{"approved_entities":[],"chunker_revision":"evidence-v2.2","max_chunk_chars":1200,"parser_revision":"evidence-v2.2","profile_revision":"evidence-v2","scope_bindings":[],"structure_revision":"evidence-v2.2"}'::jsonb
     CONSTRAINT document_versions_snapshot_object CHECK(jsonb_typeof(processing_snapshot)='object'),
   derivation_kind text NOT NULL DEFAULT 'ingest'
     CHECK(derivation_kind IN ('ingest','reprocess','restore')),
@@ -220,8 +221,8 @@ CREATE TABLE index_generations (
   embedding_model text NOT NULL,
   dimension integer NOT NULL CHECK(dimension>0),
   chunking_version text NOT NULL CONSTRAINT index_generations_chunking_profile_check
-    CHECK(chunking_version='structured-v1' OR chunking_version LIKE 'evidence-v2:%'
-      OR chunking_version LIKE 'mixed:%'),
+    CHECK(chunking_version ~ '^evidence-v2:[0-9a-f]{64}$'
+      OR chunking_version ~ '^mixed:[0-9a-f]{64}$'),
   configuration bytea NOT NULL,
   status text NOT NULL CHECK(status IN ('queued','building','ready','active','retired','failed')),
   source_revision bigint NOT NULL,

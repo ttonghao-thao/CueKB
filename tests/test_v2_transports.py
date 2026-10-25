@@ -66,11 +66,11 @@ def test_native_async_opensearch_projection_and_local_filter(monkeypatch):
         try:
             await search.validate_v2_projection_async()
             rows = await search.keyword_search_async("A", [kb_id], {
-                "product_model": "A", "_local_applicability": True,
+                "product_model": "A",
             }, 20, phrase=True)
             assert rows == [(chunk_id, 1.5)]
             assert await search.vector_search_async([.1, .2], [kb_id], {}, 20) == rows
-            projection = "legacy"
+            projection = "unsupported"
             with pytest.raises(ValueError, match="index_upgrade_required"):
                 await search.validate_v2_projection_async()
         finally:
@@ -117,10 +117,10 @@ def test_lexical_projection_has_reviewed_scope_and_punctuation_preserving_identi
     backend.index([chunk], [[1., 0.]])
     assert "Reviewed Alias" in indexed[0]["_source"]["scope_text"]
     assert indexed[0]["_source"]["identifier_terms"] == ["a-100"]
-    body = backend._keyword_body("A-100", [chunk.kb_id], {"_local_applicability": True}, 10, phrase=True)
+    body = backend._keyword_body("A-100", [chunk.kb_id], {}, 10, phrase=True)
     assert body["query"]["bool"]["must"] == [{"term": {"identifier_terms": "a-100"}}]
     body = backend._keyword_body("A-100 input", [chunk.kb_id],
-        {"_local_applicability": True, "_query_identifiers": ["a-100"]}, 10)
+        {"_query_identifiers": ["a-100"]}, 10)
     assert {"terms": {"identifier_terms": ["a-100"]}} in body["query"]["bool"]["filter"]
     assert "scope_text^1.5" in body["query"]["bool"]["must"][0]["multi_match"]["fields"]
     chunk.evidence_structure.applicability.status = "ambiguous"

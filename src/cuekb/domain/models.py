@@ -2,10 +2,33 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+import hashlib
+import json
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+PROCESSING_REVISION = "evidence-v2.2"
+
+
+def default_processing_snapshot() -> dict[str, Any]:
+    """Current empty-document processing inputs, freshly allocated per version."""
+    return {
+        "profile_revision": "evidence-v2",
+        "parser_revision": PROCESSING_REVISION,
+        "chunker_revision": PROCESSING_REVISION,
+        "structure_revision": PROCESSING_REVISION,
+        "max_chunk_chars": 1200,
+        "scope_bindings": [],
+        "approved_entities": [],
+    }
+
+
+DEFAULT_PROCESSING_PROFILE = "evidence-v2:" + hashlib.sha256(json.dumps(
+    default_processing_snapshot(), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+).encode()).hexdigest()
 
 
 def utc_now() -> datetime:
@@ -74,8 +97,8 @@ class DocumentVersion(BaseModel):
     content_sha256: str = Field(min_length=64, max_length=64)
     business_version: str | None = None
     scope: dict[str, Any] = Field(default_factory=dict)
-    processing_profile: str = "structured-v1"
-    processing_snapshot: dict[str, Any] = Field(default_factory=dict)
+    processing_profile: str = DEFAULT_PROCESSING_PROFILE
+    processing_snapshot: dict[str, Any] = Field(default_factory=default_processing_snapshot)
     derivation_kind: Literal["ingest", "reprocess", "restore"] = "ingest"
     source_version_id: UUID | None = None
     status: VersionStatus = VersionStatus.UPLOADED
@@ -149,7 +172,7 @@ class EvidenceStructure(StructureModel):
     source_unit_id: str | None = Field(default=None, max_length=200)
     applicability: Applicability = Field(default_factory=Applicability)
     context_links: list[ContextLink] = Field(default_factory=list, max_length=20)
-    structure_revision: str = Field(default="legacy-unknown", min_length=1, max_length=100)
+    structure_revision: str = Field(default=PROCESSING_REVISION, min_length=1, max_length=100)
     dependency_unresolved: bool = False
     # Frozen reviewed aliases for lexical projection; not a user-facing scope assertion.
     retrieval_aliases: list[str] = Field(default_factory=list, max_length=800)
@@ -169,7 +192,7 @@ class Chunk(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     source_spans: list[SourceSpan] = Field(default_factory=list, max_length=64)
     evidence_structure: EvidenceStructure = Field(default_factory=EvidenceStructure)
-    processing_profile: str = "structured-v1"
+    processing_profile: str = DEFAULT_PROCESSING_PROFILE
     # Transport-only fields joined from documents/document_versions on authoritative reads.
     document_name: str | None = None
     content_sha256: str | None = None

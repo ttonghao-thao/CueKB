@@ -2,7 +2,7 @@
 
 CueKB是独立的多语言原文证据检索系统，向外部应用返回有来源、版本、归属及排序信息的证据，不生成最终答案。
 
-后续检索演进与验证以`POST /v2/search`为准。知识库、Key、Job、发布与模型等共享管理能力继续使用现有`/v1`路径；保留的旧检索接口不代表本轮验证覆盖它。
+所有CueKB接口统一使用`/v2`，包括检索、导入、知识库、Key、Job、发布与模型管理。接口、处理链与测试均采用V2。
 
 ## 使用入口
 
@@ -29,4 +29,4 @@ CUEKB_BACKEND=memory CUEKB_ENV=development .venv/bin/uvicorn cuekb.main:app --re
 
 默认memory后端仅供开发，不鉴权、重启丢数据，没有生产向量服务。`/portal/`提供管理界面，`/docs`提供交互接口文档。生产依赖PostgreSQL、OpenSearch、Worker及外部Embedding，按[操作手册](docs/OPERATIONS.md)使用空数据库全新部署。
 
-验证命令与各层前提统一见[验收方法](docs/ACCEPTANCE.md#1-v2与共享能力验证)。契约变更时用`make contracts`重新导出，再用`make check-contracts`校验；不以重新导出掩盖未解释的契约变化。
+验证命令与各层前提统一见[验收方法](docs/ACCEPTANCE.md#1-v2完整验证)。契约变更时用`make contracts`重新导出，再用`make check-contracts`校验；不以重新导出掩盖未解释的契约变化。

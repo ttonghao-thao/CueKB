@@ -1,6 +1,6 @@
 # 第三方接入与使用说明
 
-更新：2026-10-25。检索演进与验证以V2为范围；知识库、Key、Job和发布等共享管理接口继续使用现有`/v1`路径。配合[接口规范](API_GUIDE.md)、[系统约束](SYSTEM_CONSTRAINTS.md)及[OpenAPI](contracts/openapi.json)使用。本文不要求调用方安装CueKB服务代码。
+更新：2026-10-25。所有CueKB接口均使用`/v2`，包括知识库、Key、Job和发布管理。配合[接口规范](API_GUIDE.md)、[系统约束](SYSTEM_CONSTRAINTS.md)及[OpenAPI](contracts/openapi.json)使用。本文不要求调用方安装CueKB服务代码。
 
 ## 1. 获取接入资料
 
@@ -8,14 +8,14 @@
 
 知识库名称只用于展示，可以重复；请求的`kb_ids`必须填写创建结果的`id`（UUID）。运行方通过Portal或后台命令创建KB、签发业务Key并授权，完整步骤及交接清单见[运行方配置](#6-创建知识库与第三方配置)。创建Key返回的`id`是Key ID，`principal_id`用于KB授权，都不能代替KB UUID或密钥。
 
-先请求`GET /v1/health`和`GET /v1/ready`确认路径/依赖；ready不证明模型已配置或质量通过。使用Bearer Key调用`GET /v1/knowledge-bases`，确认KB ID和role。生产未配置Embedding时导入/搜索会409；旧投影未升级时V2会`INDEX_UPGRADE_REQUIRED`，应让管理员重建generation，不自动退回V1掩盖问题。
+先请求`GET /v2/health`和`GET /v2/ready`确认路径/依赖；ready不证明模型已配置或质量通过。使用Bearer Key调用`GET /v2/knowledge-bases`，确认KB ID和role。生产未配置Embedding时导入/搜索会409；旧投影未升级时V2会`INDEX_UPGRADE_REQUIRED`，应让管理员重建generation，不能忽略错误继续使用不匹配的投影。
 
 ## 2. 最小搜索调用
 
-在调用方环境设置`CUEKB_BASE_URL`、`CUEKB_API_KEY`、`CUEKB_KB_ID`；这些是示例变量，实际变量名由客户端实现决定。Base URL不带`/v1`或`/v2`。示例request.json中的KB UUID必须替换为被授权的真实值；不要把示例业务内容当成生产知识。
+在调用方环境设置`CUEKB_BASE_URL`、`CUEKB_API_KEY`、`CUEKB_KB_ID`；这些是示例变量，实际变量名由客户端实现决定。Base URL不带`/v2`。示例request.json中的KB UUID必须替换为被授权的真实值；不要把示例业务内容当成生产知识。
 
 ```bash
-curl --fail-with-body "$CUEKB_BASE_URL/v1/knowledge-bases" \
+curl --fail-with-body "$CUEKB_BASE_URL/v2/knowledge-bases" \
   -H "Authorization: Bearer $CUEKB_API_KEY"
 
 curl --fail-with-body "$CUEKB_BASE_URL/v2/search" \
@@ -81,10 +81,10 @@ curl --fail-with-body "$CUEKB_BASE_URL/v2/documents" \
   -F 'metadata=<metadata.json' -F 'file=@manual.md;type=text/markdown'
 ```
 
-记录202返回的Job ID；通过`GET /v1/jobs/{id}`轮询。失败记录error_code；ready时使用`GET /v2/documents/{document_id}`检查新版本/profile，需要时下载原件核对。随后用write权限调用publish：
+记录202返回的Job ID；通过`GET /v2/jobs/{id}`轮询。失败记录error_code；ready时使用`GET /v2/documents/{document_id}`检查新版本/profile，需要时下载原件核对。随后用write权限调用publish：
 
 ```bash
-curl --fail-with-body "$CUEKB_BASE_URL/v1/documents/$CUEKB_DOCUMENT_ID/publish" \
+curl --fail-with-body "$CUEKB_BASE_URL/v2/documents/$CUEKB_DOCUMENT_ID/publish" \
   -H "Authorization: Bearer $CUEKB_WRITE_KEY" -H 'Content-Type: application/json' \
   --data-binary @publish.json
 ```
@@ -108,7 +108,7 @@ voice-service-agent尤其需要同步请求/响应模型、Adapter、Citation/Co
 
 第三方必须使用**知识库 ID（UUID）**，检索请求字段为 `kb_ids: ["<UUID>"]`。知识库名称 `name` 只用于展示，允许同名，不能代替 ID，也不能作为唯一查找条件。ID 由 CueKB 自动生成；创建接口返回的 `id` 就是检索所用的知识库 ID。
 
-创建知识库需要 **system admin** Key，通常使用部署时设置的 `CUEKB_BOOTSTRAP_API_KEY`。单个知识库的 `admin` 角色不代表系统管理员。创建只需要名称（去除首尾空白后 1–200 字符），描述可选（最多 2000 字符）；无需指定产品、模型或 ID。两种创建入口都调用 `POST /v1/knowledge-bases`，创建后是空库，仍需配置 Embedding、导入并发布文档才能检索证据。
+创建知识库需要 **system admin** Key，通常使用部署时设置的 `CUEKB_BOOTSTRAP_API_KEY`。单个知识库的 `admin` 角色不代表系统管理员。创建只需要名称（去除首尾空白后 1–200 字符），描述可选（最多 2000 字符）；无需指定产品、模型或 ID。两种创建入口都调用 `POST /v2/knowledge-bases`，创建后是空库，仍需配置 Embedding、导入并发布文档才能检索证据。
 
 ### 方式一：Portal
 
@@ -162,7 +162,7 @@ docker compose --env-file .env.production exec -T api \
 
 | 信息 | 必需性与用法 |
 | --- | --- |
-| Base URL | 必需；从第三方服务器可达的 CueKB 根地址，不带 `/v1`、`/v2` 或 `/portal/`；远程生产使用 HTTPS 或受控加密链路 |
+| Base URL | 必需；从第三方服务器可达的 CueKB 根地址，不带 `/v2` 或 `/portal/`；远程生产使用 HTTPS 或受控加密链路 |
 | 业务 API Key | 必需；已对目标 KB 授权，放在 `Authorization: Bearer <api_key>`；不要把 Key ID 或 `principal_id` 当密钥 |
 | 知识库 UUID 列表 | 必需；放入 `kb_ids`，例如 `["11111111-1111-4111-8111-111111111111"]`；使用实际 ID，名称仅供展示 |
 | 接口和契约 | 新接入为 `POST /v2/search`；提供 [OpenAPI](contracts/openapi.json)、[接口规范](API_GUIDE.md)及[接入说明](INTEGRATION_GUIDE.md) |

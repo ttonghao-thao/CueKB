@@ -13,11 +13,11 @@ const dateText = (value) => value ? new Intl.DateTimeFormat("zh-CN", { dateStyle
 const roleText = { read: "只读", write: "可编辑", admin: "管理员" };
 const statusText = { uploaded: "已上传", parsing: "解析中", needs_review: "待复核", indexing: "索引中", ready: "待发布", published: "已发布", superseded: "已替换", failed: "失败", queued: "排队中", running: "处理中", succeeded: "成功" };
 
-async function api(path, options = {}, version = "v1") {
+async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (state.apiKey) headers.set("Authorization", `Bearer ${state.apiKey}`);
   if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
-  const response = await fetch(`/${version}${path}`, { ...options, headers });
+  const response = await fetch(`/v2${path}`, { ...options, headers });
   if (response.status === 204) return null;
   const contentType = response.headers.get("content-type") || "";
   const body = contentType.includes("application/json") ? await response.json() : await response.text();
@@ -312,7 +312,7 @@ async function deleteDocument(doc) {
 
 async function downloadSource(documentId, versionId) {
   try {
-    const response = await fetch(`/v1/documents/${documentId}/source?version_id=${versionId}`, { headers: { Authorization: `Bearer ${state.apiKey}` } });
+    const response = await fetch(`/v2/documents/${documentId}/source?version_id=${versionId}`, { headers: { Authorization: `Bearer ${state.apiKey}` } });
     if (!response.ok) throw new Error((await response.json()).detail || "download_failed");
     const blob = await response.blob();
     const disposition = response.headers.get("content-disposition") || "";
@@ -364,10 +364,7 @@ async function pollJob(id) {
 function renderSearchEvidence(hit) {
   const primary = `<div class="evidence-primary"><p class="muted">命中原文</p><p>${escapeHtml(hit.source_text)}</p></div>`;
   const parts = (hit.context_parts || []).filter(part => part.chunk_id !== hit.chunk_id);
-  const context = parts.length
-    ? parts.map(part => `<div class="evidence-context"><p class="muted">${part.required ? "必要上下文" : "相关上下文"} · ${escapeHtml(shortId(part.chunk_id))}</p><p>${escapeHtml(part.source_text)}</p></div>`).join("")
-    : hit.context && hit.context !== hit.source_text
-      ? `<div class="evidence-context"><p class="muted">补充上下文</p><p>${escapeHtml(hit.context)}</p></div>` : "";
+  const context = parts.map(part => `<div class="evidence-context"><p class="muted">${part.required ? "必要上下文" : "相关上下文"} · ${escapeHtml(shortId(part.chunk_id))}</p><p>${escapeHtml(part.source_text)}</p></div>`).join("");
   const note = hit.context_state === "unresolved"
     ? '<p class="evidence-note">必要上下文不完整，请核验适用条件。</p>'
     : hit.context_truncated ? '<p class="evidence-note">部分上下文因预算省略，命中原文仍完整展示。</p>' : "";
@@ -379,10 +376,9 @@ async function search(event) {
   if (!state.currentKb) return toast("请先选择知识库", "error");
   $("#search-results").innerHTML = '<div class="loading">正在检索…</div>';
   try {
-    const contract = $("#search-contract").value;
-    const selection = contract === "v2" ? { selection_mode: $("#selection-mode").value,
-      ...($("#selection-mode").value === "adaptive" ? { query_facets: $("#query-facets").value.split("\n").map(value => value.trim()).filter(Boolean) } : {}) } : {};
-    const result = await api("/search", { method: "POST", body: JSON.stringify({ query: $("#query").value.trim(), kb_ids: [state.currentKb.id], mode: $("#search-mode").value, top_k: Number($("#top-k").value), include_context: true, ...selection, filters: { product_model: $("#search-product").value.trim() || null, software_version: $("#search-software").value.trim() || null }, relations: { entity_ids: splitValues($("#search-entities").value), types: splitValues($("#search-relation-types").value), direction: $("#search-direction").value, at: $("#search-at").value.trim() || null } }) }, contract);
+    const selection = { selection_mode: $("#selection-mode").value,
+      ...($("#selection-mode").value === "adaptive" ? { query_facets: $("#query-facets").value.split("\n").map(value => value.trim()).filter(Boolean) } : {}) };
+    const result = await api("/search", { method: "POST", body: JSON.stringify({ query: $("#query").value.trim(), kb_ids: [state.currentKb.id], mode: $("#search-mode").value, top_k: Number($("#top-k").value), include_context: true, ...selection, filters: { product_model: $("#search-product").value.trim() || null, software_version: $("#search-software").value.trim() || null }, relations: { entity_ids: splitValues($("#search-entities").value), types: splitValues($("#search-relation-types").value), direction: $("#search-direction").value, at: $("#search-at").value.trim() || null } }) });
     $("#search-summary").textContent = `${result.hits.length} 条证据${result.scope_limited ? " · 仅有界一跳，不代表全部影响范围" : ""} · 路径 ${result.retrieval_path} · ${(result.timings_ms.total || 0).toFixed(1)} ms${result.degraded_reasons.length ? ` · 降级：${result.degraded_reasons.join(", ")}` : ""}`;
     if (result.ranking_method) $("#search-summary").textContent += ` · 排序 ${result.ranking_method} · 证据状态 ${result.evidence_status} · ${result.diagnostics.sizes.hits_bytes} bytes`;
     if (result.diagnostics?.selection) $("#search-summary").textContent += ` · 动态停止 ${result.diagnostics.selection.stop_reason} · 校准 ${result.diagnostics.selection.calibration_status}`;

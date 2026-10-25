@@ -28,6 +28,7 @@ class OpenSearchBackend:
     def ensure_index(self) -> None:
         if self.client.indices.exists(index=self.index_name):
             self.validate_existing_index()
+            self.validate_v2_projection()
             return
         self.client.indices.create(
             index=self.index_name,
@@ -83,22 +84,16 @@ class OpenSearchBackend:
             raise RuntimeError("opensearch_embedding_dimension_mismatch")
 
     def validate_v2_projection(self) -> None:
-        """Old projections remain usable by V1; V2 requires an explicit rebuild."""
+        """Reject any index that does not implement the current V2 projection."""
         mapping = self.client.indices.get_mapping(index=self.index_name)[self.index_name][
             "mappings"
         ]
         if (mapping.get("_meta", {}).get("projection_version") != "evidence-v2"
-                or mapping.get("_meta", {}).get("lexical_revision") != LEXICAL_REVISION):
+                or mapping.get("_meta", {}).get("lexical_revision") != LEXICAL_REVISION
+                or mapping.get("_meta", {}).get("input_template_revision") != "evidence-v2"
+                or mapping.get("_meta", {}).get("embedding_model") != self.embedding_model
+                or mapping.get("properties", {}).get("embedding", {}).get("dimension") != self.dimension):
             raise ValueError("index_upgrade_required")
-
-    def get_input_template(self) -> str:
-        if not self.client.indices.exists(index=self.index_name):
-            return "evidence-v2"
-        mapping = self.client.indices.get_mapping(index=self.index_name)[self.index_name]["mappings"]
-        value = mapping.get("_meta", {}).get("input_template_revision", "structured-v1")
-        if value not in {"structured-v1", "evidence-v2"}:
-            raise ValueError("unsupported_index_input_template")
-        return value
 
     def index(
         self, chunks: Sequence[Chunk], vectors: Sequence[Sequence[float]] | None = None
@@ -174,13 +169,9 @@ class OpenSearchBackend:
         )
 
     def _keyword_body(self, query, kb_ids, filters, limit, phrase=False) -> dict:
-        local = filters.get("_local_applicability", False)
-        fields = (
-            ["source_text^3", "title_text", "scope_text^1.5", "table_labels", "document_name^0.25"]
-            if local else ["search_text^2", "source_text"]
-        )
-        product_field = "applicable_product_models" if local else "product_model"
-        version_field = "applicable_software_versions" if local else "software_version"
+        fields = ["source_text^3", "title_text", "scope_text^1.5", "table_labels", "document_name^0.25"]
+        product_field = "applicable_product_models"
+        version_field = "applicable_software_versions"
         if phrase:
             # Exact path: phrase match on the analyzed text plus exact equality on
             # identifier keyword fields, so near-miss model numbers do not leak in.
@@ -202,7 +193,7 @@ class OpenSearchBackend:
             }
             # Identifier queries use punctuation-preserving keyword tokens. An
             # analyzed phrase alone can otherwise conflate nearby model numbers.
-            if local and identifier_terms(query) == {query.casefold().strip()}:
+            if identifier_terms(query) == {query.casefold().strip()}:
                 must = {"term": {"identifier_terms": query.casefold().strip()}}
         else:
             must = {
@@ -350,11 +341,9 @@ class OpenSearchBackend:
             if filters.get(key):
                 field = (
                     {"product_model": "applicable_product_models", "software_version": "applicable_software_versions"}.get(key, key)
-                    if filters.get("_local_applicability") else key
                 )
                 result.append({"term": {field: filters[key]}})
-        if filters.get("_local_applicability"):
-            result.append({"bool": {"must_not": [{"term": {"block_kind": "heading"}}]}})
-            if filters.get("_query_identifiers"):
-                result.append({"terms": {"identifier_terms": filters["_query_identifiers"]}})
+        result.append({"bool": {"must_not": [{"term": {"block_kind": "heading"}}]}})
+        if filters.get("_query_identifiers"):
+            result.append({"terms": {"identifier_terms": filters["_query_identifiers"]}})
         return result

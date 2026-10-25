@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cuekb.domain.models import Chunk, SourceAnchor
 from cuekb.config import Settings
-from cuekb.schemas import RelationQuery, SearchFilters, SearchRequest
+from cuekb.schemas import RelationQuery, SearchFilters, V2SearchRequest
 
 
 def digest(value: Any) -> str:
@@ -180,7 +180,7 @@ class QueryCase(StrictModel):
     split: Literal["development", "calibration", "test"]
     category: Literal["simple", "multi_evidence", "hard_negative", "unanswerable"]
     principal_id: UUID
-    request: SearchRequest
+    request: V2SearchRequest
     vector: list[float] | None = None
     context: dict[UUID, dict[str, str]] = Field(default_factory=dict)
     gold: Gold
@@ -190,7 +190,7 @@ class QueryCase(StrictModel):
     def nested_fields(cls, value):
         if isinstance(value, dict) and isinstance(value.get("request"), dict):
             request = value["request"]
-            require_known_fields(request, SearchRequest, "unknown_search_field")
+            require_known_fields(request, V2SearchRequest, "unknown_search_field")
             require_known_fields(request.get("filters"), SearchFilters, "unknown_filter_field")
             require_known_fields(request.get("relations"), RelationQuery, "unknown_relation_query_field")
         return value

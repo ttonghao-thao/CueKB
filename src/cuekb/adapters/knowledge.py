@@ -160,30 +160,6 @@ class KnowledgeOperations:
             with self._connection() as conn:
                 yield conn
 
-    def context_chunks(self: Any, chunk, limit):
-        with self._read() as conn:
-            rows = conn.execute(
-                text(
-                    """SELECT c.* FROM chunks c """
-                    + VISIBLE
-                    + """
-              WHERE c.version_id=:v AND c.kb_id=:kb AND (
-                c.section_id IS NOT DISTINCT FROM :s OR c.section_id IN (
-                  SELECT parent_id FROM sections WHERE id=:s
-                ) OR abs(c.ordinal-:o)<=1)
-              ORDER BY (c.id=:id) DESC, abs(c.ordinal-:o), c.ordinal LIMIT :n"""
-                ),
-                {
-                    "v": chunk.version_id,
-                    "kb": chunk.kb_id,
-                    "s": chunk.section_id,
-                    "o": chunk.ordinal,
-                    "id": chunk.id,
-                    "n": limit,
-                },
-            ).mappings()
-            return [self._chunk(row) for row in rows]
-
     def context_chunks_v2(self: Any, chunk, limit, include_optional=True):
         from cuekb.services.evidence import scope_compatible
 

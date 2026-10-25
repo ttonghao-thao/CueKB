@@ -992,12 +992,12 @@
         "chunk_id",
         "document_id",
         "version_id",
-        "rank",
         "source_text",
         "title_path",
         "anchor",
         "metadata",
         "retrieval_sources",
+        "rank",
         "score",
         "score_type",
         "processing_profile",
@@ -1227,10 +1227,10 @@
     "retrieval_status",
     "content_revisions",
     "timings_ms",
-    "hits",
     "ranking_method",
     "ranking_version",
-    "diagnostics"
+    "diagnostics",
+    "hits"
   ],
   "title": "V2SearchResponse",
   "type": "object"

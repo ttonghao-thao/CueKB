@@ -28,7 +28,7 @@ chmod 600 .env.production
 
 自定义镜像标签须写入env中的`CUEKB_API_IMAGE`/`CUEKB_WORKER_IMAGE`。部署脚本只做Compose检查及`up --no-build`，不自动构建或拉取应用镜像。PostgreSQL首次在空数据目录启动时自动初始化当前完整结构；API/Worker等待PG和OS健康后启动。健康检查不代表模型质量已验收。
 
-检查`GET /v1/health`、`GET /v1/ready`与`/portal/`。部署脚本的宿主机探针使用兼容旧版curl的`--fail --silent --show-error`，带连接/单次请求超时及有界重试。旧脚本若报`--fail-with-body: is unknown`，将该选项替换为`--fail --show-error`后重跑脚本即可，无需为此重建应用镜像。生产业务API使用Bearer Key；健康和ready公开但不返回凭据。创建业务Key并授予目标KB read/write/admin，第三方查询不要使用bootstrap。
+检查`GET /v2/health`、`GET /v2/ready`与`/portal/`。部署脚本的宿主机探针使用兼容旧版curl的`--fail --silent --show-error`，带连接/单次请求超时及有界重试。旧脚本若报`--fail-with-body: is unknown`，将该选项替换为`--fail --show-error`后重跑脚本即可，无需为此重建应用镜像。生产业务API使用Bearer Key；健康和ready公开但不返回凭据。创建业务Key并授予目标KB read/write/admin，第三方查询不要使用bootstrap。
 
 知识库通过Portal的“知识库管理”或`python -m cuekb.admin ... kb create`创建；命令复用HTTP API，不直接写数据库。创建、列举、业务Key签发和授权的可执行命令，以及第三方所需的Base URL、业务Key和KB UUID，统一见[接入说明](INTEGRATION_GUIDE.md#6-创建知识库与第三方配置)。更新应用后须重新构建API镜像才能使用新页面及命令模块。
 
@@ -38,7 +38,7 @@ chmod 600 .env.production
 
 全新部署必须使用新的空PG数据卷。已有数据目录不会重新执行初始化文件，不属于本次部署输入；需要与旧实例隔离时可为新部署设置独立`COMPOSE_PROJECT_NAME`并处理宿主端口冲突。部署脚本不清理旧容器或数据卷，也不修改已有库结构。保留仓库中的`db/schema.sql`，缺文件时Compose挂载应直接失败；仅重建应用镜像不能改变已有数据库结构。
 
-在门户配置Embedding后，Worker为新文档创建带`lexical_revision=scope-lexical-v2.2`的V2搜索投影。更换Embedding、维度、输入模板或词法投影时，由系统管理员通过`POST /v1/index-generations`创建重建任务，省略`chunking_version`，等待ready后activate。维护锁期间内容写入409；已兼容的查询继续，缺少新词法revision的V2查询明确INDEX_UPGRADE_REQUIRED，不临时把旧字段当作新字段。该流程只重建搜索投影，不改变数据库结构。
+在门户配置Embedding后，Worker为新文档创建带`lexical_revision=scope-lexical-v2.2`的V2搜索投影。更换Embedding、维度、输入模板或词法投影时，由系统管理员通过`POST /v2/index-generations`创建重建任务，省略`chunking_version`，等待ready后activate。维护锁期间内容写入409；已兼容的查询继续，缺少新词法revision的V2查询明确INDEX_UPGRADE_REQUIRED，不临时把旧字段当作新字段。该流程只重建搜索投影，不改变数据库结构。
 
 需要新的解析/归属时，对文档单独执行V2 reprocess，检查新版本再publish；generation不会自动重切块。想恢复旧事实则用restore生成全新块ID、等待ready后发布。generation rollback只重建当前事实的旧模型投影。
 

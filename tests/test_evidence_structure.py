@@ -61,7 +61,7 @@ def neighbor(hit, text, *, name=None, ordinal=1):
     return result
 
 
-def test_legacy_chunks_do_not_gain_scope_from_document_tags():
+def test_unresolved_chunks_do_not_gain_scope_from_document_tags():
     hit = Chunk(kb_id=uuid4(), document_id=uuid4(), version_id=uuid4(), ordinal=0,
                 source_text="45 days", search_text="45 days", metadata={"product_model": "A"})
     assert hit.evidence_structure.applicability.status == "unknown"
@@ -245,7 +245,8 @@ def test_search_input_is_deterministic_and_never_changes_source_or_says_internal
     assert "Golden Yolk" in result and source in result
     assert str(hit.evidence_structure.applicability.subjects[0].entity_id) not in result
     assert hit.source_text == source
-    assert build_search_text(hit, "Products", template="structured-v1") == "Products\n\nWeight: 120 g."
+    with pytest.raises(ValueError, match="unsupported_model_input_template"):
+        build_search_text(hit, "Products", template="unsupported")
 
 
 def test_scope_unit_reprocess_binding_relocates_but_stores_new_version_identity():

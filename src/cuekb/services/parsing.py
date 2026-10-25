@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,28 +34,29 @@ class ParseError(RuntimeError):
 
 def parse_document(
     content: bytes, filename: str, media_type: str | None, *,
-    processing_profile: str = "structured-v1",
+    processing_profile: str = "evidence-v2",
     processing_snapshot: dict[str, Any] | None = None,
     version_id: UUID | None = None,
 ) -> list[ParsedBlock]:
-    modern = processing_profile == "evidence-v2" or processing_profile.startswith("evidence-v2:")
-    if processing_profile != "structured-v1" and not modern:
+    if processing_profile != "evidence-v2" and not re.fullmatch(r"evidence-v2:[0-9a-f]{64}", processing_profile):
         raise ParseError("unsupported_processing_profile")
-    if modern and processing_snapshot and any(
+    if processing_profile != "evidence-v2":
+        encoded = json.dumps(processing_snapshot or {}, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        if processing_profile != "evidence-v2:" + hashlib.sha256(encoded.encode()).hexdigest():
+            raise ParseError("processing_snapshot_hash_mismatch")
+    if processing_snapshot and any(
         processing_snapshot.get(key, PROCESSING_REVISION) != PROCESSING_REVISION
         for key in ("parser_revision", "chunker_revision", "structure_revision")
     ):
         raise ParseError("unsupported_frozen_processing_revision")
     suffix = Path(filename).suffix.lower()
     if suffix in {".txt", ".md", ".markdown"} or media_type in {"text/plain", "text/markdown"}:
-        if modern:
-            blocks = _parse_text_v2(
-                content, markdown=suffix in {".md", ".markdown"} or media_type == "text/markdown",
-                snapshot=processing_snapshot, version_id=version_id,
-            )
-            _validate_scope_bindings(blocks, processing_snapshot)
-            return blocks
-        return _parse_text(content, markdown=suffix in {".md", ".markdown"})
+        blocks = _parse_text_v2(
+            content, markdown=suffix in {".md", ".markdown"} or media_type == "text/markdown",
+            snapshot=processing_snapshot, version_id=version_id,
+        )
+        _validate_scope_bindings(blocks, processing_snapshot)
+        return blocks
     if suffix not in {".pdf", ".docx"}:
         raise ParseError("unsupported_file_type")
     try:
@@ -81,10 +84,9 @@ def parse_document(
             label = getattr(getattr(item, "label", None), "value", "")
             if isinstance(item, TextItem) and label in {"title", "section_header"}:
                 headings = headings[: max(level - 1, 0)] + [item.text.strip()]
-                if modern:
-                    heading_spans = heading_spans[: max(level - 1, 0)] + _item_spans(
-                        item, item.text.strip(), headings, "heading"
-                    )[:1]
+                heading_spans = heading_spans[: max(level - 1, 0)] + _item_spans(
+                    item, item.text.strip(), headings, "heading"
+                )[:1]
                 continue
             if isinstance(item, TextItem):
                 value = item.text.strip()
@@ -102,126 +104,21 @@ def parse_document(
                 end_offset=provenance.charspan[1] if provenance else None,
                 bbox=provenance.bbox.model_dump() if provenance else None,
             )
-            if modern:
-                spans = _item_spans(item, value, headings, "table" if isinstance(item, TableItem) else "text")
-                blocks.extend(_split_block_v2(
-                    value, headings, anchor, heading_spans=heading_spans,
-                    snapshot=processing_snapshot, version_id=version_id,
-                    identity=f"docling:{getattr(item, 'self_ref', item_index)}",
-                    original_spans=spans,
-                ))
-            else:
-                blocks.extend(_split_block(value, headings, anchor))
+            spans = _item_spans(item, value, headings, "table" if isinstance(item, TableItem) else "text")
+            blocks.extend(_split_block_v2(
+                value, headings, anchor, heading_spans=heading_spans,
+                snapshot=processing_snapshot, version_id=version_id,
+                identity=f"docling:{getattr(item, 'self_ref', item_index)}",
+                original_spans=spans,
+            ))
     except Exception as exc:
         raise ParseError("document_parse_failed", retryable=True) from exc
     finally:
         temporary.unlink(missing_ok=True)
     if not blocks:
         raise ParseError("empty_content")
-    if modern:
-        _validate_scope_bindings(blocks, processing_snapshot)
+    _validate_scope_bindings(blocks, processing_snapshot)
     return blocks
-
-
-def _parse_text(content: bytes, markdown: bool) -> list[ParsedBlock]:
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ParseError("invalid_utf8") from exc
-    if not text.strip():
-        raise ParseError("empty_content")
-    if text.count("\ufffd") / max(len(text), 1) > 0.01:
-        raise ParseError("replacement_character_ratio_high")
-    blocks: list[ParsedBlock] = []
-    headings: list[str] = []
-    pending: list[str] = []
-    pending_start = 0
-    offset = 0
-    fenced = False
-
-    def flush() -> None:
-        value = "".join(pending).strip()
-        if value:
-            raw = "".join(pending)
-            start = pending_start + len(raw) - len(raw.lstrip())
-            blocks.extend(
-                _split_block(
-                    value,
-                    headings,
-                    SourceAnchor(
-                        heading_path=headings.copy(),
-                        start_offset=start,
-                        end_offset=start + len(value),
-                    ),
-                )
-            )
-        pending.clear()
-
-    for line in text.splitlines(keepends=True):
-        heading = (
-            re.match(r"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line) if markdown and not fenced else None
-        )
-        if heading:
-            flush()
-            level = len(heading[1])
-            headings = headings[: level - 1] + [heading[2]]
-        elif not line.strip() and not fenced:
-            flush()
-        else:
-            if not pending:
-                pending_start = offset
-            pending.append(line)
-        if markdown and line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
-        offset += len(line)
-    flush()
-    if not blocks:
-        raise ParseError("empty_content")
-    return blocks
-
-
-def _split_block(
-    value: str, headings: list[str], anchor: SourceAnchor, max_chars: int = 1200
-) -> list[ParsedBlock]:
-    lines = value.splitlines()
-    if len(lines) > 2 and "|" in lines[0] and re.match(r"^\s*\|?[\s:|\-]+\|?\s*$", lines[1]):
-        header = "\n".join(lines[:2])
-        if len(value) > max_chars and len(header) < max_chars // 2:
-            result: list[ParsedBlock] = []
-            rows: list[str] = []
-            for row in lines[2:]:
-                # Keep units and column labels with every split row.
-                for start in range(0, max(len(row), 1), max_chars - len(header) - 1):
-                    piece = row[start : start + max_chars - len(header) - 1]
-                    if (
-                        rows
-                        and len(header) + sum(len(r) + 1 for r in rows) + len(piece) + 1 > max_chars
-                    ):
-                        result.append(
-                            ParsedBlock(header + "\n" + "\n".join(rows), headings.copy(), anchor)
-                        )
-                        rows = []
-                    rows.append(piece)
-            if rows:
-                result.append(ParsedBlock(header + "\n" + "\n".join(rows), headings.copy(), anchor))
-            return result
-    if len(value) <= max_chars:
-        return [ParsedBlock(value, headings.copy(), anchor)]
-    result = []
-    for start in range(0, len(value), max_chars):
-        item = value[start : start + max_chars]
-        child = anchor.model_copy(
-            update={
-                "start_offset": anchor.start_offset + start
-                if anchor.start_offset is not None
-                else None,
-                "end_offset": min(anchor.start_offset + start + len(item), anchor.end_offset)
-                if anchor.start_offset is not None and anchor.end_offset is not None
-                else None,
-            }
-        )
-        result.append(ParsedBlock(item, headings.copy(), child))
-    return result
 
 
 def _item_spans(item: Any, text: str, headings: list[str], label: str) -> list[SourceSpan]:

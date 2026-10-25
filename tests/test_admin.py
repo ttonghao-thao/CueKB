@@ -29,7 +29,7 @@ def test_cli_creates_and_lists_through_real_api(cli, capsys):
         with TestClient(create_app()) as api:
             def send(request):
                 assert request.headers["authorization"] == "Bearer business-test-key"
-                assert request.url.path.startswith("/prefix/v1/")
+                assert request.url.path.startswith("/prefix/v2/")
                 return api.request(request.method, request.url.path.removeprefix("/prefix"),
                                    content=request.content, headers=request.headers)
 
@@ -62,7 +62,7 @@ def test_cli_business_key_and_grant_use_correct_ids(cli, monkeypatch, capsys):
             return httpx.Response(201, json={"id": str(key_id), "principal_id": str(principal_id),
                                             "api_key": "new-business-key"})
         assert request.method == "PUT"
-        assert request.url.path == f"/prefix/v1/knowledge-bases/{kb_id}/grants"
+        assert request.url.path == f"/prefix/v2/knowledge-bases/{kb_id}/grants"
         assert json.loads(request.content) == {"principal_id": str(principal_id), "role": "read"}
         return httpx.Response(204)
 

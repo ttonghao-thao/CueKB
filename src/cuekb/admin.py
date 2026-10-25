@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import sys
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -27,7 +28,7 @@ def _timeout(value: str) -> float:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage CueKB through its authenticated HTTP API.")
     parser.add_argument("--base-url", default=os.environ.get("CUEKB_BASE_URL", ""),
-                        help="CueKB root URL (or CUEKB_BASE_URL), without /v1 or /v2")
+                        help="CueKB root URL (or CUEKB_BASE_URL), without an API version suffix")
     credentials = parser.add_mutually_exclusive_group()
     credentials.add_argument("--api-key-file", type=Path, help="read the API key from a protected file")
     credentials.add_argument("--bootstrap", action="store_true",
@@ -59,7 +60,7 @@ def _credentials(args, parser) -> tuple[str, str]:
         valid = (url.scheme in {"http", "https"} and url.hostname and url.port != 0
                  and url.username is None and url.password is None and not url.query and not url.fragment
                  and not any(char.isspace() or ord(char) < 32 for char in base_url)
-                 and not url.path.rstrip("/").endswith(("/v1", "/v2")))
+                 and re.search(r"/v\d+$", url.path.rstrip("/")) is None)
         httpx.URL(base_url)
     except (ValueError, httpx.InvalidURL):
         valid = False
@@ -81,14 +82,14 @@ def _credentials(args, parser) -> tuple[str, str]:
 def _request(args) -> tuple[str, str, dict | None]:
     if args.resource == "key":
         payload = ApiKeyCreate(principal_name=args.principal_name.strip(), label=args.label.strip())
-        return "POST", "v1/api-keys", payload.model_dump(mode="json")
+        return "POST", "v2/api-keys", payload.model_dump(mode="json")
     if args.action == "create":
         payload = KnowledgeBaseCreate(name=args.name, description=args.description)
-        return "POST", "v1/knowledge-bases", payload.model_dump(mode="json")
+        return "POST", "v2/knowledge-bases", payload.model_dump(mode="json")
     if args.action == "grant":
         payload = GrantCreate(principal_id=args.principal_id, role=args.role)
-        return "PUT", f"v1/knowledge-bases/{args.kb_id}/grants", payload.model_dump(mode="json")
-    return "GET", "v1/knowledge-bases", None
+        return "PUT", f"v2/knowledge-bases/{args.kb_id}/grants", payload.model_dump(mode="json")
+    return "GET", "v2/knowledge-bases", None
 
 
 def _error(error_code: str, **details) -> int:

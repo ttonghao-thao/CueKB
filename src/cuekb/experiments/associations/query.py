@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Callable, Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from cuekb.services.retrieval import QueryRouter, rrf
+from cuekb.services.ranking import QueryRouter, rrf
 
 from .corpus import FixtureSearch, ReplaySearch, Snapshot, tokens
 from .extraction import claim_key, condition_match, extract_row, mentions

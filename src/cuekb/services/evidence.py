@@ -18,11 +18,9 @@ from cuekb.domain.models import (
     Chunk,
     ContextLink,
     EvidenceStructure,
+    PROCESSING_REVISION,
     SourceSpan,
 )
-
-PROCESSING_REVISION = "evidence-v2.2"
-
 
 def _identity(subject: ApplicableSubject) -> tuple[str, str | None, str | None]:
     identity = str(subject.entity_id) if subject.entity_id else subject.display_name.casefold()
@@ -297,16 +295,11 @@ def build_search_text(
 ) -> str:
     """Shared immutable model-input template; never writes back to source_text.
 
-    Legacy vectors retain their original template. New structure is only used
-    when its processing profile declares evidence-v2, and only resolved scope
-    can augment the model input. The generation/model template is independently
-    versioned by the caller's registered model configuration.
+    Only resolved scope can augment the model input. The generation/model
+    template is independently versioned by the registered model configuration.
     """
     if max_chars < 1:
         raise ValueError("invalid_model_input_budget")
-    legacy = f"{document_name}\n{' / '.join(chunk.title_path)}\n{chunk.source_text}"
-    if template == "structured-v1":
-        return legacy[:max_chars]
     if template != "evidence-v2":
         raise ValueError("unsupported_model_input_template")
     context = [document_name, " / ".join(chunk.title_path)]

@@ -166,20 +166,20 @@ class InMemoryRepository:
             )
         return result
 
-    def context_chunks(self, chunk, limit):
-        candidates = [
-            c
-            for c in self.visible_chunks([chunk.kb_id])
-            if c.version_id == chunk.version_id
-            and (
-                c.title_path == chunk.title_path
-                or c.title_path == chunk.title_path[:-1]
-                or abs(c.ordinal - chunk.ordinal) <= 1
-            )
-        ]
-        return sorted(
-            candidates, key=lambda c: (c.id != chunk.id, abs(c.ordinal - chunk.ordinal), c.ordinal)
-        )[:limit]
+    def context_chunks_v2(self, chunk, limit, include_optional=True):
+        from cuekb.services.evidence import scope_compatible
+
+        links = {link.chunk_id: link for link in chunk.evidence_structure.context_links}
+        candidates = [c for c in self.visible_chunks([chunk.kb_id])
+            if c.document_id == chunk.document_id and c.version_id == chunk.version_id
+            and (c.id == chunk.id or c.id in links or (include_optional and (
+                c.evidence_structure.source_unit_id == chunk.evidence_structure.source_unit_id
+                or (c.title_path == chunk.title_path and abs(c.ordinal - chunk.ordinal) <= 1))))
+            and scope_compatible(chunk, c,
+                required=links[c.id].required if c.id in links else False,
+                role=links[c.id].role if c.id in links else None)]
+        return sorted(candidates, key=lambda c: (c.id != chunk.id, c.id not in links,
+            abs(c.ordinal - chunk.ordinal), c.ordinal))[:max(limit, len(links) + 1)]
 
     def related_chunks(self, request, seed_ids, limit, timeout_ms):
         return []
@@ -214,20 +214,13 @@ class InMemorySearchBackend:
         for chunk in self._chunks.values():
             if chunk.kb_id not in allowed or not _matches(chunk, filters):
                 continue
-            local = filters.get("_local_applicability", False)
-            if local and chunk.evidence_structure.block_kind == "heading":
+            if chunk.evidence_structure.block_kind == "heading":
                 continue
             if phrase:
-                if local:
-                    identifier_hit = any(
-                        query in {s.product_model, s.software_version}
-                        for s in chunk.evidence_structure.applicability.subjects
-                    ) and chunk.evidence_structure.applicability.status == "resolved"
-                else:
-                    identifier_hit = any(
-                        chunk.metadata.get(key) == query
-                        for key in ("product_model", "software_version")
-                    )
+                identifier_hit = any(
+                    query in {s.product_model, s.software_version}
+                    for s in chunk.evidence_structure.applicability.subjects
+                ) and chunk.evidence_structure.applicability.status == "resolved"
                 if lowered in chunk.search_text.lower() or identifier_hit:
                     scored.append((chunk.id, 1.0))
                 continue
@@ -261,16 +254,14 @@ class InMemorySearchBackend:
 
 
 def _matches(chunk: Chunk, filters: dict) -> bool:
-    document_ids = filters.get("document_ids") or []
-    if filters.get("_local_applicability"):
-        from cuekb.services.evidence import scope_matches
+    from cuekb.services.evidence import scope_matches
+    from cuekb.services.selection import chunk_identifiers
 
-        return (
-            (not document_ids or chunk.document_id in set(document_ids))
-            and (not filters.get("category") or chunk.metadata.get("category") == filters["category"])
-            and scope_matches(chunk, filters.get("product_model"), filters.get("software_version"))
-        )
-    return (not document_ids or chunk.document_id in set(document_ids)) and all(
-        not filters.get(key) or chunk.metadata.get(key) == filters[key]
-        for key in ("product_model", "software_version", "category")
+    document_ids = filters.get("document_ids") or []
+    query_ids = set(filters.get("_query_identifiers") or [])
+    return (
+        (not document_ids or chunk.document_id in set(document_ids))
+        and (not filters.get("category") or chunk.metadata.get("category") == filters["category"])
+        and scope_matches(chunk, filters.get("product_model"), filters.get("software_version"))
+        and (not query_ids or bool(query_ids & chunk_identifiers(chunk)))
     )

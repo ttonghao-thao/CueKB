@@ -61,7 +61,7 @@ def create_app() -> FastAPI:
             for path, methods in schema["paths"].items():
                 for operation in methods.values():
                     if isinstance(operation, dict) and "responses" in operation:
-                        if path not in {"/v1/health", "/v1/ready"}:
+                        if path not in {"/v2/health", "/v2/ready"}:
                             operation["security"] = [{"ApiKeyBearer": []}]
                         for response in operation["responses"].values():
                             headers = response.setdefault("headers", {})

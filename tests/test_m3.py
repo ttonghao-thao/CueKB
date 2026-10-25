@@ -1,6 +1,8 @@
 from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from datetime import UTC, datetime
+import hashlib
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -13,19 +15,51 @@ from cuekb.adapters.postgres import PostgreSQLRepository
 from cuekb.api import routes
 from cuekb.api.dependencies import current_principal
 from cuekb.config import Settings
-from cuekb.domain.models import Chunk, Principal, SourceAnchor
+from cuekb.domain.models import (
+    Applicability, ApplicableSubject, Chunk, Document, DocumentVersion, Job, KnowledgeBase,
+    Principal, SourceAnchor, default_processing_snapshot,
+)
 from cuekb.main import app
 from cuekb.schemas import (
-    DocumentCreate,
     EntityWrite,
-    KnowledgeBaseCreate,
     RelationWrite,
-    SearchRequest,
+    V2SearchRequest,
 )
-from cuekb.services.context import assemble_context, build_sections
-from cuekb.services.ingestion import IngestionService
+from cuekb.services.context import assemble_context_v2, build_sections
+from cuekb.services.evidence import bind_block_dependencies, build_search_text
 from cuekb.services.parsing import parse_document
-from cuekb.services.retrieval import RetrievalService
+from cuekb.services.retrieval_v2 import V2RetrievalService
+
+
+def seed_text(repo, search, content):
+    """Publish parsed V2 facts without retaining the removed text-ingestion API."""
+    kb = repo.create_knowledge_base(KnowledgeBase(name="kb"))
+    document = Document(kb_id=kb.id, name="manual")
+    snapshot = default_processing_snapshot()
+    snapshot["document_default"] = {"subjects": [{"display_name": "Device"}]}
+    profile = "evidence-v2:" + hashlib.sha256(json.dumps(
+        snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode()).hexdigest()
+    version = DocumentVersion(document_id=document.id, content_sha256=hashlib.sha256(content.encode()).hexdigest(),
+                              processing_profile=profile, processing_snapshot=snapshot)
+    job = Job(kb_id=kb.id, document_id=document.id, version_id=version.id)
+    repo.create_document(document, version, job)
+    blocks = parse_document(content.encode(), "manual.md", "text/markdown",
+                            processing_profile=profile, processing_snapshot=snapshot,
+                            version_id=version.id)
+    chunks = [Chunk(kb_id=kb.id, document_id=document.id, version_id=version.id, ordinal=index,
+                    source_text=block.text, search_text=block.text, title_path=block.title_path,
+                    processing_profile=profile,
+                    anchor=block.anchor, source_spans=block.source_spans,
+                    evidence_structure=block.evidence_structure)
+              for index, block in enumerate(blocks)]
+    bind_block_dependencies(chunks)
+    build_sections(chunks)
+    for chunk in chunks:
+        chunk.search_text = build_search_text(chunk, document.name)
+    search.index(chunks)
+    repo.publish_chunks(job.id, chunks)
+    return kb
 
 
 def test_sections_parent_links_and_ids_are_deterministic():
@@ -78,40 +112,36 @@ def test_context_budget_and_cross_version_exclusion():
         search_text="main evidence",
         anchor=SourceAnchor(start_offset=10),
     )
+    c.evidence_structure.applicability = Applicability(
+        status="resolved", subjects=[ApplicableSubject(display_name="Device")])
     neighbor = c.model_copy(update={"id": uuid4(), "ordinal": 0, "source_text": "parent"})
     foreign = c.model_copy(update={"id": uuid4(), "version_id": uuid4(), "source_text": "secret"})
-    context, parts, truncated = assemble_context(c, [neighbor, foreign], 21)
-    assert context == "parent\n\nmain evidence"
-    assert [p.chunk_id for p in parts] == [neighbor.id, c.id]
-    assert parts[-1].anchor.start_offset == 10
-    context, parts, truncated = assemble_context(c, [neighbor], len(c.source_text))
-    assert context == c.source_text and truncated
-    assert assemble_context(c, [neighbor], 0) == ("", [], True)
+    result = assemble_context_v2(c, [neighbor, foreign], 21)
+    assert result.context == "parent\n\nmain evidence"
+    assert [p.chunk_id for p in result.parts] == [neighbor.id, c.id]
+    assert result.parts[-1].anchor.start_offset == 10
+    result = assemble_context_v2(c, [neighbor], len(c.source_text))
+    assert result.context == c.source_text and result.truncated
+    result = assemble_context_v2(c, [neighbor], 0)
+    assert result.context == "" and result.parts == [] and result.truncated
 
 
 def test_search_context_total_budget_and_disable():
     repo, search = InMemoryRepository(), InMemorySearchBackend()
-    ingest = IngestionService(repo, search)
-    kb = ingest.create_knowledge_base(KnowledgeBaseCreate(name="kb"))
-    ingest.ingest_text(
-        DocumentCreate(
-            kb_id=kb.id,
-            name="doc",
-            content="\n\n".join("evidence " + str(i) + " x" * 250 for i in range(8)),
-        )
-    )
-    service = RetrievalService(
+    kb = seed_text(repo, search, "\n\n".join("evidence " + str(i) + " x" * 250 for i in range(8)))
+    service = V2RetrievalService(
         repo, search, Settings(context_max_chars=1200, context_per_hit_chars=1200)
     )
     result = service.search_evidence(
-        SearchRequest(query="evidence", kb_ids=[kb.id], mode="exact", top_k=8)
+        V2SearchRequest(query="evidence", kb_ids=[kb.id], mode="exact", top_k=8)
     )
-    assert len(result.hits) == 8
+    assert 0 < len(result.hits) < 8
     assert sum(len(h.context or "") for h in result.hits) <= 1200
-    assert any(h.context_truncated for h in result.hits)
+    assert result.diagnostics.omissions.payload_budget_exhausted > 0
     no_context = service.search_evidence(
-        SearchRequest(query="evidence", kb_ids=[kb.id], mode="exact", include_context=False)
+        V2SearchRequest(query="evidence", kb_ids=[kb.id], mode="exact", include_context=False, top_k=8)
     )
+    assert len(no_context.hits) == 8
     assert all(h.context is None and h.context_parts == [] for h in no_context.hits)
 
 
@@ -124,7 +154,7 @@ def test_fresh_snapshot_revalidates_deletion_grants_and_key(change):
         @contextmanager
         def read_snapshot(self):
             self.snapshots += 1
-            if self.snapshots == 2:
+            if self.snapshots == 3:
                 if change == "delete":
                     for document in self.documents.values():
                         document.deleted_at = datetime.now(UTC)
@@ -143,15 +173,14 @@ def test_fresh_snapshot_revalidates_deletion_grants_and_key(change):
                 raise PermissionError("key_revoked")
 
     repo, search = SnapshotRepo(), InMemorySearchBackend()
-    ingest = IngestionService(repo, search)
-    kb = ingest.create_knowledge_base(KnowledgeBaseCreate(name="kb"))
-    ingest.ingest_text(DocumentCreate(kb_id=kb.id, name="doc", content="evidence"))
-    service = RetrievalService(repo, search, Settings())
-    request = SearchRequest(query="evidence", mode="exact", kb_ids=[kb.id])
+    kb = seed_text(repo, search, "evidence")
+    service = V2RetrievalService(repo, search, Settings())
+    request = V2SearchRequest(query="evidence", mode="exact", kb_ids=[kb.id])
     principal = Principal(name="reader", api_key_id=uuid4())
     if change == "delete":
         result = service.search_evidence(request, principal=principal)
-        assert not result.hits and repo.snapshots == 4
+        assert not result.hits
+        assert result.diagnostics.attempt_count == 2
     else:
         with pytest.raises(PermissionError):
             service.search_evidence(request, principal=principal)
@@ -165,17 +194,20 @@ def test_related_candidates_are_loaded_from_authority_and_fused_once():
             self.calls += 1
             assert limit == 2 and timeout_ms <= 100
             return [
-                {"chunk_id": second.id, "relation_type": "references", "stance": "supports"},
-                {"chunk_id": uuid4(), "relation_type": "references", "stance": "supports"},
+                {"chunk_id": item, "relation_id": uuid4(), "subject_id": uuid4(),
+                 "object_id": uuid4(), "relation_type": "references", "stance": "supports", "conditions": {}}
+                for item in [second.id, uuid4()]
             ]
 
+        def revalidate_relations(self, request, rows, seeds, timeout_ms):
+            visible = {chunk.id for chunk in self.load_chunks([r["chunk_id"] for r in rows], request.kb_ids)}
+            return [row for row in rows if row["chunk_id"] in visible]
+
     repo, search = RelationRepo(), InMemorySearchBackend()
-    ingest = IngestionService(repo, search)
-    kb = ingest.create_knowledge_base(KnowledgeBaseCreate(name="kb"))
-    ingest.ingest_text(DocumentCreate(kb_id=kb.id, name="doc", content="needle\n\nother evidence"))
+    kb = seed_text(repo, search, "needle\n\nother evidence")
     second = sorted(repo.chunks.values(), key=lambda c: c.ordinal)[1]
-    result = RetrievalService(repo, search, Settings(relation_candidates=2)).search_evidence(
-        SearchRequest(query="needle", mode="related", kb_ids=[kb.id])
+    result = V2RetrievalService(repo, search, Settings(relation_candidates=2)).search_evidence(
+        V2SearchRequest(query="needle", mode="related", kb_ids=[kb.id])
     )
     assert repo.calls == 1
     assert result.scope_limited
@@ -210,7 +242,7 @@ def test_aliases_are_explicit_normalized_and_bounded():
     with pytest.raises(ValidationError):
         EntityWrite(name="x", aliases=[" "])
     with pytest.raises(ValidationError):
-        SearchRequest(
+        V2SearchRequest(
             query="x", kb_ids=[uuid4()], relations={"entity_ids": [uuid4() for _ in range(21)]}
         )
 
@@ -226,13 +258,13 @@ def test_management_denies_reader_and_validation_does_not_leak_secrets(monkeypat
         with TestClient(app) as client:
             assert (
                 client.put(
-                    f"/v1/knowledge-bases/{uuid4()}/entities/{uuid4()}", json={"name": "x"}
+                    f"/v2/knowledge-bases/{uuid4()}/entities/{uuid4()}", json={"name": "x"}
                 ).status_code
                 == 403
             )
-            assert client.get("/v1/index-generations").status_code == 403
+            assert client.get("/v2/index-generations").status_code == 403
             response = client.post(
-                "/v1/index-generations",
+                "/v2/index-generations",
                 json={
                     "embedding_base_url": "file:///bad",
                     "embedding_model": "m",

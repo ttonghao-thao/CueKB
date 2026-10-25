@@ -65,8 +65,55 @@ def test_unresolved_group_does_not_hide_fact_and_preserves_explicit_state():
     assert "必要上下文不完整" in html
 
 
-def test_v1_context_fallback_preserves_primary_and_distinct_context():
-    html = render({"chunk_id": "main", "source_text": "Rated input: 12 V.",
-                   "context": "Legacy context: only at room temperature.", "context_parts": []})
-    assert "Rated input: 12 V." in html and "only at room temperature" in html
-    assert "补充上下文" in html
+def test_search_and_management_requests_use_v2_and_selection_fields():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js required for the portal JavaScript requests")
+    script = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const fields = new Map();
+const field = selector => {
+  if (!fields.has(selector)) fields.set(selector, {
+    value: '', textContent: '', innerHTML: '', showModal() {}, addEventListener() {}
+  });
+  return fields.get(selector);
+};
+const sent = [];
+const scope = {
+  sessionStorage: {getItem: () => ''}, Headers, FormData,
+  document: {querySelector: field, querySelectorAll: () => []},
+  fetch: async (path, options) => {
+    sent.push({path, authorization: options.headers.get('Authorization'),
+               body: options.body ? JSON.parse(options.body) : null});
+    return {status: 200, ok: true, headers: new Headers({'content-type':'application/json'}),
+      json: async () => ({hits: [], timings_ms: {total: 1}, degraded_reasons: [],
+        diagnostics: {sizes: {hits_bytes: 2}}, ranking_method: 'rrf', evidence_status: 'unassessed'})};
+  }
+};
+const source = fs.readFileSync('src/cuekb/portal/app.js', 'utf8');
+const run = vm.runInNewContext(source + `
+(async () => {
+  state.currentKb = {id: '11111111-1111-4111-8111-111111111111', role: 'admin'};
+  state.apiKey = 'fixture-key';
+  await api('/knowledge-bases');
+  $('#query').value = 'voltage'; $('#top-k').value = '20';
+  $('#search-mode').value = 'hybrid'; $('#search-direction').value = 'both';
+  $('#selection-mode').value = 'ranked';
+  await search({preventDefault() {}});
+  $('#selection-mode').value = 'adaptive'; $('#query-facets').value = 'voltage\\n\\nstorage';
+  await search({preventDefault() {}});
+})()`, scope);
+run.then(() => process.stdout.write(JSON.stringify(sent))).catch(error => {
+  process.stderr.write(String(error)); process.exitCode = 1;
+});
+"""
+    sent = json.loads(subprocess.run([node, "-e", script], text=True, capture_output=True,
+        check=True, timeout=10, cwd=Path(__file__).parents[1]).stdout)
+    assert [row["path"] for row in sent] == ["/v2/knowledge-bases", "/v2/search", "/v2/search"]
+    assert all(row["authorization"] == "Bearer fixture-key" for row in sent)
+    ranked, adaptive = [row["body"] for row in sent[1:]]
+    assert ranked["selection_mode"] == "ranked" and "query_facets" not in ranked
+    assert adaptive["selection_mode"] == "adaptive" and adaptive["query_facets"] == ["voltage", "storage"]
+    html = (Path(__file__).parents[1] / "src/cuekb/portal/index.html").read_text()
+    assert 'id="search-contract"' not in html

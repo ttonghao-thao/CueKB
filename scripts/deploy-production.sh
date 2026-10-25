@@ -48,4 +48,4 @@ done
 # Readiness is public. Keep this probe compatible with older host curl versions.
 curl --fail --silent --show-error --retry 20 --retry-delay 3 \
   --connect-timeout 3 --max-time 10 \
-  http://127.0.0.1:8085/v1/ready
+  http://127.0.0.1:8085/v2/ready

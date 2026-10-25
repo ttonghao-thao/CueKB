@@ -1,4 +1,4 @@
-"""Bounded, attributable evidence retrieval; the V1 pipeline stays frozen.
+"""Bounded, attributable V2 evidence retrieval.
 
 OpenSearch supplies candidate identities, PostgreSQL supplies every returned
 fact and dependency. A fresh final snapshot revalidates authorization, versions,
@@ -30,7 +30,7 @@ from cuekb.services.execution import (
     SearchConfigurationChanged, SearchDeadlineExceeded, SearchExecution,
     activate_execution, current_execution,
 )
-from cuekb.services.retrieval import QueryRouter, rrf
+from cuekb.services.ranking import QueryRouter, rrf
 from cuekb.services.selection import (
     InformationSelector, LEXICAL_REVISION, SELECTION_REVISION, SELECTION_RULES_REVISION, accepts, chunk_identifiers,
     identifiers, literal_coverage, load_profile, runtime_binding, tokens,
@@ -212,7 +212,7 @@ class V2RetrievalService:
         self, request: V2SearchRequest, state: _Attempt, execution: SearchExecution,
         query_vector: list[float] | None,
     ) -> list[float] | None:
-        filters = {**request.filters.model_dump(), "_local_applicability": True}
+        filters = request.filters.model_dump()
         if request.selection_mode == "adaptive":
             filters["_query_identifiers"] = sorted(identifiers(request.selection_query or request.query))
 
@@ -602,9 +602,8 @@ class V2RetrievalService:
             if not request.include_context:
                 break
             hit, chunk = hits[index], current[ordered[position]]
-            context_fn = getattr(repository, "context_chunks_v2", None)
-            neighbors = (context_fn(chunk, self.settings.context_max_chunks, include_optional=True)
-                         if context_fn else repository.context_chunks(chunk, self.settings.context_max_chunks))
+            neighbors = repository.context_chunks_v2(
+                chunk, self.settings.context_max_chunks, include_optional=True)
             required_ids = [link.chunk_id for link in chunk.evidence_structure.context_links if link.required]
             if adaptive:
                 focused = []

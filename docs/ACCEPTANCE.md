@@ -2,19 +2,19 @@
 
 更新：2026-10-25。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
 
-## 1. V2与共享能力验证
+## 1. V2完整验证
 
-检索演进只验证V2。`/v1/health`、知识库、Key、Job、发布、模型及generation路径仍承载共享管理能力，不能仅因路径前缀而排除它们；旧V1检索与旧响应渲染不属于本轮验证范围。
+所有现存CueKB接口与处理链均为V2，验证包含检索、导入、知识库、Key、Job、发布、模型、generation及健康检查。
 
 ```sh
-make test-v2
+make test
 make check
 make check-contracts
 node --check src/cuekb/portal/app.js
 sh -n scripts/deploy-production.sh
 ```
 
-`make test`默认使用同一V2/共享能力集合。测试选择由Makefile维护，不用“全量通过”代称未执行的旧检索用例；记录passed、failed、skipped及原因。门户渲染用例需要Node.js，缺失时的跳过不算前端通过。契约检查核对现有导出物，不能通过无解释地重新生成来清除失败。
+`make test`执行当前完整测试集；记录passed、failed、skipped及原因。门户渲染用例需要Node.js，缺失时的跳过不算前端通过。契约检查核对现有导出物，不能通过无解释地重新生成来清除失败。
 
 | 验证层 | 能证明什么 | 必须另外验证的内容 |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ sh -n scripts/deploy-production.sh
 | 门户实际JS函数 | 主事实、必要上下文、转义与缺失提示的渲染规则 | 真实浏览器交互及外部客户端证据裁剪 |
 | 专用PG | 当前schema、处理快照、发布和事务取消等真实SQL行为 | OS一致性、模型质量及目标环境稳定性 |
 
-真实PG测试只指向**专用测试库**，设置`CUEKB_TEST_DATABASE_URL`后执行`tests/test_v2_postgres.py`。fixture创建独立随机schema并直接加载完整初始化结构，结束后drop该schema，必要时创建public.pgcrypto，不得指向业务库。fixture虽复用共享测试模块，不代表执行了旧检索验收；未配置时跳过，不算通过真实PG验收。
+真实PG测试只指向**专用测试库**，设置`CUEKB_TEST_DATABASE_URL`后执行`make test`，其中数据库用例会使用该专库。fixture创建独立随机schema并直接加载完整初始化结构，结束后drop该schema，必要时创建public.pgcrypto，不得指向业务库。未配置时跳过，不算通过真实PG验收。
 
 数据库与全新部署共用完整`db/schema.sql`，需核验不可变快照/幂等、source_version同文档FK、恢复新ID、旧清理不误删新块、发布删除/撤权竞争、pg_sleep超时取消与连接回收。OS需核验V2映射、实际BM25/k-NN、过滤投影及索引写后校验。尚无现成用例或本轮未执行的场景列入任务板，不因方法写在本文就算已覆盖。
 
@@ -55,7 +55,7 @@ sh -n scripts/deploy-production.sh
 
 ### 4.1 专用实例功能验收
 
-`scripts/acceptance-production.py`使用V2上传、文档详情和检索；健康、Key、授权、Job、发布及原件下载继续调用共享管理路径。它会创建专用测试KB、文档和业务Key，成功时删除自己的文档与Key；失败或中断后可能需要清理残留。当前没有删除KB接口，成功结束后也会留下空测试KB。只能指向允许这些写入的专用实例。
+`scripts/acceptance-production.py`使用V2上传、文档详情和检索；健康、Key、授权、Job、发布及原件下载同样使用`/v2`管理路径。它会创建专用测试KB、文档和业务Key，成功时删除自己的文档与Key；失败或中断后可能需要清理残留。当前没有删除KB接口，成功结束后也会留下空测试KB。只能指向允许这些写入的专用实例。
 
 先在安全环境设置`CUEKB_BOOTSTRAP_API_KEY`，无需把密钥值放在命令行：
 
@@ -98,7 +98,7 @@ CueKB验收只证明本次返回的原文证据。voice-service-agent必须独�
 
 ## 6. 门户原文与上下文验收
 
-先运行`make test-v2`与`node --check src/cuekb/portal/app.js`。选定的门户回归执行实际app.js函数，覆盖V2长主事实、必要条件、同身份去重、HTML转义和未解决依赖，不执行旧响应回退验证。
+先运行`make test`与`node --check src/cuekb/portal/app.js`。选定的门户回归执行实际app.js函数，覆盖V2长主事实、必要条件、同身份去重、HTML转义和未解决依赖。
 
 浏览器在独立测试实例按以下场景复测，并与同一HTTP响应对照；不要将受控候选结果当作模型质量基准：
 

@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 
@@ -15,7 +15,6 @@ from cuekb.api.dependencies import (
     current_principal,
     file_storage,
     repository,
-    retrieval_service,
     search_backend,
 )
 from cuekb.config import get_settings
@@ -23,9 +22,7 @@ from cuekb.domain.models import Job, KnowledgeBase, Principal
 from cuekb.schemas import (
     ApiKeyCreate,
     ApiKeyCreated,
-    DocumentCreate,
-    DocumentDetail,
-    DocumentMetadata,
+    V2DocumentMetadata,
     DocumentSummary,
     EntityWrite,
     EntityInfo,
@@ -41,15 +38,11 @@ from cuekb.schemas import (
     ModelConfigurationUpdate,
     PublishRequest,
     RelationWrite,
-    SearchRequest,
-    SearchResponse,
 )
 from cuekb.services.generations import validate_generation
-from cuekb.services.ingestion import IngestionService
-from cuekb.services.retrieval import RetrievalService
 from cuekb.api.errors import ErrorResponse
 
-router = APIRouter(prefix="/v1", responses={
+router = APIRouter(prefix="/v2", responses={
     code: {"model": ErrorResponse} for code in (400, 401, 403, 404, 409, 413, 415, 422, 500, 503, 504)
 })
 
@@ -164,7 +157,7 @@ def create_knowledge_base(
         if not principal or not principal.is_system_admin:
             raise HTTPException(403, "system_admin_required")
         return repo.create_knowledge_base(KnowledgeBase(**request.model_dump()), principal)
-    return IngestionService(repo, search_backend()).create_knowledge_base(request)
+    return repo.create_knowledge_base(KnowledgeBase(**request.model_dump()))
 
 
 @router.get("/knowledge-bases", response_model=list[KnowledgeBaseAccess], tags=["knowledge-bases"])
@@ -176,13 +169,13 @@ def list_knowledge_bases(
 
 
 def _queue(
-    metadata: DocumentMetadata,
+    metadata: V2DocumentMetadata,
     content: bytes,
     filename: str,
     media_type: str,
-    idempotency_key: str | None,
+    idempotency_key: str,
     principal: Principal | None,
-    *, processing_snapshot: dict | None = None,
+    *, processing_snapshot: dict,
 ) -> Job:
     settings = get_settings()
     if len(content) > settings.max_upload_bytes:
@@ -234,63 +227,6 @@ def _queue(
         raise HTTPException(422, "invalid_processing_metadata" if isinstance(exc, ValidationError) else str(exc)) from exc
 
 
-@router.post("/documents", response_model=Job, status_code=202, tags=["documents"])
-async def ingest_file(
-    metadata: str = Form(),
-    file: UploadFile = File(),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    principal: Principal | None = Depends(current_principal),
-) -> Job:
-    try:
-        parsed = DocumentMetadata.model_validate_json(metadata)
-    except Exception as exc:
-        raise HTTPException(422, "invalid_metadata_json") from exc
-    limit = get_settings().max_upload_bytes
-    parts = []
-    size = 0
-    while chunk := await file.read(1024 * 1024):
-        size += len(chunk)
-        if size > limit:
-            raise HTTPException(413, "file_too_large")
-        parts.append(chunk)
-    return _queue(
-        parsed,
-        b"".join(parts),
-        file.filename or "document",
-        file.content_type or "application/octet-stream",
-        idempotency_key,
-        principal,
-    )
-
-
-@router.post("/documents/text", response_model=Job, status_code=202, tags=["documents"])
-def ingest_text(
-    request: DocumentCreate,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    principal: Principal | None = Depends(current_principal),
-) -> Job:
-    if get_settings().backend == "production":
-        metadata = DocumentMetadata(
-            kb_id=request.kb_id,
-            name=request.name,
-            business_version=request.business_version,
-            scope=request.scope,
-            auto_publish=True,
-        )
-        return _queue(
-            metadata,
-            request.content.encode(),
-            request.name + ".txt",
-            "text/plain",
-            idempotency_key,
-            principal,
-        )
-    try:
-        return IngestionService(repository(), search_backend()).ingest_text(request)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-
-
 @router.get("/jobs/{job_id}", response_model=Job, tags=["documents"])
 def get_job(job_id: UUID, principal: Principal | None = Depends(current_principal)) -> Job:
     repo = repository()
@@ -317,22 +253,6 @@ def list_documents(
     elif repo.get_knowledge_base(kb_id) is None:
         raise HTTPException(404, "knowledge_base_not_found")
     return [DocumentSummary(**row) for row in repo.list_documents(kb_id, limit, offset)]
-
-
-@router.get("/documents/{document_id}", response_model=DocumentDetail, tags=["documents"])
-def get_document(
-    document_id: UUID, principal: Principal | None = Depends(current_principal)
-) -> DocumentDetail:
-    repo = repository()
-    if isinstance(repo, PostgreSQLRepository):
-        try:
-            repo.require_role(principal, [repo.get_document_kb(document_id)], "read")
-        except KeyError as exc:
-            raise HTTPException(404, str(exc)) from exc
-    detail = repo.get_document_detail(document_id)
-    if detail is None:
-        raise HTTPException(404, "document_not_found")
-    return DocumentDetail(**detail)
 
 
 @router.post("/documents/{document_id}/publish", status_code=204, tags=["documents"])
@@ -388,28 +308,6 @@ def download_source(
         return FileResponse(
             path, media_type=source["media_type"], filename=source["original_filename"]
         )
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-
-
-@router.post("/search", response_model=SearchResponse, tags=["search"])
-def search(
-    request: SearchRequest,
-    http_request: Request,
-    principal: Principal | None = Depends(current_principal),
-    service: RetrievalService = Depends(retrieval_service),
-) -> SearchResponse:
-    http_request.state.request_id = request.request_id
-    if isinstance(service.repository, PostgreSQLRepository):
-        service.repository.require_role(principal, request.kb_ids, "read")
-    try:
-        result = service.search_evidence(request, principal=principal)
-        result.trace_id = http_request.state.trace_id
-        if isinstance(service.repository, PostgreSQLRepository):
-            if principal and principal.api_key_id:
-                service.repository.assert_api_key_active(principal.api_key_id)
-            service.repository.require_role(principal, request.kb_ids, "read")
-        return result
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 

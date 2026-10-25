@@ -1,10 +1,10 @@
 # 外部模型接入
 
-更新：2026-10-25。CueKB只调用Embedding和可选Reranker，不调用生成式答案模型。管理员通过`GET/PUT /v1/model-configuration`或门户配置，字段Schema以[OpenAPI](contracts/openapi.json)为准。
+更新：2026-10-25。CueKB只调用Embedding和可选Reranker，不调用生成式答案模型。管理员通过`GET/PUT /v2/model-configuration`或门户配置，字段Schema以[OpenAPI](contracts/openapi.json)为准。
 
 ## 1. Embedding协议
 
-base URL必须为HTTP/HTTPS且路径严格等于`/v1`，不带查询串、fragment或尾斜杠；CueKB在其后请求`POST /embeddings`，使用该服务独立Bearer Key：
+这里的base URL指第三方Embedding服务地址，CueKB自身接口仍为`/v2`。模型服务base URL必须为HTTP/HTTPS且路径严格等于`/v1`，不带查询串、fragment或尾斜杠；CueKB在其后请求`POST /embeddings`，使用该服务独立Bearer Key：
 
 ```json
 {"model":"embedding-model-revision","input":["first passage","second passage"],"encoding_format":"float"}

@@ -1,18 +1,14 @@
-from collections.abc import Iterator
 from functools import lru_cache
 from typing import Any
 
 from fastapi import Header, HTTPException
 
 from cuekb.adapters.memory import InMemoryRepository, InMemorySearchBackend
-from cuekb.adapters.model_client import HttpModelClient
 from cuekb.adapters.opensearch import OpenSearchBackend
 from cuekb.adapters.postgres import PostgreSQLRepository
 from cuekb.adapters.storage import LocalFileStorage
 from cuekb.config import get_settings
 from cuekb.domain.models import Principal
-from cuekb.services.ingestion import IngestionService
-from cuekb.services.retrieval import RetrievalService
 
 
 @lru_cache
@@ -81,40 +77,3 @@ def current_principal(authorization: str | None = Header(default=None)) -> Princ
     if principal is None:
         raise HTTPException(401, "invalid_api_key")
     return principal
-
-
-def ingestion_service() -> IngestionService:
-    return IngestionService(repository(), search_backend())
-
-
-def retrieval_service() -> Iterator[RetrievalService]:
-    repo = repository()
-    settings = get_settings()
-    if settings.backend == "memory":
-        yield RetrievalService(repo, search_backend(), settings)
-        return
-    config = repo.get_model_configuration()
-    if config is None:
-        raise HTTPException(409, "embedding_service_not_configured")
-    model = HttpModelClient(
-        config["embedding_base_url"],
-        config["embedding_api_key"],
-        config["embedding_model"],
-        config["reranker_base_url"],
-        config["reranker_api_key"] or "",
-        config["reranker_model"],
-    )
-    try:
-        yield RetrievalService(
-            repo,
-            _search_backend(
-                config["embedding_model"],
-                config.get("active_index") or "",
-                config.get("embedding_dimension") or 0,
-            ),
-            settings,
-            model,
-            reranker_configured=bool(config["reranker_base_url"]),
-        )
-    finally:
-        model.close()

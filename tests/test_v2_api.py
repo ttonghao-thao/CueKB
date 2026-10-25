@@ -13,7 +13,7 @@ from cuekb.api.v2_dependencies import retrieval_service_v2
 from cuekb.config import Settings, get_settings
 from cuekb.domain.models import Chunk, Document, DocumentVersion, Job, KnowledgeBase
 from cuekb.main import create_app
-from cuekb.schemas import SearchResponse, V2SearchResponse
+from cuekb.schemas import V2SearchResponse
 from cuekb.services.retrieval_v2 import V2RetrievalService, encode_v2_hits
 
 
@@ -245,18 +245,6 @@ def test_unexpected_error_has_trace_and_no_private_exception(api):
     assert response.json()["trace_id"] == response.headers["x-trace-id"]
     assert response.headers["cache-control"] == "no-store"
     assert "private-provider-payload" not in response.text
-
-
-def test_v1_search_dto_does_not_leak_new_domain_fields():
-    from cuekb.schemas import SearchHit
-    from cuekb.domain.models import SourceAnchor
-    hit = SearchHit(chunk_id=uuid4(), document_id=uuid4(), version_id=uuid4(), rank=1,
-                    source_text="evidence", title_path=[], anchor=SourceAnchor(), metadata={},
-                    retrieval_sources=["keyword"])
-    response = SearchResponse(trace_id=uuid4(), retrieval_status="ok", content_revisions={},
-                              timings_ms={}, hits=[hit])
-    assert "schema_version" not in response.model_dump()
-    assert not {"applicability", "source_spans", "processing_profile"} & set(response.model_dump()["hits"][0])
 
 
 def test_reprocess_idempotency_digest_includes_document_identity(monkeypatch):

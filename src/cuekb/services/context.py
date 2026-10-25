@@ -6,7 +6,6 @@ from typing import Literal
 from uuid import UUID, uuid5
 
 from cuekb.domain.models import Chunk, ContextRole, Section, SourceAnchor, SourceSpan, StructureModel
-from cuekb.schemas import ContextPart
 from cuekb.services.evidence import scope_compatible
 
 
@@ -50,35 +49,6 @@ def build_sections(chunks: Sequence[Chunk]) -> list[Section]:
     for section in sections:
         section.content = "\n\n".join(by_section.get(section.id, []))
     return sections
-
-
-def assemble_context(
-    hit: Chunk, neighbors: Sequence[Chunk], budget: int
-) -> tuple[str, list[ContextPart], bool]:
-    eligible = {
-        c.id: c
-        for c in neighbors
-        if c.version_id == hit.version_id and c.document_id == hit.document_id
-    }
-    eligible[hit.id] = hit
-    priority = sorted(
-        eligible.values(), key=lambda c: (c.id != hit.id, abs(c.ordinal - hit.ordinal), c.ordinal)
-    )
-    chosen: list[Chunk] = []
-    used = 0
-    for chunk in priority:
-        cost = len(chunk.source_text) + (2 if chosen else 0)
-        if used + cost <= budget:
-            chosen.append(chunk)
-            used += cost
-    chosen.sort(key=lambda c: c.ordinal)
-    parts = [
-        ContextPart(
-            chunk_id=c.id, source_text=c.source_text, anchor=c.anchor, title_path=c.title_path
-        )
-        for c in chosen
-    ]
-    return "\n\n".join(c.source_text for c in chosen), parts, len(chosen) < len(eligible)
 
 
 class EvidenceContextPart(StructureModel):

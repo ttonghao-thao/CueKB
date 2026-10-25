@@ -15,8 +15,8 @@ from sqlalchemy import create_engine, text
 
 from cuekb.adapters.generations import MaintenanceBusy
 from cuekb.adapters.postgres import PostgreSQLRepository
-from cuekb.domain.models import Chunk, KnowledgeBase
-from cuekb.schemas import EntityWrite, GenerationCreate, RelationWrite, SearchRequest
+from cuekb.domain.models import Applicability, ApplicableSubject, Chunk, ContextLink, EvidenceStructure, KnowledgeBase
+from cuekb.schemas import EntityWrite, GenerationCreate, RelationWrite, V2SearchRequest
 
 
 @pytest.fixture
@@ -120,11 +120,11 @@ def test_pg_relations_direction_aliases_and_deleted_evidence(pg):
     )
     pg.put_relation(kb.id, r, relation)
     pg.put_relation(kb.id, r, relation)  # deterministic PUT, no duplicate evidence
-    request = SearchRequest(query="R1", kb_ids=[kb.id], mode="related")
+    request = V2SearchRequest(query="R1", kb_ids=[kb.id], mode="related")
     with pg.read_snapshot() as scoped:
         rows = scoped.related_chunks(request, [], 10, 1000)
         assert len(rows) == 1 and rows[0]["chunk_id"] == other.id
-        assert scoped.context_chunks(c, 8)[0].id == c.id
+        assert scoped.context_chunks_v2(c, 8)[0].id == c.id
         assert len(scoped.list_entities(kb.id, 10, 0)) == 2
         assert len(scoped.list_relations(kb.id, 10, 0)) == 1
     request.relations.direction = "incoming"
@@ -160,8 +160,10 @@ def test_pg_relation_time_conditions_and_version_switch(pg):
     pg.put_entity(kb.id, b, EntityWrite(name="two"))
     with pg._write() as conn:
         conn.execute(
-            text('UPDATE chunks SET metadata=\' {"product_model":"R1"}\'::jsonb WHERE id=:id'),
-            {"id": c.id},
+            text("UPDATE chunks SET evidence_structure=CAST(:structure AS jsonb) WHERE id=:id"),
+            {"id": c.id, "structure": EvidenceStructure(applicability=Applicability(
+                status="resolved", subjects=[ApplicableSubject(display_name="Router", product_model="R1")]
+            )).model_dump_json()},
         )
     pg.put_relation(
         kb.id,
@@ -176,7 +178,7 @@ def test_pg_relation_time_conditions_and_version_switch(pg):
             evidence=[{"chunk_id": c.id, "stance": "refutes"}],
         ),
     )
-    req = SearchRequest(
+    req = V2SearchRequest(
         query="one",
         kb_ids=[kb.id],
         mode="related",
@@ -295,9 +297,10 @@ def test_pg_worker_writes_sections_and_fences_stale_ready_generation(pg):
         idempotency_key="one",
         request_sha256="c" * 64,
         auto_publish=True,
-        processing_profile="structured-v1",
+        processing_profile="evidence-v2",
     )
-    assert pg.claim_job("test", 300, 3)["id"] == job.id
+    claimed = pg.claim_job("test", 300, 3)
+    assert claimed["id"] == job.id
     chunks = [
         Chunk(
             kb_id=kb.id,
@@ -306,17 +309,22 @@ def test_pg_worker_writes_sections_and_fences_stale_ready_generation(pg):
             ordinal=i,
             source_text=body,
             search_text=body,
+            processing_profile=claimed["processing_profile"],
             title_path=path,
             anchor=SourceAnchor(heading_path=path),
+            evidence_structure=EvidenceStructure(applicability=Applicability(
+                status="resolved", subjects=[ApplicableSubject(display_name="Device")]
+            )),
         )
         for i, (body, path) in enumerate(
             [("introduction", ["Manual"]), ("step", ["Manual", "Steps"])]
         )
     ]
+    chunks[1].evidence_structure.context_links = [ContextLink(chunk_id=chunks[0].id, role="attribution")]
     assert pg.save_ready(job.id, "test", chunks)
     loaded = pg.load_chunks([c.id for c in chunks], [kb.id])
     assert all(c.section_id and c.title_path for c in loaded)
-    assert len(pg.context_chunks(loaded[1], 8)) == 2
+    assert len(pg.context_chunks_v2(loaded[1], 8)) == 2
     assert pg.get_knowledge_base(kb.id).content_revision == 2  # ready plus publish
     with pytest.raises(ConflictError, match="lease_lost"):
         pg.save_ready(job.id, "test", chunks)
@@ -333,7 +341,7 @@ def test_pg_relation_timeout_preserves_outer_snapshot(pg):
         with pg.read_snapshot() as snapshot:
             with pytest.raises(DBAPIError) as error:
                 snapshot.related_chunks(
-                    SearchRequest(query="x", kb_ids=[kb.id], mode="related"), [], 5, 20
+                    V2SearchRequest(query="x", kb_ids=[kb.id], mode="related"), [], 5, 20
                 )
             assert error.value.orig.sqlstate == "57014"
             assert snapshot.load_chunks([c.id], [kb.id])[0].id == c.id

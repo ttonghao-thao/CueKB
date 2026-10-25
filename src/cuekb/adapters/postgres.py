@@ -492,7 +492,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
         from cuekb.domain.models import ApplicableCondition, ApplicableSubject
         from cuekb.services.evidence import PROCESSING_REVISION
 
-        if requested not in {"structured-v1", "evidence-v2"}:
+        if requested != "evidence-v2":
             raise ValueError("unsupported_processing_profile")
         supplied = supplied or {}
         if set(supplied) - {"scope_bindings", "document_default"}:
@@ -532,9 +532,9 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
 
         snapshot = {
             "profile_revision": requested,
-            "parser_revision": PROCESSING_REVISION if requested == "evidence-v2" else requested,
-            "chunker_revision": PROCESSING_REVISION if requested == "evidence-v2" else requested,
-            "structure_revision": PROCESSING_REVISION if requested == "evidence-v2" else "legacy-unknown",
+            "parser_revision": PROCESSING_REVISION,
+            "chunker_revision": PROCESSING_REVISION,
+            "structure_revision": PROCESSING_REVISION,
             "max_chunk_chars": 1200,
             "scope_bindings": [declaration(b) for b in bindings],
             "approved_entities": [],
@@ -583,9 +583,6 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
         encoded = json.dumps(snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         if len(encoded.encode()) > 512000:
             raise ValueError("processing_snapshot_too_large")
-        # A legacy profile cannot introduce new structure even when an entity changes.
-        if requested == "structured-v1":
-            return requested, snapshot
         return f"{requested}:{hashlib.sha256(encoded.encode()).hexdigest()}", snapshot
 
     def _source_version_for_derivation(self, document_id, source_version_id):
@@ -910,7 +907,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
         with self._read() as conn:
             rows = conn.execute(
                 text(
-                    "SELECT c.* FROM chunks c JOIN documents d ON d.id=c.document_id JOIN document_publications p ON p.document_id=c.document_id AND p.active_version_id=c.version_id WHERE c.kb_id=ANY(:kb) AND d.deleted_at IS NULL"
+                    "SELECT c.*,v.processing_profile FROM chunks c JOIN document_versions v ON v.id=c.version_id JOIN documents d ON d.id=c.document_id JOIN document_publications p ON p.document_id=c.document_id AND p.active_version_id=c.version_id WHERE c.kb_id=ANY(:kb) AND d.deleted_at IS NULL"
                 ),
                 {"kb": list(kb_ids)},
             ).mappings()
@@ -1052,7 +1049,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             metadata=row["metadata"],
             evidence_structure=row.get("evidence_structure") or {},
             source_spans=row.get("source_spans") or [],
-            processing_profile=row.get("processing_profile", "structured-v1"),
+            processing_profile=row["processing_profile"],
             document_name=row.get("document_name"),
             content_sha256=row.get("version_content_sha256"),
         )

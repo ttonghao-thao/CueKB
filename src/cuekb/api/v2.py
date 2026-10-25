@@ -1,4 +1,4 @@
-"""Explicit V2 evidence contract; V1 serialization is unchanged."""
+"""V2 evidence retrieval and immutable document processing endpoints."""
 from __future__ import annotations
 
 import asyncio
@@ -19,7 +19,7 @@ from cuekb.api.v2_dependencies import retrieval_service_v2
 from cuekb.api.routes import _queue
 from cuekb.config import get_settings
 from cuekb.domain.models import Job, Principal
-from cuekb.schemas import ReprocessRequest, RestoreRequest, V2DocumentDetail, V2DocumentMetadata, V2SearchRequest, V2SearchResponse
+from cuekb.schemas import ReprocessRequest, RestoreRequest, V2DocumentDetail, V2DocumentMetadata, V2DocumentVersionInfo, V2SearchRequest, V2SearchResponse
 from cuekb.services.execution import current_execution
 from cuekb.services.retrieval_v2 import V2RetrievalService, encode_v2_response
 
@@ -60,7 +60,15 @@ def get_document(document_id: UUID, principal: Principal | None = Depends(curren
         raise HTTPException(404, "document_not_found")
     if isinstance(repo, PostgreSQLRepository):
         repo.require_role(principal, [document["kb_id"]], "read")
-    return document
+    # Repository rows also carry internal processing snapshots and parent IDs.
+    # Project explicitly onto the closed public contract instead of silently
+    # accepting extra fields or returning those internal records.
+    return V2DocumentDetail(**{
+        **{key: value for key, value in document.items() if key in V2DocumentDetail.model_fields},
+        "versions": [V2DocumentVersionInfo(**{
+            key: value for key, value in version.items() if key in V2DocumentVersionInfo.model_fields
+        }) for version in document["versions"]],
+    })
 
 
 @router.post("/search", response_model=V2SearchResponse, tags=["evidence-v2"])

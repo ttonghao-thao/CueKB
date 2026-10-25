@@ -11,6 +11,8 @@ from uuid import uuid4
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from cuekb.domain.models import DEFAULT_PROCESSING_PROFILE
+
 # Shared by content mutations and ingestion; exclusive during generation builds/switches.
 MAINTENANCE_LOCK = 1129663300
 _owned: ContextVar[tuple[Engine, bool] | None] = ContextVar("cuekb_maintenance_lock", default=None)
@@ -18,10 +20,10 @@ _owned: ContextVar[tuple[Engine, bool] | None] = ContextVar("cuekb_maintenance_l
 
 def profile_inventory_version(profiles):
     for profile, count in profiles.items():
-        if (profile != "structured-v1" and not re.fullmatch(r"evidence-v2:[0-9a-f]{64}", profile)) or count < 0:
+        if not re.fullmatch(r"evidence-v2:[0-9a-f]{64}", profile) or count < 0:
             raise ValueError("unsupported_generation_source_profile")
     if len(profiles) <= 1:
-        return next(iter(profiles), "structured-v1")
+        return next(iter(profiles), DEFAULT_PROCESSING_PROFILE)
     encoded = json.dumps(profiles, sort_keys=True, separators=(",", ":"))
     return "mixed:" + hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -103,13 +105,13 @@ class GenerationOperations:
                 if not conn.execute(
                     text("SELECT 1 FROM index_generations WHERE status='active'")
                 ).first():
-                    legacy = {k: config[k] for k in target}
+                    current_config = {k: config[k] for k in target}
                     self._insert_generation(
                         conn,
                         uuid4(),
                         config["active_index"] or f"{prefix}-chunks",
                         config["embedding_dimension"] or default_dimension,
-                        legacy,
+                        current_config,
                         "active",
                         config["revision"],
                     )

@@ -51,10 +51,10 @@ def test_model_configuration_requires_system_admin_and_never_returns_api_keys(mo
     app.dependency_overrides[current_principal] = lambda: Principal(name="reader")
     try:
         with TestClient(app) as client:
-            assert client.get("/v1/model-configuration").status_code == 403
+            assert client.get("/v2/model-configuration").status_code == 403
             assert (
                 client.put(
-                    "/v1/model-configuration",
+                    "/v2/model-configuration",
                     json={
                         "embedding_base_url": "https://embedding.example/v1",
                         "embedding_model": "m",
@@ -66,12 +66,12 @@ def test_model_configuration_requires_system_admin_and_never_returns_api_keys(mo
             name="admin", is_system_admin=True
         )
         with TestClient(app) as client:
-            current = client.get("/v1/model-configuration")
+            current = client.get("/v2/model-configuration")
             assert current.status_code == 200
             assert current.json()["embedding_api_key_set"] is True
             assert "embedding-secret" not in current.text
             saved = client.put(
-                "/v1/model-configuration",
+                "/v2/model-configuration",
                 json={
                     "embedding_base_url": "https://embedding.example/v1",
                     "embedding_model": "BAAI/bge-m3",
@@ -80,7 +80,7 @@ def test_model_configuration_requires_system_admin_and_never_returns_api_keys(mo
             assert saved.status_code == 200
             assert "embedding-secret" not in saved.text
             mismatch = client.put(
-                "/v1/model-configuration",
+                "/v2/model-configuration",
                 json={
                     "embedding_base_url": "https://embedding.example/v1",
                     "embedding_model": "other",
@@ -88,7 +88,7 @@ def test_model_configuration_requires_system_admin_and_never_returns_api_keys(mo
             )
             assert mismatch.status_code == 409
             invalid = client.put(
-                "/v1/model-configuration",
+                "/v2/model-configuration",
                 json={
                     "embedding_base_url": "file:///model",
                     "embedding_model": "BAAI/bge-m3",

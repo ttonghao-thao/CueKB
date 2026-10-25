@@ -3,8 +3,8 @@
 
 Creates a knowledge base and creates/deletes test content and an API key. The
 empty knowledge base remains (there is no KB deletion API). Do not point this at
-an instance where test writes are not acceptable. Shared management uses /v1;
-document ingestion/detail and all retrieval checks use /v2.
+an instance where test writes are not acceptable. Management, document
+ingestion/detail and retrieval all use /v2.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def denied_search(client: httpx.Client, kb_id: str, expected_status: int) -> Non
 def wait_job(client: httpx.Client, job_id: str, timeout: int = 600) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        response = client.get(f"/v1/jobs/{job_id}")
+        response = client.get(f"/v2/jobs/{job_id}")
         response.raise_for_status()
         job = response.json()
         if job["status"] == "failed":
@@ -109,11 +109,11 @@ def main() -> None:
     with httpx.Client(
         base_url=args.url, headers={"Authorization": f"Bearer {bootstrap_key}"}, timeout=30
     ) as admin:
-        admin.get("/v1/ready").raise_for_status()
+        admin.get("/v2/ready").raise_for_status()
         portal = admin.get("/portal/")
         portal.raise_for_status()
         assert "CueKB 管理门户" in portal.text
-        model_config_response = admin.get("/v1/model-configuration")
+        model_config_response = admin.get("/v2/model-configuration")
         model_config_response.raise_for_status()
         model_config = model_config_response.json()
         assert model_config["configured"], "configure Embedding in the portal before acceptance"
@@ -123,16 +123,16 @@ def main() -> None:
             if args.expect_rerank is not None
             else bool(model_config["reranker_base_url"])
         )
-        created_kb = admin.post("/v1/knowledge-bases", json={"name": f"acceptance-{run}"})
+        created_kb = admin.post("/v2/knowledge-bases", json={"name": f"acceptance-{run}"})
         created_kb.raise_for_status()
         kb = created_kb.json()
         created = admin.post(
-            "/v1/api-keys", json={"principal_name": f"acceptance-{run}", "label": "acceptance"}
+            "/v2/api-keys", json={"principal_name": f"acceptance-{run}", "label": "acceptance"}
         )
         created.raise_for_status()
         credentials = created.json()
         admin.put(
-            f"/v1/knowledge-bases/{kb['id']}/grants",
+            f"/v2/knowledge-bases/{kb['id']}/grants",
             json={"principal_id": credentials["principal_id"], "role": "write"},
         ).raise_for_status()
         with httpx.Client(
@@ -140,7 +140,7 @@ def main() -> None:
             headers={"Authorization": f"Bearer {credentials['api_key']}"},
             timeout=30,
         ) as client:
-            accessible = client.get("/v1/knowledge-bases")
+            accessible = client.get("/v2/knowledge-bases")
             accessible.raise_for_status()
             assert any(
                 item["id"] == kb["id"] and item["role"] == "write" for item in accessible.json()
@@ -150,18 +150,18 @@ def main() -> None:
                 kb["id"],
                 "manual",
                 "# 故障\n\nE102 表示旧版链路异常。\n\n检查旧版光功率。",
-                f"{run}-v1",
+                f"{run}-first",
             )
             duplicate = upload(
                 client,
                 kb["id"],
                 "manual",
                 "# 故障\n\nE102 表示旧版链路异常。\n\n检查旧版光功率。",
-                f"{run}-v1",
+                f"{run}-first",
             )
             assert duplicate["id"] == first["id"], "idempotency did not return original job"
             wait_job(client, first["id"])
-            documents = client.get("/v1/documents", params={"kb_id": kb["id"]})
+            documents = client.get("/v2/documents", params={"kb_id": kb["id"]})
             documents.raise_for_status()
             assert documents.json()[0]["id"] == first["document_id"]
             detail = client.get(f"/v2/documents/{first['document_id']}")
@@ -169,7 +169,7 @@ def main() -> None:
             parsed_detail = V2DocumentDetail.model_validate(detail.json())
             assert str(parsed_detail.active_version_id) == first["version_id"]
             assert all(v.processing_profile.startswith("evidence-v2:") for v in parsed_detail.versions)
-            source = client.get(f"/v1/documents/{first['document_id']}/source")
+            source = client.get(f"/v2/documents/{first['document_id']}/source")
             source.raise_for_status()
             assert b"E102" in source.content
             hybrid_body = search(client, kb["id"], "设备为什么出现链路异常", "hybrid")
@@ -200,7 +200,7 @@ def main() -> None:
                 kb["id"],
                 "manual",
                 "# 故障\n\nE103 表示新版链路异常。\n\n检查新版光功率。",
-                f"{run}-v2",
+                f"{run}-second",
                 first["document_id"],
             )
             wait_job(client, second["id"])
@@ -209,15 +209,15 @@ def main() -> None:
             current = search(client, kb["id"], "E103")
             assert current["hits"] and all(hit["version_id"] == second["version_id"] for hit in current["hits"])
             admin.delete(
-                f"/v1/knowledge-bases/{kb['id']}/grants/{credentials['principal_id']}"
+                f"/v2/knowledge-bases/{kb['id']}/grants/{credentials['principal_id']}"
             ).raise_for_status()
             denied_search(client, kb["id"], 403)
-            assert client.get(f"/v1/documents/{first['document_id']}/source").status_code == 403
-            admin.delete(f"/v1/documents/{first['document_id']}").raise_for_status()
+            assert client.get(f"/v2/documents/{first['document_id']}/source").status_code == 403
+            admin.delete(f"/v2/documents/{first['document_id']}").raise_for_status()
             gone = search(admin, kb["id"], "E103")
             assert not gone["hits"]
-            assert admin.get(f"/v1/documents/{first['document_id']}/source").status_code == 404
-            admin.delete(f"/v1/api-keys/{credentials['id']}").raise_for_status()
+            assert admin.get(f"/v2/documents/{first['document_id']}/source").status_code == 404
+            admin.delete(f"/v2/api-keys/{credentials['id']}").raise_for_status()
             denied_search(client, kb["id"], 401)
     print(
         "PASS: V2 auth, ACL, idempotent upload, worker, source, exact/hybrid, "

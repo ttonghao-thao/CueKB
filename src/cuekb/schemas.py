@@ -3,13 +3,16 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, SecretStr, model_validator
 
 from cuekb.domain.models import (
+    Applicability,
+    ContextRole,
     EvidenceStatus,
     RetrievalMode,
     RetrievalStatus,
     SourceAnchor,
+    SourceSpan,
     VersionStatus,
 )
 
@@ -75,14 +78,6 @@ class ModelConfigurationStatus(BaseModel):
     updated_at: datetime | None = None
 
 
-class DocumentCreate(BaseModel):
-    kb_id: UUID
-    name: str = Field(min_length=1, max_length=500)
-    content: str = Field(min_length=1)
-    business_version: str | None = Field(default=None, max_length=100)
-    scope: dict[str, Any] = Field(default_factory=dict)
-
-
 class SearchFilters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -90,61 +85,6 @@ class SearchFilters(BaseModel):
     product_model: str | None = None
     software_version: str | None = None
     category: str | None = None
-
-
-class SearchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    query: str = Field(min_length=1, max_length=2000)
-    kb_ids: list[UUID] = Field(min_length=1, max_length=50)
-    request_id: str | None = Field(default=None, min_length=1, max_length=128)
-    mode: RetrievalMode = RetrievalMode.AUTO
-    top_k: int = Field(default=8, ge=1, le=20)
-    filters: SearchFilters = Field(default_factory=SearchFilters)
-    include_context: bool = True
-    relations: "RelationQuery" = Field(default_factory=lambda: RelationQuery())
-
-    @model_validator(mode="after")
-    def unique_kbs(self) -> "SearchRequest":
-        if len(set(self.kb_ids)) != len(self.kb_ids):
-            raise ValueError("kb_ids must not contain duplicates")
-        return self
-
-
-class SearchHit(BaseModel):
-    chunk_id: UUID
-    document_id: UUID
-    version_id: UUID
-    rank: int
-    source_text: str
-    context: str | None = None
-    title_path: list[str]
-    anchor: SourceAnchor
-    metadata: dict[str, Any]
-    retrieval_sources: list[str]
-    document_name: str | None = None
-    content_sha256: str | None = None
-    score: float | None = None
-    score_type: str | None = None
-    stage_scores: dict[str, float] = Field(default_factory=dict)
-    context_parts: list["ContextPart"] = Field(default_factory=list)
-    context_truncated: bool = False
-    relations: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class SearchResponse(BaseModel):
-    trace_id: UUID
-    request_id: str | None = None
-    retrieval_status: RetrievalStatus
-    evidence_status: EvidenceStatus = EvidenceStatus.UNASSESSED
-    degraded_reasons: list[str] = Field(default_factory=list)
-    scope_limited: bool = False
-    content_revisions: dict[str, int]
-    timings_ms: dict[str, float]
-    retrieval_path: str = "keyword"
-    executed_stages: list[str] = Field(default_factory=list)
-    skipped_stages: list[dict[str, str]] = Field(default_factory=list)
-    hits: list[SearchHit]
 
 
 class HealthResponse(BaseModel):
@@ -155,15 +95,6 @@ class HealthResponse(BaseModel):
 class PublishRequest(BaseModel):
     version_id: UUID
     scope_key: Literal["default"] = "default"
-
-
-class DocumentMetadata(BaseModel):
-    kb_id: UUID
-    name: str = Field(min_length=1, max_length=500)
-    business_version: str | None = Field(default=None, max_length=100)
-    scope: dict[str, Any] = Field(default_factory=dict)
-    document_id: UUID | None = None
-    auto_publish: bool = False
 
 
 class ApiKeyCreate(BaseModel):
@@ -202,27 +133,6 @@ class DocumentSummary(BaseModel):
     latest_version_status: VersionStatus | None = None
     active_version_id: UUID | None = None
     active_business_version: str | None = None
-
-
-class DocumentVersionInfo(BaseModel):
-    id: UUID
-    content_sha256: str
-    business_version: str | None = None
-    scope: dict[str, Any]
-    status: VersionStatus
-    original_filename: str | None = None
-    media_type: str | None = None
-    created_at: datetime
-    is_active: bool = False
-
-
-class DocumentDetail(BaseModel):
-    id: UUID
-    kb_id: UUID
-    name: str
-    created_at: datetime
-    active_version_id: UUID | None = None
-    versions: list[DocumentVersionInfo]
 
 
 RelationType = Literal[
@@ -300,35 +210,32 @@ class GenerationCreate(ModelConfigurationUpdate):
     chunking_version: str | None = Field(default=None, min_length=1, max_length=100)
 
 
-class ContextPart(BaseModel):
-    chunk_id: UUID
-    source_text: str
-    anchor: SourceAnchor
-    title_path: list[str]
-
-
-SearchRequest.model_rebuild()
-SearchHit.model_rebuild()
-
-
-# V1 is intentionally frozen. V2 uses separate closed DTOs so strict consumers
-# can opt in explicitly rather than receiving an unsolicited schema extension.
-from pydantic import FiniteFloat
-
-from cuekb.domain.models import Applicability, ContextRole, SourceSpan
-
-
 class V2SearchFilters(SearchFilters):
     document_ids: list[UUID] = Field(default_factory=list, max_length=100)
 
 
-class V2SearchRequest(SearchRequest):
+class V2SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=2000)
+    kb_ids: list[UUID] = Field(min_length=1, max_length=50)
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    mode: RetrievalMode = RetrievalMode.AUTO
+    top_k: int = Field(default=8, ge=1, le=20)
+    include_context: bool = True
+    relations: RelationQuery = Field(default_factory=RelationQuery)
     filters: V2SearchFilters = Field(default_factory=V2SearchFilters)
     max_evidence_bytes: int = Field(default=48000, ge=4096, le=128000)
     include_diagnostics: bool = False
     selection_mode: Literal["ranked", "adaptive"] = "ranked"
     selection_query: str | None = Field(default=None, min_length=1, max_length=2000)
     query_facets: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def unique_kbs(self) -> "V2SearchRequest":
+        if len(set(self.kb_ids)) != len(self.kb_ids):
+            raise ValueError("kb_ids must not contain duplicates")
+        return self
 
     @model_validator(mode="after")
     def adaptive_inputs(self):
@@ -345,8 +252,13 @@ ContextOmission = Literal[
 RankingMethod = Literal["keyword_rrf", "rrf", "rrf_related", "rrf_then_rerank"]
 
 
-class V2ContextPart(ContextPart):
+class V2ContextPart(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    chunk_id: UUID
+    source_text: str
+    anchor: SourceAnchor
+    title_path: list[str]
 
     source_spans: list[SourceSpan] = Field(default_factory=list, max_length=64)
     role: ContextRole | None = None
@@ -365,8 +277,21 @@ class V2RelationEvidence(BaseModel):
     chunk_id: UUID
 
 
-class V2SearchHit(SearchHit):
+class V2SearchHit(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    chunk_id: UUID
+    document_id: UUID
+    version_id: UUID
+    source_text: str
+    context: str | None = None
+    title_path: list[str]
+    anchor: SourceAnchor
+    metadata: dict[str, Any]
+    retrieval_sources: list[str]
+    document_name: str | None = None
+    content_sha256: str | None = None
+    context_truncated: bool = False
 
     rank: int = Field(ge=1, le=20)
     score: FiniteFloat
@@ -476,8 +401,20 @@ class V2SelectionDiagnostics(BaseModel):
     coverage_assessment: Literal["unassessed"] = "unassessed"
 
 
-class V2SearchResponse(SearchResponse):
+class V2SearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    trace_id: UUID
+    request_id: str | None = None
+    retrieval_status: RetrievalStatus
+    evidence_status: EvidenceStatus = EvidenceStatus.UNASSESSED
+    degraded_reasons: list[str] = Field(default_factory=list)
+    scope_limited: bool = False
+    content_revisions: dict[str, int]
+    timings_ms: dict[str, float]
+    retrieval_path: str = "keyword"
+    executed_stages: list[str] = Field(default_factory=list)
+    skipped_stages: list[dict[str, str]] = Field(default_factory=list)
 
     schema_version: Literal["2"] = "2"
     ranking_method: RankingMethod
@@ -537,20 +474,45 @@ class RestoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class V2DocumentMetadata(DocumentMetadata):
+class V2DocumentMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    kb_id: UUID
+    name: str = Field(min_length=1, max_length=500)
+    business_version: str | None = Field(default=None, max_length=100)
+    scope: dict[str, Any] = Field(default_factory=dict)
+    document_id: UUID | None = None
+    auto_publish: bool = False
 
     scope_bindings: list[ScopeBindingInput] = Field(default_factory=list, max_length=100)
     document_default: CuratedScopeInput | None = None
 
 
-class V2DocumentVersionInfo(DocumentVersionInfo):
+class V2DocumentVersionInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    content_sha256: str
+    business_version: str | None = None
+    scope: dict[str, Any]
+    status: VersionStatus
+    original_filename: str | None = None
+    media_type: str | None = None
+    created_at: datetime
+    is_active: bool = False
     processing_profile: str
     derivation_kind: Literal["ingest", "reprocess", "restore"]
     source_version_id: UUID | None = None
 
 
-class V2DocumentDetail(DocumentDetail):
+class V2DocumentDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    kb_id: UUID
+    name: str
+    created_at: datetime
+    active_version_id: UUID | None = None
     versions: list[V2DocumentVersionInfo]
 
 

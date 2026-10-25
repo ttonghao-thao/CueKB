@@ -24,12 +24,12 @@ def test_production_kb_creation_requires_system_admin_and_passes_creator(monkeyp
     principal = Principal(name="kb-admin")
     app.dependency_overrides[current_principal] = lambda: principal
     with TestClient(app) as client:
-        denied = client.post("/v1/knowledge-bases", json={"name": "kb"})
+        denied = client.post("/v2/knowledge-bases", json={"name": "kb"})
         assert denied.status_code == 403
         assert denied.json()["detail"] == "system_admin_required"
         assert created == []
         principal.is_system_admin = True
-        result = client.post("/v1/knowledge-bases", json={"name": "  产品库  ", "description": "原文"})
+        result = client.post("/v2/knowledge-bases", json={"name": "  产品库  ", "description": "原文"})
         assert result.status_code == 201
         assert result.json()["name"] == "产品库"
         assert result.json()["id"] == str(created[0][0].id)
@@ -41,7 +41,7 @@ def test_production_kb_creation_requires_system_admin_and_passes_creator(monkeyp
 ])
 def test_kb_api_rejects_blank_or_oversized_fields(payload):
     with TestClient(create_app()) as client:
-        assert client.post("/v1/knowledge-bases", json=payload).status_code == 422
+        assert client.post("/v2/knowledge-bases", json=payload).status_code == 422
 
 
 def test_grant_unknown_kb_returns_not_found_without_writing(monkeypatch):
@@ -53,7 +53,7 @@ def test_grant_unknown_kb_returns_not_found_without_writing(monkeypatch):
     monkeypatch.setattr(routes, "repository", lambda: repo)
     app.dependency_overrides[current_principal] = lambda: Principal(name="admin", is_system_admin=True)
     with TestClient(app) as client:
-        result = client.put(f"/v1/knowledge-bases/{uuid4()}/grants",
+        result = client.put(f"/v2/knowledge-bases/{uuid4()}/grants",
                             json={"principal_id": str(uuid4()), "role": "read"})
         assert result.status_code == 404
         assert result.json()["detail"] == "knowledge_base_not_found"

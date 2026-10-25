@@ -44,24 +44,23 @@ def test_acceptance_cli_checks_v2_ingest_search_publication_acl_and_headers(acce
 
     def send(request):
         path, method = request.url.path, request.method
-        assert path != "/v1/search", "V1 retrieval must never be validated"
-        assert path != "/v1/documents" or method == "GET"
-        if path == "/v1/ready":
+        assert path.startswith("/v2/") or path == "/portal/", "CueKB clients must use V2 only"
+        if path == "/v2/ready":
             return httpx.Response(200, json={"status": "ok"})
         if path == "/portal/":
             return httpx.Response(200, text="CueKB 管理门户")
-        if path == "/v1/model-configuration":
+        if path == "/v2/model-configuration":
             return httpx.Response(200, json={"configured": True, "reranker_base_url": "http://fixture" if rerank else ""})
-        if path == "/v1/knowledge-bases":
+        if path == "/v2/knowledge-bases":
             return httpx.Response(200, json={"id": kb_id} if method == "POST" else [{"id": kb_id, "role": "write"}])
-        if path == "/v1/api-keys":
+        if path == "/v2/api-keys":
             return httpx.Response(200, json={"id": key_id, "principal_id": principal, "api_key": "fixture-business"})
-        if path == f"/v1/knowledge-bases/{kb_id}/grants":
+        if path == f"/v2/knowledge-bases/{kb_id}/grants":
             return httpx.Response(204)
-        if path == f"/v1/knowledge-bases/{kb_id}/grants/{principal}":
+        if path == f"/v2/knowledge-bases/{kb_id}/grants/{principal}":
             state["granted"] = False
             return httpx.Response(204)
-        if path == "/v2/documents":
+        if path == "/v2/documents" and method == "POST":
             message = BytesParser(policy=default).parsebytes(
                 b"Content-Type: " + request.headers["content-type"].encode() + b"\r\n\r\n" + request.content)
             parts = {part.get_param("name", header="content-disposition"): part.get_payload(decode=True)
@@ -75,23 +74,23 @@ def test_acceptance_cli_checks_v2_ingest_search_publication_acl_and_headers(acce
                 state["version"] = second_version
             return httpx.Response(202, json={"id": "job-first" if state["version"] == first_version else "job-second",
                                              "document_id": document_id, "version_id": state["version"]})
-        if path.startswith("/v1/jobs/"):
+        if path.startswith("/v2/jobs/"):
             return httpx.Response(200, json={"status": "succeeded", "stage": "published"})
-        if path == "/v1/documents":
+        if path == "/v2/documents":
             return httpx.Response(200, json=[{"id": document_id}])
-        if path == f"/v2/documents/{document_id}":
+        if path == f"/v2/documents/{document_id}" and method == "GET":
             return httpx.Response(200, json={"id": document_id, "kb_id": kb_id, "name": "manual",
                 "created_at": "2026-10-25T00:00:00Z", "active_version_id": first_version, "versions": [{
                     "id": first_version, "content_sha256": "a" * 64, "scope": {}, "status": "published",
                     "created_at": "2026-10-25T00:00:00Z", "processing_profile": "evidence-v2:fixture",
                     "derivation_kind": "ingest"}]})
-        if path == f"/v1/documents/{document_id}/source":
+        if path == f"/v2/documents/{document_id}/source":
             status = 404 if state["deleted"] else 403 if not state["granted"] else 200
             return httpx.Response(status, content=b"E102")
-        if path == f"/v1/documents/{document_id}" and method == "DELETE":
+        if path == f"/v2/documents/{document_id}" and method == "DELETE":
             state["deleted"] = True
             return httpx.Response(204)
-        if path == f"/v1/api-keys/{key_id}" and method == "DELETE":
+        if path == f"/v2/api-keys/{key_id}" and method == "DELETE":
             state["revoked"] = True
             return httpx.Response(204)
         if path == "/v2/search":

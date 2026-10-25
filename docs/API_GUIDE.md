@@ -1,6 +1,6 @@
 # CueKB 第三方接口规范
 
-更新：2026-10-25。本文描述当前代码契约，不是性能或模型质量承诺。检索演进与验证以V2为准；管理能力继续复用现有`/v1`路径。不要按版本号猜字段兼容性。
+更新：2026-10-25。本文描述当前代码契约，不是性能或模型质量承诺。全部CueKB接口使用`/v2`，检索、处理和管理采用同一契约版本。
 
 ## 1. 契约文件与通用约定
 
@@ -93,7 +93,7 @@ adaptive对问题中`A-100`等含字母、数字及分隔符的标识符施加�
 | processing_profile | 解析/分块/范围映射快照标识；不等于Embedding model或索引generation |
 | source_unit_id / block_kind | 原段/列表/表格单元标识，及text/list/table/heading；标题不单独占最终结果名额 |
 | source_text | PG解析原文；不按query补产品名或改事实。PDF/表格为可回原件的解析表示，不是二进制字节逐字等价 |
-| title_path / anchor | 章节路径与单一兼容位置摘要；anchor页码/offset/bbox可空 |
+| title_path / anchor | 章节路径与单一位置摘要；anchor页码/offset/bbox可空 |
 | source_spans | 真实多位置片段，含label/text/anchor、可空parser_item_id/span_id/行列索引；不能把缺位置当已准确定位 |
 | applicability | status、subjects、conditions；独立于metadata标签 |
 | rank / score / score_type | rank连续从1开始；score为实际RRF或同次重排分数，有限、越大越相关；score_type为rrf/rerank |
@@ -169,7 +169,7 @@ scope_bindings最多100个，每项用非空title_path（最多20级、前缀精
 
 客户端不能提交approved_entities、source_kind、source_spans来冒充审核/原文出处。服务器在入队时冻结本次审核别名和映射。给entity_id时必须属于该KB，显示名从冻结实体读取。没有映射不从query猜归属。无法匹配的选择器使处理任务失败，而非默默应用到其他范围。
 
-Job包含id、kb_id、document_id、version_id、status、stage、progress、error_code/error_message及时间。202只表示排队成功。`GET /v1/jobs/{job_id}`轮询；queued/running是处理中，failed查看错误，succeeded+ready尚未发布。`POST /v1/documents/{document_id}/publish`提交`{"version_id":"UUID","scope_key":"default"}`，write，204。
+Job包含id、kb_id、document_id、version_id、status、stage、progress、error_code/error_message及时间。202只表示排队成功。`GET /v2/jobs/{job_id}`轮询；queued/running是处理中，failed查看错误，succeeded+ready尚未发布。`POST /v2/documents/{document_id}/publish`提交`{"version_id":"UUID","scope_key":"default"}`，write，204。
 
 | 操作 | 契约 |
 | --- | --- |
@@ -177,50 +177,48 @@ Job包含id、kb_id、document_id、version_id、status、stage、progress、err
 | 版本信息 | `GET /v2/documents/{document_id}`，read；版本含processing_profile、derivation_kind、source_version_id，不默认返回全量处理快照 |
 | 重处理原件 | `POST /v2/documents/{document_id}/reprocess`，write+幂等键；source_version_id可空（当前published），target_profile只允许evidence-v2；可给scope_bindings/document_default；auto_publish默认false |
 | 恢复旧事实 | `POST /v2/documents/{document_id}/versions/{version_id}/restore`，body=`{}`，write+幂等键；创建全新版本/块ID，重新编码后ready，仍须显式发布 |
-| 下载原件 | `GET /v1/documents/{document_id}/source?version_id=UUID`，read；省略版本下载当前published；删除/撤权后拒绝 |
-| 删除 | `DELETE /v1/documents/{document_id}`，admin，204；PG立即不可见，OpenSearch异步清理，不承诺原件/备份硬删除 |
+| 下载原件 | `GET /v2/documents/{document_id}/source?version_id=UUID`，read；省略版本下载当前published；删除/撤权后拒绝 |
+| 删除 | `DELETE /v2/documents/{document_id}`，admin，204；PG立即不可见，OpenSearch异步清理，不承诺原件/备份硬删除 |
 
 幂等键作用域为principal+KB：同键同payload返回原Job，同键不同payload返回409；重试同一写请求必须保持payload与key。普通ingest/reprocess同文档、同原件hash、同processing_profile拒绝重复；有意restore是审计过的新派生版本，允许同内容。旧版本不会因上传成功立即失效，直到新版本publish。恢复不恢复旧权限、删除状态或自动复制人工关系。
 
 ## 6. 公共管理接口目录
 
-以下V1管理路径继续有效。所有请求/响应的完整嵌套字段以[OpenAPI](contracts/openapi.json)为准；不要将V2检索DTO用于这些接口。
+以下为V2管理接口。所有请求/响应的完整嵌套字段以[OpenAPI](contracts/openapi.json)为准；不要将V2检索DTO用于这些接口。
 
 ### 知识库创建与标识
 
-`POST /v1/knowledge-bases`请求为`{"name":"产品资料库","description":"客服原文"}`。name去除首尾空白后1–200字符，description可省略（默认空串，最多2000字符）；生产仅system admin可创建。成功HTTP201返回`id`（新UUID）、name、description、content_revision、acl_revision、created_at，并授予创建者该KB的admin权限。创建无需模型配置，但空库尚无可检索证据。
+`POST /v2/knowledge-bases`请求为`{"name":"产品资料库","description":"客服原文"}`。name去除首尾空白后1–200字符，description可省略（默认空串，最多2000字符）；生产仅system admin可创建。成功HTTP201返回`id`（新UUID）、name、description、content_revision、acl_revision、created_at，并授予创建者该KB的admin权限。创建无需模型配置，但空库尚无可检索证据。
 
-name允许重复，仅作展示；第三方检索必须用返回的id填`kb_ids`，上传则填`kb_id`。不能按名称唯一定位，不会自动按同名返回旧库。创建不支持幂等键，未知结果先查询`GET /v1/knowledge-bases`确认，不能盲目重试。
+name允许重复，仅作展示；第三方检索必须用返回的id填`kb_ids`，上传则填`kb_id`。不能按名称唯一定位，不会自动按同名返回旧库。创建不支持幂等键，未知结果先查询`GET /v2/knowledge-bases`确认，不能盲目重试。
 
-`GET /v1/knowledge-bases`成功HTTP200返回当前Key可访问的列表，每项含上述字段和有效`role`；未获授权的业务Key返回空列表，system admin可见所有KB。业务Key创建和KB授权是两个独立步骤，授权使用Key返回的`principal_id`，不能使用Key ID。Portal和后台命令的操作步骤在[接入说明](INTEGRATION_GUIDE.md#6-创建知识库与第三方配置)。
+`GET /v2/knowledge-bases`成功HTTP200返回当前Key可访问的列表，每项含上述字段和有效`role`；未获授权的业务Key返回空列表，system admin可见所有KB。业务Key创建和KB授权是两个独立步骤，授权使用Key返回的`principal_id`，不能使用Key ID。Portal和后台命令的操作步骤在[接入说明](INTEGRATION_GUIDE.md#6-创建知识库与第三方配置)。
 
 | 方法/路径 | 权限 | 输入/结果 |
 | --- | --- | --- |
-| GET /v1/health | 无 | 进程存活；status/version |
-| GET /v1/ready | 无 | 生产PG/OS就绪，不验证模型质量 |
-| POST /v1/knowledge-bases | system admin | name/description → KnowledgeBase |
-| GET /v1/knowledge-bases | 已鉴权 | 当前可访问KB列表及role |
-| GET /v1/documents | KB read | kb_id，limit默认100、offset默认0；分页文档摘要 |
-| GET /v1/documents/{id} | KB read | V1文档/版本视图，不包含V2处理扩展 |
-| POST /v1/documents | KB write | 兼容文件上传，必须有Idempotency-Key，不接受V2归属映射 |
-| POST /v1/documents/text | KB write | JSON kb_id/name/content/business_version/scope；生产异步任务且自动发布，不能替代可控文件审核流程 |
-| POST /v1/api-keys | system admin | principal_name/label，明文Key仅创建时返回一次 |
-| DELETE /v1/api-keys/{key_id} | system admin | 吊销Key，204 |
-| PUT /v1/knowledge-bases/{kb_id}/grants | KB admin | principal_id/role(read/write/admin)，204 |
-| DELETE /v1/knowledge-bases/{kb_id}/grants/{principal_id} | KB admin | 撤权，204 |
-| GET /v1/knowledge-bases/{kb_id}/entities | KB read | limit/offset分页 |
-| PUT /v1/knowledge-bases/{kb_id}/entities/{entity_id} | KB admin | name/kind/审核aliases/mention_chunk_ids |
-| DELETE /v1/knowledge-bases/{kb_id}/entities/{entity_id} | KB admin | 删除及修订更新 |
-| GET /v1/knowledge-bases/{kb_id}/relations | KB read | limit/offset分页 |
-| PUT /v1/knowledge-bases/{kb_id}/relations/{relation_id} | KB admin | subject_id/object_id/relation_type/evidence及条件/时间；证据必须当前可见且同KB |
-| DELETE /v1/knowledge-bases/{kb_id}/relations/{relation_id} | KB admin | 删除关系 |
-| GET/PUT /v1/model-configuration | system admin | 外部Embedding/可选Reranker配置；Key不回显 |
-| GET/POST /v1/index-generations | system admin | 查看/创建独立重建任务；POST模型三元组、dimension；省略chunking_version，由实际源profile记录，不重新解析 |
-| POST /v1/index-generations/{id}/activate | system admin | 验证后原子切模型/索引；过期任务拒绝 |
-| POST /v1/index-generations/{id}/rollback | system admin | 用旧模型配置重建当前PG数据；不是恢复旧事实 |
-| DELETE /v1/index-generations/{id} | system admin | 取消未激活重建 |
+| GET /v2/health | 无 | 进程存活；status/version |
+| GET /v2/ready | 无 | 生产PG/OS就绪，不验证模型质量 |
+| POST /v2/knowledge-bases | system admin | name/description → KnowledgeBase |
+| GET /v2/knowledge-bases | 已鉴权 | 当前可访问KB列表及role |
+| GET /v2/documents | KB read | kb_id，limit默认100、offset默认0；分页文档摘要 |
+| GET /v2/documents/{id} | KB read | 唯一文档详情视图，包含处理profile、版本派生及来源信息 |
+| POST /v2/documents | KB write | 文件＋metadata，必须有Idempotency-Key；支持归属映射，详见第5节 |
+| POST /v2/api-keys | system admin | principal_name/label，明文Key仅创建时返回一次 |
+| DELETE /v2/api-keys/{key_id} | system admin | 吊销Key，204 |
+| PUT /v2/knowledge-bases/{kb_id}/grants | KB admin | principal_id/role(read/write/admin)，204 |
+| DELETE /v2/knowledge-bases/{kb_id}/grants/{principal_id} | KB admin | 撤权，204 |
+| GET /v2/knowledge-bases/{kb_id}/entities | KB read | limit/offset分页 |
+| PUT /v2/knowledge-bases/{kb_id}/entities/{entity_id} | KB admin | name/kind/审核aliases/mention_chunk_ids |
+| DELETE /v2/knowledge-bases/{kb_id}/entities/{entity_id} | KB admin | 删除及修订更新 |
+| GET /v2/knowledge-bases/{kb_id}/relations | KB read | limit/offset分页 |
+| PUT /v2/knowledge-bases/{kb_id}/relations/{relation_id} | KB admin | subject_id/object_id/relation_type/evidence及条件/时间；证据必须当前可见且同KB |
+| DELETE /v2/knowledge-bases/{kb_id}/relations/{relation_id} | KB admin | 删除关系 |
+| GET/PUT /v2/model-configuration | system admin | 外部Embedding/可选Reranker配置；Key不回显 |
+| GET/POST /v2/index-generations | system admin | 查看/创建独立重建任务；POST模型三元组、dimension；省略chunking_version，由实际源profile记录，不重新解析 |
+| POST /v2/index-generations/{id}/activate | system admin | 验证后原子切模型/索引；过期任务拒绝 |
+| POST /v2/index-generations/{id}/rollback | system admin | 用旧模型配置重建当前PG数据；不是恢复旧事实 |
+| DELETE /v2/index-generations/{id} | system admin | 取消未激活重建 |
 
-保留的`POST /v1/search`不属于后续检索演进与本轮验证范围；其现有契约仍可从OpenAPI查看。新接入与选择策略切换均使用V2，未知响应明确失败，不自动切换检索协议兜底。
 
 ## 7. 错误契约
 
@@ -228,7 +226,7 @@ name允许重复，仅作展示；第三方检索必须用返回的id填`kb_ids`
 {"detail":"search_deadline_exceeded","error_code":"SEARCH_DEADLINE_EXCEEDED","trace_id":"22222222-2222-4222-8222-222222222222","request_id":null}
 ```
 
-detail为字符串或校验错误列表（仅loc/msg/type，不回显input/ctx）；HTTP码和detail保留供既有调用方兼容。不得从错误文字推断知识不存在。
+detail为字符串或校验错误列表（仅loc/msg/type，不回显input/ctx）；HTTP码、detail与error_code共同表示错误。不得从错误文字推断知识不存在。
 
 | HTTP | error_code / 情况 |
 | --- | --- |

@@ -205,10 +205,8 @@ def _run_ingestion_once() -> bool:
         thread.start()
         stage_started = time.perf_counter()
         if model_search.client.indices.exists(index=model_search.index_name):
-            mapping = model_search.client.indices.get_mapping(index=model_search.index_name)[model_search.index_name]["mappings"]
-            template = mapping.get("_meta", {}).get("input_template_revision", "structured-v1")
-        else:
-            template = "evidence-v2"
+            model_search.validate_v2_projection()
+        template = "evidence-v2"
         chunks = materialize_chunks(current.repository, current.storage, job, template=template)
         logger.info("ingestion_stage_finished", extra={"job_id": str(job["id"]), "stage": "parse", "duration_ms": (time.perf_counter() - stage_started) * 1000, "chunk_count": len(chunks)})
         stage_started = time.perf_counter()

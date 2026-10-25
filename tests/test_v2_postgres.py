@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from test_m3_postgres import pg, seed
 from cuekb.adapters.postgres import ConflictError
-from cuekb.domain.models import KnowledgeBase
+from cuekb.domain.models import DEFAULT_PROCESSING_PROFILE, KnowledgeBase, default_processing_snapshot
 from cuekb.services.execution import SearchExecution, SearchDeadlineExceeded, activate_execution
 from cuekb.worker import materialize_chunks
 from cuekb.schemas import EntityWrite
@@ -23,8 +23,8 @@ def test_pg_initial_processing_defaults_match_domain_defaults(pg):
         snapshot = connection.execute(text(
             "SELECT processing_profile,processing_snapshot FROM document_versions WHERE id=:version"
         ), {"version": chunk.version_id}).one()
-    assert snapshot.processing_profile == "structured-v1"
-    assert snapshot.processing_snapshot == {}
+    assert snapshot.processing_profile == DEFAULT_PROCESSING_PROFILE
+    assert snapshot.processing_snapshot == default_processing_snapshot()
 
 
 def create_version(repo):

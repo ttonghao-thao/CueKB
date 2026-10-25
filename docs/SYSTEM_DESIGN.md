@@ -1,12 +1,12 @@
 # 当前系统设计
 
-更新：2026-10-25。本文是当前架构与设计的主文档；接口字段在[接口规范](API_GUIDE.md)，验证方法在[验收方法](ACCEPTANCE.md)，实际需求复核/验证结果及未验收项只在[任务板](../TASK_BOARD.md)维护。后续检索演进聚焦V2，共享管理接口继续使用现有路径。
+更新：2026-10-25。本文是当前架构与设计的主文档；接口字段在[接口规范](API_GUIDE.md)，验证方法在[验收方法](ACCEPTANCE.md)，实际需求复核/验证结果及未验收项只在[任务板](../TASK_BOARD.md)维护。全部CueKB接口、处理链与验证统一为V2。
 
 ## 1. 模块与权威边界
 
 | 模块 | 当前职责 |
 | --- | --- |
-| api/routes.py、api/v2.py、schemas.py | 共享管理能力、V2证据接口及严格DTO；旧检索路由保留但不作为演进目标 |
+| api/routes.py、api/v2.py、schemas.py | V2管理、证据检索与文件处理接口及严格DTO |
 | services/retrieval_v2.py | V2真实融合评分、统一重排窗口、最终权威复验及有界输出 |
 | services/selection.py | V2动态证据集合、字面覆盖与保守差异保护、固定绑定的可选相关性门控 |
 | services/parsing.py、evidence.py、context.py | 解析、来源位置、可信局部归属、必要依赖和上下文组装 |
@@ -23,7 +23,7 @@ OpenSearch只返回候选ID/分数，不作为正文或权限权威。所有返�
 
 ## 2. 原件、版本和处理快照
 
-一个逻辑document有多个不可变document_version，每个版本拥有独立chunk ID、原件hash和processing_profile。`structured-v1`为保留的旧处理方式；新导入默认使用`evidence-v2:<snapshot hash>`，快照冻结服务器审核实体/别名、客户端可信映射及处理配置。
+一个逻辑document有多个不可变document_version，每个版本拥有独立chunk ID、原件hash和processing_profile。导入使用`evidence-v2:<snapshot hash>`，快照冻结服务器审核实体/别名、客户端可信映射及处理配置。
 
 API不接受客户端伪造approved_entities、来源spans或source_kind。实体ID必须属于目标KB；显示名取冻结实体。映射选择器是章节路径前缀和/或source_unit_id，处理时未匹配即失败。映射冲突保留ambiguous；body提及某产品不能自动成为该产品事实。
 
@@ -33,7 +33,7 @@ API不接受客户端伪造approved_entities、来源spans或source_kind。实�
 
 ## 3. 结构化证据和归属
 
-Chunk保留`source_text`、`title_path`、兼容anchor、多位置source_spans和EvidenceStructure。结构含block_kind、source_unit_id、applicability、context_links及未解决依赖标志。spans可携带原始位置、parser item、表格行列；原解析器未提供的精度保持空，不造页码或bbox。
+Chunk保留`source_text`、`title_path`、单一位置anchor、多位置source_spans和EvidenceStructure。结构含block_kind、source_unit_id、applicability、context_links及未解决依赖标志。spans可携带原始位置、parser item、表格行列；原解析器未提供的精度保持空，不造页码或bbox。
 
 Markdown保留章节、段落、列表引导条件和表格整行/表头关系。长原块拆分仍共享源单元身份，必要续块直接关联，不能依赖无界递归。Docling保留其实际provenance；PDF/DOCX复杂表格的可靠程度须按真实样本检验。
 
@@ -41,7 +41,7 @@ applicability仅在可信映射或审核别名与结构匹配时resolved；未�
 
 必要依赖的读取与可选近邻先经过同KB/document/version、主体与条件兼容检查，再考虑位置；不靠同文档越过产品边界。入库拒绝悬空、跨版本、自引用、重复及循环依赖。依赖或预算不足显式unresolved/truncated，不将不完整上下文标成完整。
 
-`search_text`可加入可信标题/产品/表头以改善召回，原文不改写。Embedding、generation与rerank输入复用同一模板构造函数；旧索引缺模板标识时按legacy处理，不默默按新模板查询。
+`search_text`可加入可信标题/产品/表头以改善召回，原文不改写。Embedding、generation与rerank输入复用同一模板构造函数；缺少有效模板标识的索引明确拒绝，不按另一种处理方式猜测文本。
 
 ## 4. V2请求链路
 
@@ -56,7 +56,7 @@ applicability仅在可信映射或审核别名与结构匹配时resolved；未�
 
 ### 4.1 动态证据选择
 
-`selection_mode=adaptive`显式启用；默认ranked保持兼容。候选数、重排窗口和返回上限是三个独立概念。选择器每轮计算新facet/查询词项观察、已知必要依赖的补齐和新增数值/否定/条件差异，并用精确字节成本控制负载。没有新观察时仅允许保守文本多样性增益；已观察的范围重复则停止，不以凑满top_k为目标。数值、业务版本、局部主体/条件差异保留；数值提取保留Unicode正负号，避免负温度被当作相同正值去重。内部选择规则revision参与adaptive的ranking_version指纹，公开selection.version保持evidence-set-v1。没有普适的语义去重或全库冲突裁决。
+`selection_mode=adaptive`显式启用；默认ranked按实际排序选择。候选数、重排窗口和返回上限是三个独立概念。选择器每轮计算新facet/查询词项观察、已知必要依赖的补齐和新增数值/否定/条件差异，并用精确字节成本控制负载。没有新观察时仅允许保守文本多样性增益；已观察的范围重复则停止，不以凑满top_k为目标。数值、业务版本、局部主体/条件差异保留；数值提取保留Unicode正负号，避免负温度被当作相同正值去重。内部选择规则revision参与adaptive的ranking_version指纹，公开selection.version保持evidence-set-v1。没有普适的语义去重或全库冲突裁决。
 
 每个请求的InformationSelector、候选、已选集合和覆盖观察独立。必要条件、表头及归属保持真实身份；已包含在必要上下文的同一块不再次占主结果名额。可选近邻排除其他结果已返回的块，并要求同原始单元、明确条件/例外链接或新增查询信息，避免单凭邻近注入无关介绍。共享必要依赖仍可重复序列化，实际重复字节完整计费，现有契约不改成悬空ID引用。
 
