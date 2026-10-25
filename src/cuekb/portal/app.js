@@ -361,6 +361,19 @@ async function pollJob(id) {
   } catch (error) { handleError(error, "查询导入进度失败"); }
 }
 
+function renderSearchEvidence(hit) {
+  const primary = `<div class="evidence-primary"><p class="muted">命中原文</p><p>${escapeHtml(hit.source_text)}</p></div>`;
+  const parts = (hit.context_parts || []).filter(part => part.chunk_id !== hit.chunk_id);
+  const context = parts.length
+    ? parts.map(part => `<div class="evidence-context"><p class="muted">${part.required ? "必要上下文" : "相关上下文"} · ${escapeHtml(shortId(part.chunk_id))}</p><p>${escapeHtml(part.source_text)}</p></div>`).join("")
+    : hit.context && hit.context !== hit.source_text
+      ? `<div class="evidence-context"><p class="muted">补充上下文</p><p>${escapeHtml(hit.context)}</p></div>` : "";
+  const note = hit.context_state === "unresolved"
+    ? '<p class="evidence-note">必要上下文不完整，请核验适用条件。</p>'
+    : hit.context_truncated ? '<p class="evidence-note">部分上下文因预算省略，命中原文仍完整展示。</p>' : "";
+  return `${primary}${context}${note}`;
+}
+
 async function search(event) {
   event.preventDefault();
   if (!state.currentKb) return toast("请先选择知识库", "error");
@@ -373,7 +386,7 @@ async function search(event) {
     $("#search-summary").textContent = `${result.hits.length} 条证据${result.scope_limited ? " · 仅有界一跳，不代表全部影响范围" : ""} · 路径 ${result.retrieval_path} · ${(result.timings_ms.total || 0).toFixed(1)} ms${result.degraded_reasons.length ? ` · 降级：${result.degraded_reasons.join(", ")}` : ""}`;
     if (result.ranking_method) $("#search-summary").textContent += ` · 排序 ${result.ranking_method} · 证据状态 ${result.evidence_status} · ${result.diagnostics.sizes.hits_bytes} bytes`;
     if (result.diagnostics?.selection) $("#search-summary").textContent += ` · 动态停止 ${result.diagnostics.selection.stop_reason} · 校准 ${result.diagnostics.selection.calibration_status}`;
-    $("#search-results").innerHTML = result.hits.length ? result.hits.map((hit) => `<article class="panel result-card"><div class="result-meta"><span>#${hit.rank}</span><span>文档 ${escapeHtml(hit.document_name || shortId(hit.document_id))}</span><span>${escapeHtml(hit.title_path.join(" / ") || "正文")}</span><span>${escapeHtml(hit.retrieval_sources.join(" + "))}</span></div>${hit.applicability ? `<p class="muted">归属：${escapeHtml(hit.applicability.subjects.map(s => s.display_name).join("、") || "未确定")} (${escapeHtml(hit.applicability.status)}) · 上下文 ${escapeHtml(hit.context_state)}</p>` : ""}<p>${escapeHtml(hit.context || hit.source_text)}</p><p class="muted">块 ID：${escapeHtml(hit.chunk_id)}${hit.context_truncated ? " · 上下文受预算截断" : ""}</p>${(hit.relations || []).map(r => `<p class="muted">${escapeHtml(r.relation_type)} · ${escapeHtml(r.stance)} · ${escapeHtml(r.subject_id)} → ${escapeHtml(r.object_id)}</p>`).join("")}</article>`).join("") : `<div class="panel empty">本次没有可返回证据 · ${escapeHtml(result.retrieval_status)}</div>`;
+    $("#search-results").innerHTML = result.hits.length ? result.hits.map((hit) => `<article class="panel result-card"><div class="result-meta"><span>#${hit.rank}</span><span>文档 ${escapeHtml(hit.document_name || shortId(hit.document_id))}</span><span>${escapeHtml(hit.title_path.join(" / ") || "正文")}</span><span>${escapeHtml(hit.retrieval_sources.join(" + "))}</span></div>${hit.applicability ? `<p class="muted">归属：${escapeHtml(hit.applicability.subjects.map(s => s.display_name).join("、") || "未确定")} (${escapeHtml(hit.applicability.status)}) · 上下文 ${escapeHtml(hit.context_state)}</p>` : ""}${renderSearchEvidence(hit)}<p class="muted">块 ID：${escapeHtml(hit.chunk_id)}${hit.context_truncated ? " · 上下文受预算截断" : ""}</p>${(hit.relations || []).map(r => `<p class="muted">${escapeHtml(r.relation_type)} · ${escapeHtml(r.stance)} · ${escapeHtml(r.subject_id)} → ${escapeHtml(r.object_id)}</p>`).join("")}</article>`).join("") : `<div class="panel empty">本次没有可返回证据 · ${escapeHtml(result.retrieval_status)}</div>`;
   } catch (error) { $("#search-results").innerHTML = ""; handleError(error, "检索失败"); }
 }
 

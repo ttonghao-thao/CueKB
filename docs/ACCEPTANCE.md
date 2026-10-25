@@ -68,3 +68,15 @@ chunk_ids是一个单元的OR等价ID列表；事实、必要条件分别列为A
 ## 5. 端到端独立验收
 
 CueKB验收只证明本次返回的原文证据。voice-service-agent必须独立升级严格DTO和引用映射，保留必要依赖、按预算取证，验证复合问题逐项回答、比例口述、否定/例外表达及实际播放。调用方裁剪后遗漏条件不能由CueKB的top_k或未裁剪响应承担保证。
+
+## 6. 门户原文与上下文验收
+
+先运行`.venv/bin/python -m pytest -q tests/test_portal_evidence.py tests/test_adaptive_selection.py`与`node --check src/cuekb/portal/app.js`。渲染回归执行实际app.js函数，覆盖长主事实、必要条件、同身份去重、HTML转义、未解决依赖和V1上下文回退。未安装Node时渲染用例显式跳过，不能算前端通过。
+
+浏览器在独立测试实例按以下场景复测，并与同一HTTP响应对照；不要将受控候选结果当作模型质量基准：
+
+1. 具备重复介绍和多个属性的样例，adaptive应保留属性证据且不从可选近邻重新注入已排除介绍；比较ranked与adaptive条数、停止原因及实际正文。
+2. 必要条件不单独占主结果名额，显示“命中原文”和真实依赖正文；同一主块不在上下文中重复展示。
+3. 主事实长于上下文预算时，source_text仍完整显示；如果context只容纳条件，也不能覆盖主事实，并保留预算提示。
+4. 必要依赖缺失显示unresolved提示；正常not_found空结果与请求错误分别表达，充分性保持unassessed。
+5. 切换V1/默认ranked后不携带动态专用输入；响应与原文展示兼容。最后关闭测试标签页和隔离服务。

@@ -1,46 +1,50 @@
 # CueKB 任务板
 
-## 查询准确性与动态证据选择（2026-10-25）
+## 门户收尾与动态证据选择（2026-10-25）
 
-用户已授权修复六项准确性问题、实施六步动态选择、清理过时文档并提交推送。基线为4843a6f；当前实现以源码、完整初始化schema和生成契约为准。
+六项准确性改进已在47f20bc交付。本轮按用户要求补齐此前因锁屏中断的门户复测，并检查相关编码缺口；当前实现以源码、完整初始化schema和生成契约为准。
 
-| 里程碑 | 状态 | 交付与验证 |
+| 里程碑 | 状态 | 交付 |
 | --- | --- | --- |
-| 归属与搜索故障修复 | 已完成 | 同实体兼容信息合并、多版本声明保留、真正冲突不放宽；OS超时/提前终止/失败分片拒绝正常结果 |
-| 动态证据组与门控 | 已完成 | adaptive显式启用，必要组、新增属性/差异、去重、精确预算替补和停止诊断；最终PG复验 |
-| 词法与关系排序 | 已完成 | 冻结可信别名、规范名/表格/精确标识符字段、新词法revision；关系按查询信号排序并限制融合权重 |
-| 校准、评测与接口 | 已完成 | 人工评分校准工具、配置绑定、AND/OR证据完整率和动态负载指标；闭合DTO、OpenAPI、合成示例及门户 |
-| 文档清理与完整验证 | 已完成 | 全量测试、契约、脚本/文档、隔离门户检查；发布按用户授权执行，结果以Git refs及最终回执为准 |
+| 查询准确性与动态选择 | 已完成 | 同实体归属合并、部分搜索失败识别、可选校准门控、预算替补、新增信息选择、词法投影及关系排序 |
+| 门户原文展示修复 | 已完成 | 非空context不再覆盖source_text；单独展示主事实、必要/相关上下文，按chunk身份避免主块重复，保留预算/依赖缺失提示 |
+| 真实门户与HTTP对照 | 已完成 | Safari与隔离localhost HTTP完成下列场景；没有使用生产数据或真实模型 |
+| 回归、文档与交付 | 已完成 | 全量测试和契约检查通过，新增渲染回归与验收步骤；继续此前授权的提交推送，结果以Git refs和最终回执为准 |
 
-本轮实施复用PostgreSQL权威、OpenSearch投影、可选Reranker、既有Worker/generation和统一deadline。没有新增数据库结构、数据库执行指令、生成式回答或基础设施。默认ranked保持既有V2响应形状；只有显式adaptive才返回selection诊断。top_k始终为安全上限。
+本轮定位的编码问题：当主事实长于上下文预算、context仅容得下条件段时，API仍保留完整source_text，但旧门户使用context优先的表达式，导致主事实不可见。现已独立渲染source_text并补充真实context_parts；V1没有parts时仍保留其上下文回退。没有改动搜索API契约、评分或数据库结构。
 
-## 本轮验证
+## 本轮实际验证
 
-最终全量测试：**190 passed、16 skipped、2条依赖弃用警告**。16项真实PG测试未配置专用测试库而跳过，包含新增实际快照归属合并持久化用例。覆盖生产快照形状、部分分片失败、无/有Reranker门控、型号近邻、多产品/版本、必要条件、不同否定、比例/符号/Unicode单位、预算替补、精确字节、10请求隔离和严格契约。
+全量测试：**194 passed、16 skipped、2条依赖弃用警告**。新增4项[门户渲染回归](tests/test_portal_evidence.py)实际执行app.js函数，覆盖长主事实及必要条件、身份去重、HTML转义、依赖缺失提示和V1回退；4项均执行通过。16项真实PG测试因未配置专用测试库跳过，不算通过真实PG验收。
 
-已经执行：OpenAPI/JSON Schema/两种策略示例重新导出与freshness检查、Python编译、JavaScript和部署脚本语法、Compose YAML/只读挂载检查、15份Markdown的87个本地链接/锚点及26个代码块检查、diff检查。校准CLI用隔离合成标签实跑并核对profile hash，没有部署该阈值。另直接加载4843a6f的旧V2严格DTO验证：ranked响应可解析，adaptive响应按预期要求升级DTO。Docker CLI不可用，未构建镜像或启动真实Compose。
+| 隔离验证场景 | 实际结果 |
+| --- | --- |
+| adaptive与ranked对照 | 相同受控候选及上限20，分别返回3条属性证据和5条排序证据；adaptive的正文/可选上下文均无无关介绍 |
+| 必要条件 | 一条主命中同时显示“Storage: 45 days.”与“Only when sealed; opened storage is 3 days.”，依赖不重复占主结果名额 |
+| 上下文预算 | 5221字符主事实完整保存在API及实际JS渲染输出；Safari显示主事实、必要条件和预算提示，非空context不再隐藏主事实 |
+| 依赖缺失与空结果 | unresolved显示明确提示；正常无候选显示not_found，证据充分性均保留unassessed |
+| V1与ranked兼容 | 门户请求成功，动态专用字段没有泄漏；V1主事实及上下文可见。隔离V1未配置模型，保留其原有vector_unavailable提示，不声称验证了真实向量召回 |
+| HTTP隔离与校验 | 10个同时HTTP请求的trace与KB修订隔离通过；9个facet请求按约定422；排名连续且分数降序 |
 
-Safari真实界面在隔离内存服务中验证动态控件、复合查询及20上限下实际返回3条证据、停止原因和未校准状态。发现可选近邻夹带无关介绍后已修复并加入API回归；最后一次页面复测遇到本机锁屏而未完成，没有尝试解锁。测试服务已停止。
+上述HTTP请求是真实localhost HTTP，检索数据、候选和模型响应仍为隔离合成夹具；没有将页面显示的毫秒数当作生产P95。此前“修正后页面未复测”的事项已关闭。测试标签页及隔离服务均已关闭。
 
-单元/协议/门户测试使用隔离内存、HTTP MockTransport或合成分数，不能据此声称真实模型准确率、Docling扫描件质量或10并发P95已达标。未操作生产数据、外部模型、现有数据库或数据卷。
+另已执行：Python编译、JavaScript语法、OpenAPI/JSON Schema/示例freshness、本地文档链接/锚点和diff检查。搜索DTO与生成契约未变化。没有运行Docker镜像构建、真实PG/OS、Docling扫描件或外部模型服务；本机无Docker CLI，也未配置专用测试PG。
 
-## 当前文档与清理
+## 当前规范
 
-接口在[API_GUIDE](docs/API_GUIDE.md)，接入在[INTEGRATION_GUIDE](docs/INTEGRATION_GUIDE.md)，当前架构在[SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md)，校准/投影操作在[OPERATIONS](docs/OPERATIONS.md)，限制在[SYSTEM_CONSTRAINTS](docs/SYSTEM_CONSTRAINTS.md)，验收在[ACCEPTANCE](docs/ACCEPTANCE.md)。
-
-已删除被本次实现替代的审查方案，以及引用旧源码基线/M4状态的关联研究方案；独立离线实验保留[实际运行说明](experiments/associations/README.md)。旧阶段设计、历史测试和发布记录由Git追溯，不维护成另一份现行操作规范。
+接口在[API_GUIDE](docs/API_GUIDE.md)，接入在[INTEGRATION_GUIDE](docs/INTEGRATION_GUIDE.md)，架构在[SYSTEM_DESIGN](docs/SYSTEM_DESIGN.md)，校准/投影操作在[OPERATIONS](docs/OPERATIONS.md)，限制在[SYSTEM_CONSTRAINTS](docs/SYSTEM_CONSTRAINTS.md)，验收在[ACCEPTANCE](docs/ACCEPTANCE.md)。旧阶段设计、历史测试和发布记录由Git追溯，不维护另一份现行规范。
 
 ## 待真实环境验收
 
 1. 专用PG完整初始化、发布/删除/撤权竞争、归属修订持久化、SQL取消与连接释放；真实OS新映射、BM25/k-NN和generation切换。
 2. 固定英文通识、产品与技术文档并保留多语言回归，独立人工标注产品/版本、条件/否定、无答案与可替代完整证据方案。
-3. 按文档/产品/问题家族隔离calibration/test，录制实际评分并拟合校准；当前未提供或部署声称适用于真实语料的阈值。
+3. 按文档/产品/问题家族隔离calibration/test，录制实际评分并拟合校准；当前未提供或部署适用于真实语料的实测阈值。
 4. 同文档版本、授权、候选/字节预算和硬件下，对照ranked/adaptive、无/有Reranker，测Recall/MRR、完整率、误收/误拒、实际precision和负载。
-5. 真实10并发测P50/P95/P99、错误/降级率、稳定性和质量；记录冷/热状态、语料规模和模型/网络条件。内存并发隔离不等于吞吐验收。
+5. 真实10并发测P50/P95/P99、错误/降级率、稳定性和质量；记录冷/热状态、语料规模和模型/网络条件。内存及localhost并发隔离不等于生产吞吐验收。
 6. voice-service-agent先升级严格DTO、选择诊断和引用映射，再端到端验证多产品、多属性、比例口述和实际语音。本仓库不代替第三方升级。
 
 ## 后续边界
 
 缓存、跨进程模型配额、通用语义覆盖分类、自动冲突裁决、完整OCR质量保障、文档级ACL和历史版本检索尚未实现。自动关联仍为同KB、一跳、无LLM的独立离线实验，PG持久化与线上接入没有隐含启用。
 
-本期采用全新部署，完整db/schema.sql由空PostgreSQL数据目录首次启动加载；不维护既有数据库结构升级链。新词法投影使用scope-lexical-v2.2；原件处理修订为evidence-v2.2，冻结快照不被静默重解释。用户本地.zcode/保持原样，不纳入提交。提交/推送结果以Git refs和最终交付回执为准。
+本期采用全新部署，完整db/schema.sql由空PostgreSQL数据目录首次启动加载；不维护既有数据库结构升级链。新词法投影使用scope-lexical-v2.2，原件处理修订为evidence-v2.2。用户本地.zcode/保持原样，不纳入提交。提交/推送结果以Git refs和最终回执为准。

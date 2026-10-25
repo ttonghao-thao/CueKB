@@ -66,6 +66,8 @@ asyncio.run(main())
 5. 200 not_found、200 degraded空结果、HTTP错误分别处理。没有检索到价格/运输信息，不等于全库没有这些资料。
 6. 相关证据可以保留多个产品/多个条件，但不能跨产品拼成一条事实；实体ID用于关联，可读名称用于展示/口述。
 
+显示主事实使用source_text，上下文从context_parts补充；不要用非空context替代source_text。预算限制下context可能只包含条件段，主事实仍完整保存在source_text。同一chunk_id的主块无需重复显示；必要上下文不能因此被删掉。门户按此方式区分“命中原文”“必要上下文”和“相关上下文”，并提示未解决依赖/预算省略。
+
 CueKB max_evidence_bytes约束API hits数组；调用方的模型包可能还有独立字符/token/字节限制。分别记录CueKB返回数、Adapter保留数、模型实际接收数和省略原因。top_k=20不保证模型收到了20条。
 
 ## 4. 文件导入与审核发布

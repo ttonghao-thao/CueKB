@@ -93,6 +93,9 @@ tr[data-document]:hover { background: #f8fbf9; }
 .result-card { padding: 20px; }
 .result-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
 .result-card p { margin: 0; white-space: pre-wrap; line-height: 1.65; }
+.evidence-primary, .evidence-context { margin: 12px 0; overflow-wrap: anywhere; }
+.evidence-context { padding-left: 12px; border-left: 2px solid var(--line); }
+.result-card .evidence-note { margin-top: 12px; color: var(--warning); }
 dialog { width: min(440px, calc(100vw - 32px)); border: 0; border-radius: 16px; padding: 28px; box-shadow: var(--shadow); }
 dialog::backdrop { background: rgba(9,26,19,.46); backdrop-filter: blur(2px); }
 .wide-dialog { width: min(820px, calc(100vw - 32px)); }
