@@ -1,6 +1,6 @@
 # CueKB 第三方接口规范
 
-更新：2026-10-25。本文描述当前代码契约，不是性能或模型质量承诺。新集成使用V2证据检索；管理能力同时复用V1。不要按版本号猜字段兼容性。
+更新：2026-10-25。本文描述当前代码契约，不是性能或模型质量承诺。检索演进与验证以V2为准；管理能力继续复用现有`/v1`路径。不要按版本号猜字段兼容性。
 
 ## 1. 契约文件与通用约定
 
@@ -55,7 +55,7 @@
 
 请求及filters/relations/归属映射中的未知字段返回422；`retrieval_mode`不是`mode`别名，也没有original_question、version_policy、历史版本检索等隐含字段。
 
-auto以服务端标识符正则选择exact或hybrid。V2 exact对单个含字母和数字的标识符使用保留标点、大小写归一化的keyword token等值，其他文本使用分析器短语匹配，跳过Embedding与重排；V1保持原短语/型号路径。hybrid使用OpenSearch BM25与Embedding/k-NN、RRF。related加有出处的一跳，scope_limited为true。
+auto以服务端标识符正则选择exact或hybrid。V2 exact对单个含字母和数字的标识符使用保留标点、大小写归一化的keyword token等值，其他文本使用分析器短语匹配，跳过Embedding与重排。hybrid使用OpenSearch BM25与Embedding/k-NN、RRF。related加有出处的一跳，scope_limited为true。
 
 adaptive对问题中`A-100`等含字母、数字及分隔符的标识符施加有界token约束；多个标识符按OR处理，PG最终也复验，`A-1000`不能冒充`A-100`。这不是产品自动消歧器，不推断无明确标识符的产品归属。规范名、冻结审核别名、型号、表格标签参与新的V2词法投影；缺少`scope-lexical-v2.2`投影时返回INDEX_UPGRADE_REQUIRED。
 
@@ -110,7 +110,7 @@ applicability.status为resolved、unknown、ambiguous。subject携带可空entit
 
 context_state优先级：必要依赖缺失unresolved；可选内容被预算省略truncated；已识别必要组完整complete；没有必要依赖且关闭可选上下文时disabled。context_truncated=false不代表充分；unknown产品归属不能被调用方补成查询中的产品。已知必要依赖缺失时，不应将裸source_text作为该产品的完整适用证据肯定作答。
 
-V2加权RRF公式是`sum(weight/(60+source_rank))`，keyword/vector权重各1，relation权重0.5，source_rank从1开始。关系SQL先按查询词法相关性排列有界候选，应用层按原文查询词项交集排序；UUID只作同分确定性排序。降低相关关系通道的投票权重，避免将其当作独立的第三路等权召回。V1仍为原等权RRF。评分是正式融合分数，不是按最终rank伪造的分数。
+V2加权RRF公式是`sum(weight/(60+source_rank))`，keyword/vector权重各1，relation权重0.5，source_rank从1开始。关系SQL先按查询词法相关性排列有界候选，应用层按原文查询词项交集排序；UUID只作同分确定性排序。降低相关关系通道的投票权重，避免将其当作独立的第三路等权召回。评分是正式融合分数，不是按最终rank伪造的分数。
 
 V2成功重排只返回同次窗口内结果，不拼RRF尾部；重排故障整体保留RRF并标降级。adaptive只选择集合，输出仍按实际RRF/重排分数排序，score不会改成选择收益。未配置Reranker是正常路径。原始BM25、向量与重排分数不相加，也不等于事实正确率。当前hit始终有有限score，不把NaN/Inf改成null掩盖错误。
 
@@ -192,7 +192,7 @@ Job包含id、kb_id、document_id、version_id、status、stage、progress、err
 
 name允许重复，仅作展示；第三方检索必须用返回的id填`kb_ids`，上传则填`kb_id`。不能按名称唯一定位，不会自动按同名返回旧库。创建不支持幂等键，未知结果先查询`GET /v1/knowledge-bases`确认，不能盲目重试。
 
-`GET /v1/knowledge-bases`成功HTTP200返回当前Key可访问的列表，每项含上述字段和有效`role`；未获授权的业务Key返回空列表，system admin可见所有KB。业务Key创建和KB授权是两个独立步骤，授权使用Key返回的`principal_id`，不能使用Key ID。Portal和后台命令的操作步骤在[README](../README.md#创建知识库与第三方配置)。
+`GET /v1/knowledge-bases`成功HTTP200返回当前Key可访问的列表，每项含上述字段和有效`role`；未获授权的业务Key返回空列表，system admin可见所有KB。业务Key创建和KB授权是两个独立步骤，授权使用Key返回的`principal_id`，不能使用Key ID。Portal和后台命令的操作步骤在[接入说明](INTEGRATION_GUIDE.md#6-创建知识库与第三方配置)。
 
 | 方法/路径 | 权限 | 输入/结果 |
 | --- | --- | --- |
@@ -220,7 +220,7 @@ name允许重复，仅作展示；第三方检索必须用返回的id填`kb_ids`
 | POST /v1/index-generations/{id}/rollback | system admin | 用旧模型配置重建当前PG数据；不是恢复旧事实 |
 | DELETE /v1/index-generations/{id} | system admin | 取消未激活重建 |
 
-V1 `POST /v1/search`固定D23形状：request_id、document_name/hash、score/score_type/stage_scores已存在；头部重排后可接RRF尾，不能跨score_type比较；include_context=false沿旧语义；产品/版本按文档metadata标签过滤。旧M3严格客户端不接受D23新增字段，**不能认为V1就天然兼容所有历史客户端**。新客户端明确选V2，升级和回退均显式，不自动换版本兜底。
+保留的`POST /v1/search`不属于后续检索演进与本轮验证范围；其现有契约仍可从OpenAPI查看。新接入与选择策略切换均使用V2，未知响应明确失败，不自动切换检索协议兜底。
 
 ## 7. 错误契约
 

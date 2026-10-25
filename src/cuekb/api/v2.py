@@ -71,8 +71,13 @@ async def search(
     service: V2RetrievalService = Depends(retrieval_service_v2),
 ) -> Response:
     request.state.request_id = body.request_id
+    execution = current_execution()
+    if execution:
+        # Synchronous dependency work cannot be preempted by the event loop.
+        # Never launch retrieval if it consumed the remaining request budget.
+        execution.checkpoint()
     task = asyncio.create_task(service.search_evidence_async(
-        body, principal=principal, execution=current_execution()
+        body, principal=principal, execution=execution
     ))
 
     async def disconnect() -> None:

@@ -1,4 +1,5 @@
 import asyncio
+import time
 from time import perf_counter
 from uuid import uuid4
 
@@ -113,8 +114,9 @@ def test_absolute_http_deadline_cancels_async_work(api):
         async def search_evidence_async(self, *args, **kwargs):
             try:
                 await asyncio.sleep(2)
-            finally:
+            except asyncio.CancelledError:
                 cancelled.append(True)
+                raise
     app.dependency_overrides[retrieval_service_v2] = lambda: Slow()
     # The middleware reads the cached settings directly; use a scoped override.
     settings = get_settings()
@@ -127,6 +129,99 @@ def test_absolute_http_deadline_cancels_async_work(api):
         assert response.json()["error_code"] == "SEARCH_DEADLINE_EXCEEDED"
         assert perf_counter() - started < 1
         assert cancelled
+    finally:
+        settings.search_deadline_ms = old
+
+
+def test_deadline_cancels_dependencies_before_retrieval_can_start(api):
+    client, kb, app = api
+    events = []
+
+    async def slow_principal():
+        events.append("dependency_started")
+        try:
+            await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            events.append("dependency_cancelled")
+            raise
+
+    def service():
+        events.append("retrieval_dependency_started")
+        raise AssertionError("retrieval must not start after the request deadline")
+
+    app.dependency_overrides[current_principal] = slow_principal
+    app.dependency_overrides[retrieval_service_v2] = service
+    settings = get_settings()
+    old = settings.search_deadline_ms
+    settings.search_deadline_ms = 100
+    try:
+        started = perf_counter()
+        response = client.post("/v2/search", json={"query": "Device", "kb_ids": [str(kb.id)]})
+        assert response.status_code == 504, response.text
+        assert response.json()["error_code"] == "SEARCH_DEADLINE_EXCEEDED"
+        assert response.json()["trace_id"] == response.headers["x-trace-id"]
+        assert response.headers["cache-control"] == "no-store"
+        assert perf_counter() - started < 1
+        assert events == ["dependency_started", "dependency_cancelled"]
+    finally:
+        settings.search_deadline_ms = old
+
+
+def test_deadline_rejects_success_if_synchronous_work_exhausted_budget(api):
+    client, kb, app = api
+    service = app.dependency_overrides[retrieval_service_v2]()
+
+    class Late:
+        async def search_evidence_async(self, *args, **kwargs):
+            result = await service.search_evidence_async(*args, **kwargs)
+            # The event loop cannot deliver timeout cancellation during CPU-bound
+            # work. The final checkpoint must still reject its expired result.
+            time.sleep(0.15)
+            return result
+
+    app.dependency_overrides[retrieval_service_v2] = lambda: Late()
+    settings = get_settings()
+    old = settings.search_deadline_ms
+    settings.search_deadline_ms = 100
+    try:
+        response = client.post("/v2/search", json={
+            "query": "Device", "kb_ids": [str(kb.id)], "mode": "exact", "request_id": "late-query",
+        })
+        assert response.status_code == 504, response.text
+        assert response.json()["error_code"] == "SEARCH_DEADLINE_EXCEEDED"
+        assert response.json()["request_id"] == "late-query"
+        assert "hits" not in response.json()
+        assert response.json()["trace_id"] == response.headers["x-trace-id"]
+    finally:
+        settings.search_deadline_ms = old
+
+
+def test_deadline_does_not_launch_retrieval_after_blocking_dependency(api):
+    client, kb, app = api
+    events = []
+
+    async def blocking_principal():
+        time.sleep(0.15)
+        return None
+
+    class Never:
+        async def search_evidence_async(self, *args, **kwargs):
+            events.append("retrieval_started")
+            raise AssertionError("expired work must not enter retrieval")
+
+    async def service():
+        return Never()
+
+    app.dependency_overrides[current_principal] = blocking_principal
+    app.dependency_overrides[retrieval_service_v2] = service
+    settings = get_settings()
+    old = settings.search_deadline_ms
+    settings.search_deadline_ms = 100
+    try:
+        response = client.post("/v2/search", json={"query": "Device", "kb_ids": [str(kb.id)]})
+        assert response.status_code == 504, response.text
+        assert response.json()["error_code"] == "SEARCH_DEADLINE_EXCEEDED"
+        assert not events
     finally:
         settings.search_deadline_ms = old
 

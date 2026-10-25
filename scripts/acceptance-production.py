@@ -1,18 +1,52 @@
 #!/usr/bin/env python3
-"""Destructive acceptance against a dedicated CueKB test instance.
+"""V2 acceptance against a dedicated CueKB test instance.
 
-Creates and deletes its own knowledge base content and API key. Do not point it
-at an instance where creating test records is not acceptable.
+Creates a knowledge base and creates/deletes test content and an API key. The
+empty knowledge base remains (there is no KB deletion API). Do not point this at
+an instance where test writes are not acceptable. Shared management uses /v1;
+document ingestion/detail and all retrieval checks use /v2.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 import uuid
 
 import httpx
+
+from cuekb.api.errors import ErrorResponse
+from cuekb.schemas import V2DocumentDetail, V2DocumentMetadata, V2SearchRequest, V2SearchResponse
+from cuekb.services.retrieval_v2 import encode_v2_hits
+
+
+def search(client: httpx.Client, kb_id: str, query: str, mode: str = "exact", *,
+           selection_mode: str = "ranked") -> dict:
+    request = V2SearchRequest(
+        query=query, kb_ids=[kb_id], mode=mode, request_id=uuid.uuid4().hex,
+        filters={"product_model": "ACCEPTANCE"},
+        selection_mode=selection_mode,
+    )
+    response = client.post("/v2/search", json=request.model_dump(mode="json"))
+    response.raise_for_status()
+    body = V2SearchResponse.model_validate(response.json())
+    assert str(body.trace_id) == response.headers.get("X-Trace-ID"), "trace mismatch"
+    assert body.request_id == request.request_id, "request ID was not preserved"
+    assert response.headers.get("Cache-Control") == "no-store"
+    assert body.evidence_status == "unassessed"
+    assert body.diagnostics.sizes.hits_bytes == len(encode_v2_hits(body.hits))
+    assert body.retrieval_status in {"ok", "not_found"}, "unexpected degraded retrieval"
+    return body.model_dump(mode="json")
+
+
+def denied_search(client: httpx.Client, kb_id: str, expected_status: int) -> None:
+    response = client.post("/v2/search", json={"query": "E103", "kb_ids": [kb_id]})
+    assert response.status_code == expected_status
+    body = ErrorResponse.model_validate(response.json())
+    assert str(body.trace_id) == response.headers.get("X-Trace-ID")
+    assert response.headers.get("Cache-Control") == "no-store"
 
 
 def wait_job(client: httpx.Client, job_id: str, timeout: int = 600) -> dict:
@@ -37,16 +71,17 @@ def upload(
     key: str,
     document_id: str | None = None,
 ) -> dict:
-    metadata = {
+    metadata = V2DocumentMetadata.model_validate({
         "kb_id": kb_id,
         "name": name,
         "business_version": key,
         "scope": {"product_model": "ACCEPTANCE"},
         "document_id": document_id,
         "auto_publish": True,
-    }
+        "document_default": {"subjects": [{"display_name": "Acceptance device", "product_model": "ACCEPTANCE"}]},
+    }).model_dump(mode="json")
     response = client.post(
-        "/v1/documents",
+        "/v2/documents",
         headers={"Idempotency-Key": key},
         data={"metadata": json.dumps(metadata)},
         files={"file": (f"{name}.md", content.encode(), "text/markdown")},
@@ -58,7 +93,8 @@ def upload(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:8085")
-    parser.add_argument("--bootstrap-key", required=True)
+    parser.add_argument("--bootstrap-key", help="prefer --bootstrap-key-env to avoid process arguments")
+    parser.add_argument("--bootstrap-key-env", default="CUEKB_BOOTSTRAP_API_KEY")
     parser.add_argument(
         "--expect-rerank",
         action="store_true",
@@ -66,9 +102,12 @@ def main() -> None:
         help="require reranker execution (default: read the portal configuration)",
     )
     args = parser.parse_args()
+    bootstrap_key = args.bootstrap_key or os.environ.get(args.bootstrap_key_env)
+    if not bootstrap_key:
+        parser.error(f"set {args.bootstrap_key_env} to a dedicated test instance admin key")
     run = uuid.uuid4().hex
     with httpx.Client(
-        base_url=args.url, headers={"Authorization": f"Bearer {args.bootstrap_key}"}, timeout=30
+        base_url=args.url, headers={"Authorization": f"Bearer {bootstrap_key}"}, timeout=30
     ) as admin:
         admin.get("/v1/ready").raise_for_status()
         portal = admin.get("/portal/")
@@ -84,7 +123,9 @@ def main() -> None:
             if args.expect_rerank is not None
             else bool(model_config["reranker_base_url"])
         )
-        kb = admin.post("/v1/knowledge-bases", json={"name": f"acceptance-{run}"}).json()
+        created_kb = admin.post("/v1/knowledge-bases", json={"name": f"acceptance-{run}"})
+        created_kb.raise_for_status()
+        kb = created_kb.json()
         created = admin.post(
             "/v1/api-keys", json={"principal_name": f"acceptance-{run}", "label": "acceptance"}
         )
@@ -123,33 +164,37 @@ def main() -> None:
             documents = client.get("/v1/documents", params={"kb_id": kb["id"]})
             documents.raise_for_status()
             assert documents.json()[0]["id"] == first["document_id"]
-            detail = client.get(f"/v1/documents/{first['document_id']}")
+            detail = client.get(f"/v2/documents/{first['document_id']}")
             detail.raise_for_status()
-            assert detail.json()["active_version_id"] == first["version_id"]
+            parsed_detail = V2DocumentDetail.model_validate(detail.json())
+            assert str(parsed_detail.active_version_id) == first["version_id"]
+            assert all(v.processing_profile.startswith("evidence-v2:") for v in parsed_detail.versions)
             source = client.get(f"/v1/documents/{first['document_id']}/source")
             source.raise_for_status()
             assert b"E102" in source.content
-            hybrid = client.post(
-                "/v1/search",
-                json={"query": "设备为什么出现链路异常", "kb_ids": [kb["id"]], "mode": "hybrid"},
-            )
-            hybrid.raise_for_status()
-            hybrid_body = hybrid.json()
+            hybrid_body = search(client, kb["id"], "设备为什么出现链路异常", "hybrid")
             assert "embedding" in hybrid_body["executed_stages"] and hybrid_body["hits"]
+            assert hybrid_body["diagnostics"]["backend_calls"]["embedding"] >= 1
+            assert hybrid_body["diagnostics"]["backend_calls"]["vector"] >= 1
+            reranker = hybrid_body["diagnostics"]["reranker"]
             if expect_rerank:
                 assert "rerank" in hybrid_body["executed_stages"], hybrid_body
+                assert reranker["configured"] and reranker["executed"]
+                assert hybrid_body["ranking_method"] == "rrf_then_rerank"
             else:
                 assert "rerank" not in hybrid_body["executed_stages"], hybrid_body
-                assert any(
-                    item["stage"] == "rerank" and item["reason"] == "reranker_service_unconfigured"
-                    for item in hybrid_body["skipped_stages"]
-                ), hybrid_body
-            exact = client.post(
-                "/v1/search", json={"query": "E102", "kb_ids": [kb["id"]], "mode": "exact"}
-            )
-            exact.raise_for_status()
-            assert "embedding" not in exact.json()["executed_stages"]
-            assert "rerank" not in exact.json()["executed_stages"]
+                assert not reranker["configured"] and not reranker["executed"]
+                assert reranker["skipped_reason"] == "reranker_service_unconfigured"
+            exact = search(client, kb["id"], "E102")
+            assert "embedding" not in exact["executed_stages"]
+            assert "rerank" not in exact["executed_stages"]
+            assert exact["hits"] and all(hit["document_id"] == first["document_id"]
+                                         and hit["version_id"] == first["version_id"] for hit in exact["hits"])
+            assert any("E102" in hit["source_text"] for hit in exact["hits"])
+            adaptive = search(client, kb["id"], "E102", selection_mode="adaptive")
+            assert adaptive["hits"]
+            assert adaptive["diagnostics"]["selection"]["method"] == "adaptive"
+            assert adaptive["diagnostics"]["selection"]["coverage_assessment"] == "unassessed"
             second = upload(
                 client,
                 kb["id"],
@@ -159,39 +204,23 @@ def main() -> None:
                 first["document_id"],
             )
             wait_job(client, second["id"])
-            old = client.post(
-                "/v1/search", json={"query": "旧版", "kb_ids": [kb["id"]], "mode": "exact"}
-            ).json()
-            assert all(hit["version_id"] != first["version_id"] for hit in old["hits"])
-        admin.delete(
-            f"/v1/knowledge-bases/{kb['id']}/grants/{credentials['principal_id']}"
-        ).raise_for_status()
-        denied = httpx.post(
-            f"{args.url}/v1/search",
-            headers={"Authorization": f"Bearer {credentials['api_key']}"},
-            json={"query": "E103", "kb_ids": [kb["id"]]},
-        )
-        assert denied.status_code == 403
-        denied_source = httpx.get(
-            f"{args.url}/v1/documents/{first['document_id']}/source",
-            headers={"Authorization": f"Bearer {credentials['api_key']}"},
-        )
-        assert denied_source.status_code == 403
-        admin.delete(f"/v1/documents/{first['document_id']}").raise_for_status()
-        gone = admin.post(
-            "/v1/search", json={"query": "E103", "kb_ids": [kb["id"]], "mode": "exact"}
-        ).json()
-        assert not gone["hits"]
-        assert admin.get(f"/v1/documents/{first['document_id']}/source").status_code == 404
-        admin.delete(f"/v1/api-keys/{credentials['id']}").raise_for_status()
-        revoked = httpx.post(
-            f"{args.url}/v1/search",
-            headers={"Authorization": f"Bearer {credentials['api_key']}"},
-            json={"query": "E103", "kb_ids": [kb["id"]]},
-        )
-        assert revoked.status_code == 401
+            old = search(client, kb["id"], "E102")
+            assert not old["hits"], "superseded evidence remains searchable"
+            current = search(client, kb["id"], "E103")
+            assert current["hits"] and all(hit["version_id"] == second["version_id"] for hit in current["hits"])
+            admin.delete(
+                f"/v1/knowledge-bases/{kb['id']}/grants/{credentials['principal_id']}"
+            ).raise_for_status()
+            denied_search(client, kb["id"], 403)
+            assert client.get(f"/v1/documents/{first['document_id']}/source").status_code == 403
+            admin.delete(f"/v1/documents/{first['document_id']}").raise_for_status()
+            gone = search(admin, kb["id"], "E103")
+            assert not gone["hits"]
+            assert admin.get(f"/v1/documents/{first['document_id']}/source").status_code == 404
+            admin.delete(f"/v1/api-keys/{credentials['id']}").raise_for_status()
+            denied_search(client, kb["id"], 401)
     print(
-        "PASS: production auth, ACL, idempotent upload, worker, source, exact/hybrid, "
+        "PASS: V2 auth, ACL, idempotent upload, worker, source, exact/hybrid, "
         "embedding, portal management API, "
         f"rerank={'enabled' if expect_rerank else 'disabled'}, version switch, "
         "revoke and delete"

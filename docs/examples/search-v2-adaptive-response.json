@@ -189,7 +189,7 @@
     }
   ],
   "ranking_method": "keyword_rrf",
-  "ranking_version": "sha256:d1064c82dd8d522c547cad91f592ee3a366830bdf15188447aef32903c78760a",
+  "ranking_version": "sha256:84644671d287908b316a7b7bbab9d9ffa093b46b3e7343cb1e2685d9f29863a4",
   "request_id": "contract-example",
   "retrieval_path": "exact",
   "retrieval_status": "ok",

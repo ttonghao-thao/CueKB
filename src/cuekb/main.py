@@ -1,5 +1,4 @@
 from pathlib import Path
-import asyncio
 from contextlib import asynccontextmanager
 import logging
 from time import perf_counter
@@ -18,11 +17,12 @@ from cuekb import __version__
 from cuekb.adapters.generations import MaintenanceBusy
 from cuekb.api.routes import router
 from cuekb.api.errors import ErrorResponse, ServiceError
+from cuekb.api.middleware import V2DeadlineMiddleware
 from cuekb.api.v2 import router as v2_router
 from cuekb.api.v2_dependencies import V2RuntimePool
 from cuekb.config import get_settings
 from cuekb.services.execution import (
-    SearchConfigurationChanged, SearchDeadlineExceeded, SearchExecution, activate_execution,
+    SearchConfigurationChanged, SearchDeadlineExceeded,
 )
 from cuekb.services.selection import RelevanceProfileInvalid
 
@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
+        # FastAPI lazily compiles included routes. Prepare them through its public
+        # schema API before readiness, rather than charging the first query for
+        # schema/dependency initialization inside its request deadline.
+        app.openapi()
         app.state.v2_runtime_pool = V2RuntimePool(get_settings().v2_max_inflight)
         try:
             yield
@@ -85,21 +89,14 @@ def create_app() -> FastAPI:
     def portal() -> FileResponse:
         return FileResponse(portal_dir / "index.html")
 
+    application.add_middleware(V2DeadlineMiddleware)
+
     @application.middleware("http")
     async def portal_security_headers(request: Request, call_next):
         started = perf_counter()
         request.state.trace_id = uuid4()
         request.state.request_id = None
-        if request.url.path == "/v2/search":
-            execution = SearchExecution.create(get_settings().search_deadline_ms, request.state.trace_id)
-            try:
-                with activate_execution(execution):
-                    async with asyncio.timeout(execution.remaining_ms() / 1000):
-                        response = await call_next(request)
-            except (SearchDeadlineExceeded, TimeoutError):
-                response = error(request, 504, "search_deadline_exceeded", "SEARCH_DEADLINE_EXCEEDED")
-        else:
-            response = await call_next(request)
+        response = await call_next(request)
         response.headers["X-Trace-ID"] = str(request.state.trace_id)
         if request.url.path.startswith("/v2/"):
             response.headers["Cache-Control"] = "no-store"

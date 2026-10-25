@@ -1,6 +1,6 @@
 # 外部模型接入
 
-更新：2026-10-23。CueKB只调用Embedding和可选Reranker，不调用生成式答案模型。管理员通过`GET/PUT /v1/model-configuration`或门户配置，字段Schema以[OpenAPI](contracts/openapi.json)为准。
+更新：2026-10-25。CueKB只调用Embedding和可选Reranker，不调用生成式答案模型。管理员通过`GET/PUT /v1/model-configuration`或门户配置，字段Schema以[OpenAPI](contracts/openapi.json)为准。
 
 ## 1. Embedding协议
 
@@ -40,7 +40,7 @@ Reranker独立地址/Key/model，可不配置。未配置时V2正常RRF排序，
 
 generation记录build_source_profiles，以现有PG chunk和注册模板构建search_text及向量，不重新解析。解析/切块/归属变化先用reprocess生成新版本。回退模型仍要重建当前事实，不恢复历史chunk。
 
-V2模型transport按配置修订复用并原生异步调用，连接/读取受阶段及全请求剩余预算约束；V1和Worker保留同步路径。Worker模型时限独立且较长，V2进程容量不约束Worker或其他API进程。取消客户端连接不保证模型服务终止已开始的GPU计算。
+V2模型transport按配置修订复用并原生异步调用，连接/读取受阶段及全请求剩余预算约束；Worker保留同步路径。Worker模型时限独立且较长，V2进程容量不约束Worker或其他API进程。取消客户端连接不保证模型服务终止已开始的GPU计算。
 
 ## 4. 隐私与验证
 

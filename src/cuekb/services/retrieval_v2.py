@@ -32,7 +32,7 @@ from cuekb.services.execution import (
 )
 from cuekb.services.retrieval import QueryRouter, rrf
 from cuekb.services.selection import (
-    InformationSelector, LEXICAL_REVISION, SELECTION_REVISION, accepts, chunk_identifiers,
+    InformationSelector, LEXICAL_REVISION, SELECTION_REVISION, SELECTION_RULES_REVISION, accepts, chunk_identifiers,
     identifiers, literal_coverage, load_profile, runtime_binding, tokens,
 )
 
@@ -719,6 +719,8 @@ class V2RetrievalService:
         # Fixture bindings still identify their actual model, when available.
         value["binding"].setdefault("embedding_model", getattr(self.model, "embedding_model", None))
         value["binding"].setdefault("reranker_model", getattr(self.model, "_reranker_model", None))
+        if state.selection:
+            value["selection_rules_revision"] = SELECTION_RULES_REVISION
         return "sha256:" + hashlib.sha256(_encode(value)).hexdigest()
 
     @staticmethod

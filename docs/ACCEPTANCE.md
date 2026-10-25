@@ -2,19 +2,31 @@
 
 更新：2026-10-25。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
 
-## 1. 本地与数据库验证
+## 1. V2与共享能力验证
+
+检索演进只验证V2。`/v1/health`、知识库、Key、Job、发布、模型及generation路径仍承载共享管理能力，不能仅因路径前缀而排除它们；旧V1检索与旧响应渲染不属于本轮验证范围。
 
 ```sh
-.venv/bin/pytest -o addopts='' -q
+make test-v2
 make check
 make check-contracts
 node --check src/cuekb/portal/app.js
 sh -n scripts/deploy-production.sh
 ```
 
-真实PG测试只指向**专用测试库**，设置`CUEKB_TEST_DATABASE_URL`后运行`tests/test_m3_postgres.py`和`tests/test_v2_postgres.py`；fixture创建独立随机schema并直接加载完整初始化结构，结束后drop该schema，必要时创建public.pgcrypto，不得指向业务库。未设置时跳过，不算通过真实PG验收。
+`make test`默认使用同一V2/共享能力集合。测试选择由Makefile维护，不用“全量通过”代称未执行的旧检索用例；记录passed、failed、skipped及原因。门户渲染用例需要Node.js，缺失时的跳过不算前端通过。契约检查核对现有导出物，不能通过无解释地重新生成来清除失败。
 
-数据库测试与新部署共用完整`db/schema.sql`，重点验证空库建表、不可变快照/幂等、source_version同文档FK、恢复新ID、旧清理不误删新块、发布删除/撤权竞争、pg_sleep超时取消与连接回收。OS重点验证V2映射、实际BM25、k-NN、过滤投影及索引写后校验。HTTP MockTransport仅证明适配协议，不证明真实服务质量。
+| 验证层 | 能证明什么 | 必须另外验证的内容 |
+| --- | --- | --- |
+| V2算法、DTO与内存HTTP | 归属边界、有限召回/选择、真实评分规则、精确预算、响应及并发状态隔离 | 真实模型召回/重排质量、数据库和搜索引擎行为 |
+| 超时与取消 | 冷首次请求、慢鉴权/配置依赖和已进入的异步检索均受同一入口deadline；截止后不启动后续检索，取消后请求任务收尾 | 真实PG驱动连接回收、远端服务是否停止计算 |
+| 模型/OS MockTransport | 请求/响应协议、部分分片失败识别、索引映射与绑定校验 | 真实BM25/k-NN召回、服务故障和负载 |
+| 门户实际JS函数 | 主事实、必要上下文、转义与缺失提示的渲染规则 | 真实浏览器交互及外部客户端证据裁剪 |
+| 专用PG | 当前schema、处理快照、发布和事务取消等真实SQL行为 | OS一致性、模型质量及目标环境稳定性 |
+
+真实PG测试只指向**专用测试库**，设置`CUEKB_TEST_DATABASE_URL`后执行`tests/test_v2_postgres.py`。fixture创建独立随机schema并直接加载完整初始化结构，结束后drop该schema，必要时创建public.pgcrypto，不得指向业务库。fixture虽复用共享测试模块，不代表执行了旧检索验收；未配置时跳过，不算通过真实PG验收。
+
+数据库与全新部署共用完整`db/schema.sql`，需核验不可变快照/幂等、source_version同文档FK、恢复新ID、旧清理不误删新块、发布删除/撤权竞争、pg_sleep超时取消与连接回收。OS需核验V2映射、实际BM25/k-NN、过滤投影及索引写后校验。尚无现成用例或本轮未执行的场景列入任务板，不因方法写在本文就算已覆盖。
 
 ## 2. 固定验收数据
 
@@ -39,7 +51,22 @@ sh -n scripts/deploy-production.sh
 
 验收阈值应在目标语料和业务风险下确认；当前没有经过实测的通用通过阈值。相关性校准先按独立family划分calibration/test，拟合方法见[操作手册](OPERATIONS.md#7-相关性校准配置)。对比ranked、adaptive无校准及adaptive已校准，并分别跑无Reranker/有Reranker；逐项消融词法字段、预算替补、覆盖选择和门控。单元测试只验证算法规则，未校准不能保证低相关即空结果。冲突证据可以并列返回，系统不自动裁决新旧或真伪。
 
-## 4. 可执行质量与10并发工具
+## 4. 可执行验收与评测工具
+
+### 4.1 专用实例功能验收
+
+`scripts/acceptance-production.py`使用V2上传、文档详情和检索；健康、Key、授权、Job、发布及原件下载继续调用共享管理路径。它会创建专用测试KB、文档和业务Key，成功时删除自己的文档与Key；失败或中断后可能需要清理残留。当前没有删除KB接口，成功结束后也会留下空测试KB。只能指向允许这些写入的专用实例。
+
+先在安全环境设置`CUEKB_BOOTSTRAP_API_KEY`，无需把密钥值放在命令行：
+
+```sh
+.venv/bin/python scripts/acceptance-production.py \
+  --url https://cuekb-test.example.internal
+```
+
+需先按操作手册配置Embedding并启动Worker、PG和OS；可用`--expect-rerank`要求真实执行重排。该脚本通过不代表质量或并发达标；隔离Mock协议回归也不能记作真实实例验收。
+
+### 4.2 只读质量与10并发评测
 
 `scripts/evaluate-retrieval.py`只调用V2检索，不写数据。输入JSONL，每行：
 
@@ -71,7 +98,7 @@ CueKB验收只证明本次返回的原文证据。voice-service-agent必须独�
 
 ## 6. 门户原文与上下文验收
 
-先运行`.venv/bin/python -m pytest -q tests/test_portal_evidence.py tests/test_adaptive_selection.py`与`node --check src/cuekb/portal/app.js`。渲染回归执行实际app.js函数，覆盖长主事实、必要条件、同身份去重、HTML转义、未解决依赖和V1上下文回退。未安装Node时渲染用例显式跳过，不能算前端通过。
+先运行`make test-v2`与`node --check src/cuekb/portal/app.js`。选定的门户回归执行实际app.js函数，覆盖V2长主事实、必要条件、同身份去重、HTML转义和未解决依赖，不执行旧响应回退验证。
 
 浏览器在独立测试实例按以下场景复测，并与同一HTTP响应对照；不要将受控候选结果当作模型质量基准：
 
@@ -79,4 +106,4 @@ CueKB验收只证明本次返回的原文证据。voice-service-agent必须独�
 2. 必要条件不单独占主结果名额，显示“命中原文”和真实依赖正文；同一主块不在上下文中重复展示。
 3. 主事实长于上下文预算时，source_text仍完整显示；如果context只容纳条件，也不能覆盖主事实，并保留预算提示。
 4. 必要依赖缺失显示unresolved提示；正常not_found空结果与请求错误分别表达，充分性保持unassessed。
-5. 切换V1/默认ranked后不携带动态专用输入；响应与原文展示兼容。最后关闭测试标签页和隔离服务。
+5. 在V2的ranked/adaptive间切换；ranked不携带动态专用输入，原文与必要上下文保持可见。最后关闭测试标签页和隔离服务。

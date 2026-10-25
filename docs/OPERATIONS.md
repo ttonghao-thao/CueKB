@@ -30,7 +30,7 @@ chmod 600 .env.production
 
 检查`GET /v1/health`、`GET /v1/ready`与`/portal/`。生产业务API使用Bearer Key；健康和ready公开但不返回凭据。创建业务Key并授予目标KB read/write/admin，第三方查询不要使用bootstrap。
 
-知识库通过Portal的“知识库管理”或`python -m cuekb.admin ... kb create`创建；命令复用HTTP API，不直接写数据库。创建、列举、业务Key签发和授权的可执行命令，以及第三方所需的Base URL、业务Key和KB UUID，统一见[README](../README.md#创建知识库与第三方配置)。更新应用后须重新构建API镜像才能使用新页面及命令模块。
+知识库通过Portal的“知识库管理”或`python -m cuekb.admin ... kb create`创建；命令复用HTTP API，不直接写数据库。创建、列举、业务Key签发和授权的可执行命令，以及第三方所需的Base URL、业务Key和KB UUID，统一见[接入说明](INTEGRATION_GUIDE.md#6-创建知识库与第三方配置)。更新应用后须重新构建API镜像才能使用新页面及命令模块。
 
 ## 3. 空库初始化与搜索投影
 

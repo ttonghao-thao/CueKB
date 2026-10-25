@@ -79,6 +79,15 @@ def test_multilingual_tokens_ratios_signs_and_units_cannot_be_collapsed():
     assert {h.chunk_id for h in service.search_evidence(request).hits} == {c.id for c in chunks}
 
 
+@pytest.mark.parametrize("minus", ["−", "﹣", "－"])
+def test_unicode_negative_values_remain_distinct_from_positive_values(minus):
+    _, chunks, _, _, service, request = fixture(count=2, texts=[
+        f"Temperature: {minus}20 °C", "Temperature: 20 °C"])
+    request.query, request.selection_mode, request.query_facets = "temperature", "adaptive", ["temperature"]
+    result = service.search_evidence(request)
+    assert {hit.chunk_id for hit in result.hits} == {chunk.id for chunk in chunks}
+
+
 def test_optional_reranker_gate_uses_real_negative_logits_and_keeps_rrf_tail_out():
     _, _, _, model, service, request = fixture(count=3)
     service.reranker_configured = True

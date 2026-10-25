@@ -19,9 +19,14 @@ from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 from cuekb.domain.models import Chunk
 
 SELECTION_REVISION = "evidence-set-v1"
+# Internal rule revision participates in ranking_version without changing the
+# closed diagnostics contract for an implementation fix.
+SELECTION_RULES_REVISION = "unicode-signs-v1"
 LEXICAL_REVISION = "scope-lexical-v2.2"
 WORD = re.compile(r"[^\W_\u3400-\u9fff]+(?:[._:/+\-][^\W_\u3400-\u9fff]+)*|[\u3400-\u9fff]", re.UNICODE)
-VALUE = re.compile(r"(?<!\w)[+\-]?\d+(?:[.,]\d+)?(?:\s*[:/–-]\s*\d+(?:[.,]\d+)?)*\s*(?:[%°]*[^\W\d_]+|[%°]+)?", re.UNICODE)
+# Documents commonly use the mathematical minus and small/full-width signs.
+# Dropping those signs would make negative limits redundant with positive ones.
+VALUE = re.compile(r"(?<!\w)[+\-−﹣－﹢＋]?\d+(?:[.,]\d+)?(?:\s*[:/–-]\s*\d+(?:[.,]\d+)?)*\s*(?:[%°]*[^\W\d_]+|[%°]+)?", re.UNICODE)
 STOP = frozenset("a an the of for to and or is are be in on at by with what which how does do "
                  "can could would please tell me about information available this that it its "
                  "的 了 吗 是 有 哪 些 什 么 请 问".split())

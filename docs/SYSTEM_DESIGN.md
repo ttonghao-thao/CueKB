@@ -1,13 +1,13 @@
 # 当前系统设计
 
-更新：2026-10-25。本文描述已落地代码；接口字段在[接口规范](API_GUIDE.md)，未执行验收在[任务板](../TASK_BOARD.md)。
+更新：2026-10-25。本文是当前架构与设计的主文档；接口字段在[接口规范](API_GUIDE.md)，验证方法在[验收方法](ACCEPTANCE.md)，实际需求复核/验证结果及未验收项只在[任务板](../TASK_BOARD.md)维护。后续检索演进聚焦V2，共享管理接口继续使用现有路径。
 
 ## 1. 模块与权威边界
 
 | 模块 | 当前职责 |
 | --- | --- |
-| api/routes.py、api/v2.py、schemas.py | 鉴权后的V1管理/兼容检索、显式V2证据接口及严格DTO |
-| services/retrieval.py、retrieval_v2.py | 分离的V1/V2检索流程；V2有真实融合评分、统一重排窗口及有界输出 |
+| api/routes.py、api/v2.py、schemas.py | 共享管理能力、V2证据接口及严格DTO；旧检索路由保留但不作为演进目标 |
+| services/retrieval_v2.py | V2真实融合评分、统一重排窗口、最终权威复验及有界输出 |
 | services/selection.py | V2动态证据集合、字面覆盖与保守差异保护、固定绑定的可选相关性门控 |
 | services/parsing.py、evidence.py、context.py | 解析、来源位置、可信局部归属、必要依赖和上下文组装 |
 | adapters/postgres.py、knowledge.py | PG权威内容/ACL/发布/删除/关系及读快照；V2读任务取消与SQL预算 |
@@ -15,8 +15,8 @@
 | adapters/model_client.py | 外部Embedding与可选Reranker协议、索引回序和数值校验 |
 | worker.py、services/ingestion.py | 租约任务、原件解析/恢复、编码、投影校验、ready/发布及outbox清理 |
 | adapters/generations.py、services/generations.py | 独立投影重建、源profile快照、维护栅栏及模型/物理索引原子切换 |
-| services/execution.py、api/v2_dependencies.py | 请求绝对时限、阶段统计、原生异步transport复用及进程内容量边界 |
-| portal/ | 同源静态管理门户，显式选择V2或V1；始终单独展示命中原文，按真实chunk身份补充必要/相关上下文，保留预算及依赖缺失提示 |
+| api/middleware.py、services/execution.py、api/v2_dependencies.py | 完整ASGI请求绝对时限、阶段统计、原生异步transport复用及进程内容量边界 |
+| portal/ | 同源静态管理门户，V2支持ranked/adaptive选择；始终单独展示命中原文，按真实chunk身份补充必要/相关上下文，保留预算及依赖缺失提示 |
 | admin.py | Portal之外的HTTP管理命令，创建/列举KB、签发业务Key及授权；不绕过API直接写库 |
 
 OpenSearch只返回候选ID/分数，不作为正文或权限权威。所有返回正文、归属、出处与关系来自PG，最终新事务复验；原件存储只供解析与授权下载。生产要求PG+OS，memory后端只为开发与测试。
@@ -56,7 +56,7 @@ applicability仅在可信映射或审核别名与结构匹配时resolved；未�
 
 ### 4.1 动态证据选择
 
-`selection_mode=adaptive`显式启用；默认ranked保持兼容。候选数、重排窗口和返回上限是三个独立概念。选择器每轮计算新facet/查询词项观察、已知必要依赖的补齐和新增数值/否定/条件差异，并用精确字节成本控制负载。没有新观察时仅允许保守文本多样性增益；已观察的范围重复则停止，不以凑满top_k为目标。数值、业务版本、局部主体/条件差异保留；没有普适的语义去重或全库冲突裁决。
+`selection_mode=adaptive`显式启用；默认ranked保持兼容。候选数、重排窗口和返回上限是三个独立概念。选择器每轮计算新facet/查询词项观察、已知必要依赖的补齐和新增数值/否定/条件差异，并用精确字节成本控制负载。没有新观察时仅允许保守文本多样性增益；已观察的范围重复则停止，不以凑满top_k为目标。数值、业务版本、局部主体/条件差异保留；数值提取保留Unicode正负号，避免负温度被当作相同正值去重。内部选择规则revision参与adaptive的ranking_version指纹，公开selection.version保持evidence-set-v1。没有普适的语义去重或全库冲突裁决。
 
 每个请求的InformationSelector、候选、已选集合和覆盖观察独立。必要条件、表头及归属保持真实身份；已包含在必要上下文的同一块不再次占主结果名额。可选近邻排除其他结果已返回的块，并要求同原始单元、明确条件/例外链接或新增查询信息，避免单凭邻近注入无关介绍。共享必要依赖仍可重复序列化，实际重复字节完整计费，现有契约不改成悬空ID引用。
 
@@ -68,22 +68,39 @@ applicability仅在可信映射或审核别名与结构匹配时resolved；未�
 
 ## 5. 异步、时限与隔离
 
+API在lifespan就绪前通过公开OpenAPI初始化完成惰性路由/依赖准备。`V2DeadlineMiddleware`直接包围`/v2/search`的完整下游ASGI调用，鉴权、模型配置依赖与endpoint共用同一SearchExecution。截止时取消实际异步调用，等待其finally清理；endpoint开始前再次checkpoint，防止同步依赖耗尽预算后仍启动检索。搜索响应暂存到下游完成并通过最终checkpoint后才提交，不能在预算耗尽后发送成功证据。冷启动、慢依赖和在途检索须分别验证，不能用预热掩盖取消漏洞。
+
 V2模型和OS请求使用原生httpx.AsyncClient，按配置修订复用；切配置不关闭仍在使用的旧transport，退出后回收。单API进程默认16个active lease，超过直接503，最多4个同时存活修订；不是跨Worker/进程的模型配额。
 
 PG驱动为同步psycopg：V2将一个完整读批次放入有执行上下文的工作线程；连接获取、SQL statement/lock timeout均受剩余预算约束。取消时驱动cancel_safe有界发起取消，数据库/驱动完成清理可能晚于HTTP deadline，不能声称外部GPU计算已终止。每个请求独立SearchExecution、候选和快照，transport共享不共享证据容器。
 
-调用方断开会取消V2请求；错误响应只返回安全代码/trace。日志只记录事件、阶段、耗时和字节，不默认输出私有正文、query或Key。当前无查询缓存、自动全库冲突裁决和全局模型调度器。
+调用方断开会取消V2请求；错误响应只返回安全代码/trace。同步线程和阻塞事件循环的计算不能被asyncio硬终止；超时后的资源清理可能稍晚于HTTP预算，必须独立验证真实驱动行为。日志只记录事件、阶段、耗时和字节，不默认输出私有正文、query或Key。当前无查询缓存、自动全库冲突裁决和全局模型调度器。
 
 ## 6. generation与升级
 
 generation维护锁阻止内容写入，查询继续。重建读取PG已存事实，记录build_source_profiles及其聚合标识，不重新解析原件。新投影带V2词法/局部归属字段、scope_text/table_labels/identifier_terms、`lexical_revision=scope-lexical-v2.2`及输入模板revision。验证完成后同一PG事务切换物理index、模型配置及revision。新字段由PG已冻结的结构与别名生成，不从查询或任意metadata猜归属。
 
-解析/归属升级先重处理、人工检查并publish；Embedding/投影升级再generation。旧V1投影不具备V2字段，V2返回INDEX_UPGRADE_REQUIRED而不假装已使用新路径。旧配置rollback也重建当前PG事实，不将旧index直接当成当前内容。
+解析/归属升级先重处理、人工检查并publish；Embedding/投影升级再generation。旧投影缺少V2字段时，V2返回INDEX_UPGRADE_REQUIRED而不假装已使用新路径。旧配置rollback也重建当前PG事实，不将旧index直接当成当前内容。
 
 完整数据库结构由`db/schema.sql`定义，包含处理快照、派生血缘、结构spans、同文档source_version FK、防重复部分索引、实体/关系、模型配置和generation。PostgreSQL首次在空数据目录启动时自动加载，整个建库文件在一个事务内执行；TCP健康后API/Worker才能启动。该流程不处理既有数据库，操作说明见[操作手册](OPERATIONS.md)。
 
-## 7. 独立离线关联实验
+## 7. 六项准确性优化与验证边界
 
-远端main的C-lite实验保留在`src/cuekb/experiments/associations/`，使用显式冻结manifest、JSONL语料和候选录制，比较H/H+A/H+B/H+C/H-wide。它复用领域对象和RRF，执行同KB一跳导航、规则事实验证及离线评测，不读生产配置、不调用模型、不向PG/OS写数据、不接入V2生产检索链路。
+六项复核按D25、47f20bc及当前调用链归并为下表功能范围；原聊天建议的逐字内容未保存在仓库，不把此映射当作原文还原。算法实现、规则测试与目标语料达标分别判定。
 
-使用方法见[实验说明](../experiments/associations/README.md)。真实语料、独立gold、Reranker对照、PG持久化及线上接点仍待独立验收。研究方案中的新表、自动关联参数和模型扩展不是当前对外契约；线上接入须复用V2的SearchExecution、最终权限/版本复验和预算，并单独验证兼容性。
+| 需求 | 当前实现主位置 | 需要保持的边界及验证入口 |
+| --- | --- | --- |
+| 同实体归属信息合并 | services/evidence.py、adapters/knowledge.py | 仅合并兼容信息；非空型号/版本冲突及不同主体不能放宽。见test_evidence_structure与专用test_v2_postgres |
+| 搜索部分失败识别 | adapters/opensearch.py | HTTP200不等于完整召回；timed_out、terminated_early、失败分片须按失败处理。见test_v2_transports |
+| 可选相关性校准门控 | services/selection.py | 只用人工标签校准并严格绑定模型/配置/路径；不匹配时明确未应用，不能宣称自动拒收低相关。见test_adaptive_selection及校准工具验证 |
+| 整组精确预算与替补 | services/retrieval_v2.py | 必要条件整组计费；按精确JSON字节跳过超预算组，继续考察候选，不切半个事实。见test_adaptive_selection与test_retrieval_v2 |
+| 动态新增信息与差异保护 | services/selection.py、retrieval_v2.py | 输出不凑数，保留数值、正负号、条件、否定、产品及版本差异；字面观察不等于语义充分。见test_adaptive_selection |
+| 可信词法投影与关系排序/降权 | services/evidence.py、adapters/opensearch.py、adapters/knowledge.py、retrieval_v2.py | 只投影冻结可信信息，精确标识符不接受型号近邻；关系同KB一跳、按查询信号排序，以0.5权重融合，最终失效时移除贡献。见test_v2_transports、test_adaptive_selection与test_retrieval_v2 |
+
+方法与结果不复制到本表：质量/负载和消融方法统一在[验收方法](ACCEPTANCE.md)，生产校准操作统一在[操作手册](OPERATIONS.md#7-相关性校准配置)，本轮实际满足度和剩余风险在任务板。
+
+## 8. 独立离线关联实验
+
+`src/cuekb/experiments/associations/`是独立C-lite离线工具，不接入当前API/Worker检索链路。它复用领域对象与RRF，使用显式冻结manifest、JSONL语料和候选录制，比较同KB一跳导航及规则事实方案；不读生产配置、不调用外部模型、不写PG/OS。
+
+命令、实验结构和gold口径统一见[实验说明](../experiments/associations/README.md)。PG持久化和线上接入没有隐含启用，不能把离线合成示例当成线上召回或模型质量验证。
