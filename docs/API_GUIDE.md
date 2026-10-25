@@ -106,6 +106,14 @@ adaptive对问题中`A-100`等含字母、数字及分隔符的标识符施加�
 
 applicability.status为resolved、unknown、ambiguous。subject携带可空entity_id、可读display_name、可空product_model/software_version、source_kind、provenance_id和source_spans；内部ID不是要求口述的产品名。source_kind为curated/reviewed_alias/parser：管理员标注不伪装成原文已陈述。conditions保留原文或明确标注的条件，不自动发明包装/开封等业务枚举。
 
+applicability.reason_codes为有界列表：missing_binding表示未提供可用映射/审核实体，no_reviewed_match表示现有审核信息未匹配结构，structure_missing表示缺少章节/行标签，scope_conflict表示归属冲突。resolved通常为空；已有事实的详细原因通过重处理生成，不根据query追溯猜测。
+
+hit.dependency_issues包含unmatched_reference、ambiguous_reference、dependency_limit_exceeded、dependency_cycle或unsafe_dependency，表示原文引用缺失、重名、关系上限、环或不安全归属。它与context_state/context_omissions一起使用，不是检索充分性结论。
+
+context_parts每项包含自身applicability及可空link_provenance。后者字段为kind（parser_reference/curated/parser_continuation）、source_unit_id、target_unit_id、provenance_id及可空reference_text。主块的link_provenance为null。unknown必要条件可因可信关系被附带，但不能据此补成主块的产品；显式归属冲突和跨版本仍排除。
+
+可检查[必要上下文请求](examples/search-v2-required-context-request.json)及[响应](examples/search-v2-required-context-response.json)：include_context=false时仍返回原文明确引用的unknown条件，主事实resolved，条件不冒充该产品。示例由实际确定性解析生成，仅为合成契约夹具。
+
 定位约定：page从1开始，表格row_index/column_index从0开始（当前正文行通常从1起，表头独立保存）；TXT/Markdown的offset是UTF-8解码后Unicode字符位置，start包含、end不包含。Docling的charspan可能相对parser item，bbox沿解析器坐标/原点约定，不能统一解释为原文件字节或屏幕像素。anchor可能覆盖整个原块；多行、多页及单元格核验优先结合source_spans、parser_item_id、title_path和授权下载的对应version原件。chunk_id在一个处理版本内稳定，重处理/恢复后不能继续用旧ID指代新事实。
 
 context_state优先级：必要依赖缺失unresolved；可选内容被预算省略truncated；已识别必要组完整complete；没有必要依赖且关闭可选上下文时disabled。context_truncated=false不代表充分；unknown产品归属不能被调用方补成查询中的产品。已知必要依赖缺失时，不应将裸source_text作为该产品的完整适用证据肯定作答。
@@ -150,7 +158,7 @@ OpenSearch HTTP 200中若timed_out、terminated_early或失败分片非零，该
 
 ## 5. 导入、归属映射、更新与恢复
 
-`POST /v2/documents`：multipart/form-data，字段`file`和字符串`metadata`，KB write，`Idempotency-Key`必填1—128字符，返回202 Job。支持PDF/DOCX/MD/Markdown/TXT；文件缺省最大50MiB。metadata字段：kb_id、name、business_version、scope、document_id、auto_publish，以及scope_bindings/document_default。未知字段422。
+`POST /v2/documents`：multipart/form-data，字段`file`和字符串`metadata`，KB write，`Idempotency-Key`必填1—128字符，返回202 Job。支持PDF/DOCX/MD/Markdown/TXT；文件缺省最大50MiB。metadata字段：kb_id、name、business_version、scope、document_id、auto_publish，以及scope_bindings/document_default/dependency_bindings。未知字段422。
 
 ```json
 {
@@ -169,18 +177,40 @@ scope_bindings最多100个，每项用非空title_path（最多20级、前缀精
 
 客户端不能提交approved_entities、source_kind、source_spans来冒充审核/原文出处。服务器在入队时冻结本次审核别名和映射。给entity_id时必须属于该KB，显示名从冻结实体读取。没有映射不从query猜归属。无法匹配的选择器使处理任务失败，而非默默应用到其他范围。
 
+dependency_bindings最多100项，声明直接必要关系，示例：
+
+```json
+{
+  "source": {"title_path": ["Product A", "Specifications"]},
+  "target": {"title_path": ["Shared conditions"]},
+  "role": "condition",
+  "provenance_id": "document-owner-review-20261025"
+}
+```
+
+source/target均使用非空title_path（最多20级，每级500字符，**精确匹配完整路径，不是前缀**）和/或source_unit_id；同时给出则同时匹配。源单元定位仅用于reprocess，并须属于source_version_id。role为attribution/table_header/condition/exception/continuation；provenance_id为1—500字符非空审核说明。服务器构建关系来源，客户端不能提交provenance或伪装parser_reference。一个章节可包含多个块，全部目标超过20条时保留未完整诊断；不是只取第一块并宣称完整。
+
+可选reference_text为1—500字符的原文引用，用于人工确认解析标题与引用文字不一致时的目标。该文本必须实际存在于所选主事实源单元中，且只能对应一条自动引用；只解除这一引用的缺失/歧义，其他引用仍单独检查。不存在原文或混入多条引用时Job分别失败为dependency_reference_not_in_source或dependency_reference_must_identify_one_reference。审核说明不是审核者身份凭据，提交主体记录在任务中。
+
+人工选择器未匹配、同名路径对应多个章节、自引用或循环时，Job分别失败为dependency_selector_not_found、ambiguous_dependency_selector、context_self_link或context_reference_cycle，不自动重试。原文自动引用无法匹配或存在歧义时保留ready事实和dependency_issues供审核，不自动猜目标。结构与匹配规则见[系统设计](SYSTEM_DESIGN.md#31-归属审核与必要章节)。
+
 Job包含id、kb_id、document_id、version_id、status、stage、progress、error_code/error_message及时间。202只表示排队成功。`GET /v2/jobs/{job_id}`轮询；queued/running是处理中，failed查看错误，succeeded+ready尚未发布。`POST /v2/documents/{document_id}/publish`提交`{"version_id":"UUID","scope_key":"default"}`，write，204。
 
 | 操作 | 契约 |
 | --- | --- |
 | 文件更新 | `/v2/documents`中给既有document_id，生成新不可变版本；整文件处理，不是段落增量补丁 |
 | 版本信息 | `GET /v2/documents/{document_id}`，read；版本含processing_profile、derivation_kind、source_version_id，不默认返回全量处理快照 |
-| 重处理原件 | `POST /v2/documents/{document_id}/reprocess`，write+幂等键；source_version_id可空（当前published），target_profile只允许evidence-v2；可给scope_bindings/document_default；auto_publish默认false |
+| 重处理原件 | `POST /v2/documents/{document_id}/reprocess`，write+幂等键；source_version_id可空（当前published），target_profile只允许evidence-v2；可给scope_bindings/document_default/dependency_bindings；auto_publish默认false |
+| 审核处理结果 | `GET /v2/documents/{document_id}/versions/{version_id}/review`，KB write；limit默认25、1—100，offset默认0、0—1000000；可查看ready版本，未知/其他文档版本404 |
 | 恢复旧事实 | `POST /v2/documents/{document_id}/versions/{version_id}/restore`，body=`{}`，write+幂等键；创建全新版本/块ID，重新编码后ready，仍须显式发布 |
 | 下载原件 | `GET /v2/documents/{document_id}/source?version_id=UUID`，read；省略版本下载当前published；删除/撤权后拒绝 |
 | 删除 | `DELETE /v2/documents/{document_id}`，admin，204；PG立即不可见，OpenSearch异步清理，不承诺原件/备份硬删除 |
 
 幂等键作用域为principal+KB：同键同payload返回原Job，同键不同payload返回409；重试同一写请求必须保持payload与key。普通ingest/reprocess同文档、同原件hash、同processing_profile拒绝重复；有意restore是审计过的新派生版本，允许同内容。旧版本不会因上传成功立即失效，直到新版本publish。恢复不恢复旧权限、删除状态或自动复制人工关系。
+
+审核响应含document_id/kb_id/version_id、status、processing_profile、requires_reprocess，total/resolved/unknown/ambiguous/unresolved_dependencies全版本计数，reason_counts/warnings、可重用的三类审核配置，以及当前页items。item含chunk_id/source_unit_id/title_path、500字符source_preview、归属、context_links、dependency_unresolved和dependency_issues；预览不重复返回归属来源的长spans，原件/搜索仍保留真实来源。分页不改变全版本计数，也不将尚在处理中的0块误报为审核通过。warnings区分processing_not_ready、all_scope_unknown/scope_unknown、scope_conflict、dependency_unresolved、processing_revision_changed。
+
+requires_reprocess=true表示处理结构或定位需刷新。门户先以空映射按当前结构生成新待审核版本，再配置归属/关系；不在原发布版本上直接改事实。当前配置中的源单元会在能一一对应时转换到所审核版本；不静默选择一对多映射中的任意一块。接口不暴露approved_entities等完整服务器快照。
 
 ## 6. 公共管理接口目录
 

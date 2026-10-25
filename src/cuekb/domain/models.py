@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-PROCESSING_REVISION = "evidence-v2.2"
+PROCESSING_REVISION = "evidence-v2.3"
 
 
 def default_processing_snapshot() -> dict[str, Any]:
@@ -22,6 +22,7 @@ def default_processing_snapshot() -> dict[str, Any]:
         "structure_revision": PROCESSING_REVISION,
         "max_chunk_chars": 1200,
         "scope_bindings": [],
+        "dependency_bindings": [],
         "approved_entities": [],
     }
 
@@ -146,10 +147,17 @@ class ApplicableCondition(StructureModel):
     provenance_id: str | None = Field(default=None, max_length=500)
 
 
+ScopeReason = Literal["missing_binding", "no_reviewed_match", "structure_missing", "scope_conflict"]
+DependencyIssue = Literal[
+    "unmatched_reference", "ambiguous_reference", "dependency_limit_exceeded", "dependency_cycle", "unsafe_dependency"
+]
+
+
 class Applicability(StructureModel):
     status: Literal["resolved", "unknown", "ambiguous"] = "unknown"
     subjects: list[ApplicableSubject] = Field(default_factory=list, max_length=8)
     conditions: list[ApplicableCondition] = Field(default_factory=list, max_length=20)
+    reason_codes: list[ScopeReason] = Field(default_factory=list, max_length=4)
 
     @model_validator(mode="after")
     def resolved_has_subject(self) -> "Applicability":
@@ -161,19 +169,31 @@ class Applicability(StructureModel):
 ContextRole = Literal["attribution", "table_header", "condition", "exception", "continuation"]
 
 
+class ContextProvenance(StructureModel):
+    kind: Literal["parser_reference", "curated", "parser_continuation"]
+    source_unit_id: str = Field(min_length=1, max_length=200)
+    target_unit_id: str = Field(min_length=1, max_length=200)
+    provenance_id: str = Field(min_length=1, max_length=500)
+    reference_text: str | None = Field(default=None, min_length=1, max_length=500)
+
+
 class ContextLink(StructureModel):
     chunk_id: UUID
     role: ContextRole
     required: bool = True
+    provenance: ContextProvenance | None = None
 
 
 class EvidenceStructure(StructureModel):
     block_kind: Literal["text", "list", "table", "heading"] = "text"
     source_unit_id: str | None = Field(default=None, max_length=200)
+    origin_source_unit_id: str | None = Field(default=None, max_length=200)
+    parser_unit_key: str | None = Field(default=None, max_length=1024)
     applicability: Applicability = Field(default_factory=Applicability)
     context_links: list[ContextLink] = Field(default_factory=list, max_length=20)
     structure_revision: str = Field(default=PROCESSING_REVISION, min_length=1, max_length=100)
     dependency_unresolved: bool = False
+    dependency_issues: list[DependencyIssue] = Field(default_factory=list, max_length=5)
     # Frozen reviewed aliases for lexical projection; not a user-facing scope assertion.
     retrieval_aliases: list[str] = Field(default_factory=list, max_length=800)
 

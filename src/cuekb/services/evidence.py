@@ -17,6 +17,7 @@ from cuekb.domain.models import (
     ApplicableSubject,
     Chunk,
     ContextLink,
+    ContextProvenance,
     EvidenceStructure,
     PROCESSING_REVISION,
     SourceSpan,
@@ -61,7 +62,20 @@ def scope_compatible(
     left = hit.evidence_structure.applicability
     right = candidate.evidence_structure.applicability
     if left.status != "resolved" or right.status != "resolved":
-        return False
+        # Product identity and an audited structural dependency are independent.
+        # Never relax optional proximity, conflicting/ambiguous declarations, or
+        # links without frozen source/target provenance.
+        if (not required or left.status == "ambiguous" or right.status == "ambiguous"
+                or (left.status == "unknown" and left.subjects)
+                or (right.status == "unknown" and right.subjects)):
+            return False
+        if left.conditions and right.conditions and {c.text for c in left.conditions} != {c.text for c in right.conditions}:
+            return False
+        return any(
+            link.required and link.chunk_id == candidate.id and link.role == role
+            and trusted_dependency(hit, candidate, link)
+            for link in hit.evidence_structure.context_links
+        )
     left_keys, right_keys = _subject_keys(left), _subject_keys(right)
     shared_structure = required and role in {"attribution", "table_header", "condition", "exception"}
     if left_keys != right_keys and not (shared_structure and left_keys <= right_keys):
@@ -74,6 +88,22 @@ def scope_compatible(
         if not shared_structure or (left_conditions and right_conditions):
             return False
     return True
+
+
+def trusted_dependency(hit: Chunk, target: Chunk, link: ContextLink) -> bool:
+    proof = link.provenance
+    if (proof is None or not hit.evidence_structure.source_unit_id
+            or not target.evidence_structure.source_unit_id
+            or proof.source_unit_id != hit.evidence_structure.source_unit_id
+            or proof.target_unit_id != target.evidence_structure.source_unit_id):
+        return False
+    if proof.kind == "curated":
+        return proof.reference_text is None or proof.reference_text in hit.source_text
+    if proof.kind == "parser_reference":
+        return bool(proof.reference_text and proof.reference_text in hit.source_text
+                    and link.role in {"attribution", "condition", "exception", "table_header"})
+    return (link.role == "continuation"
+            and proof.source_unit_id == proof.target_unit_id)
 
 
 def validate_evidence_links(chunks: Sequence[Chunk]) -> None:
@@ -98,6 +128,8 @@ def validate_evidence_links(chunks: Sequence[Chunk]) -> None:
                 target.kb_id, target.document_id, target.version_id
             ):
                 raise ValueError("context_scope_mismatch")
+            if link.provenance and not trusted_dependency(chunk, target, link):
+                raise ValueError("invalid_context_provenance")
             adjacency[chunk.id].append(link.chunk_id)
     # Iterative DFS keeps validation safe even for large imported documents.
     done, visiting = set(), set()
@@ -140,7 +172,11 @@ def bind_block_dependencies(chunks: Sequence[Chunk]) -> None:
         for chunk in continued:
             if chunk.id != head.id:
                 chunk.evidence_structure.context_links = [
-                    ContextLink(chunk_id=head.id, role="continuation", required=True)
+                    ContextLink(chunk_id=head.id, role="continuation", required=True,
+                        provenance=ContextProvenance(kind="parser_continuation",
+                            source_unit_id=chunk.evidence_structure.source_unit_id,
+                            target_unit_id=head.evidence_structure.source_unit_id,
+                            provenance_id="parser:continuation"))
                 ]
             # A partial cell/paragraph is not complete just because its first
             # fragment could be attached. All pieces retain this explicit flag.
@@ -154,7 +190,10 @@ def resolve_applicability(
 ) -> Applicability:
     """Use only frozen bindings, exact reviewed heading aliases and explicit defaults."""
     if not snapshot:
-        return Applicability()
+        reasons = ["missing_binding"]
+        if not title_path and not any(s.label == "table_row_label" for s in source_spans):
+            reasons.append("structure_missing")
+        return Applicability(reason_codes=reasons)
     declarations: list[Applicability] = []
     for binding in snapshot.get("scope_bindings", []):
         if not isinstance(binding, Mapping):
@@ -200,7 +239,11 @@ def resolve_applicability(
     if default:
         declarations.append(_declaration(default, source_kind="curated"))
     if not declarations:
-        return Applicability()
+        reasons = ["no_reviewed_match" if (snapshot.get("scope_bindings") or
+            snapshot.get("approved_entities")) else "missing_binding"]
+        if not title_path and not any(s.label == "table_row_label" for s in source_spans):
+            reasons.append("structure_missing")
+        return Applicability(reason_codes=reasons)
     # An absent model/version is incomplete information about an entity, not a
     # second entity. Compare entity sets first, then merge compatible attributes.
     def entity_key(subject):
@@ -249,6 +292,7 @@ def resolve_applicability(
     return Applicability(
         status="ambiguous" if ambiguous else "resolved",
         subjects=list(subjects.values())[:8], conditions=list(conditions.values())[:20],
+        reason_codes=["scope_conflict"] if ambiguous else [],
     )
 
 
@@ -270,6 +314,7 @@ def structure_for(
     *, block_kind: str, unit_id: str, title_path: Sequence[str], source_spans: Sequence[SourceSpan],
     snapshot: Mapping[str, Any] | None, unresolved: bool = False,
     source_unit_aliases: Sequence[str] = (),
+    parser_unit_key: str | None = None,
 ) -> EvidenceStructure:
     applicability = resolve_applicability(title_path, source_spans, unit_id, snapshot,
                                         source_unit_aliases=source_unit_aliases)
@@ -279,6 +324,8 @@ def structure_for(
                       for alias in entity.get("aliases", [])})
     return EvidenceStructure(
         block_kind=block_kind, source_unit_id=unit_id,
+        origin_source_unit_id=next(iter(source_unit_aliases), None),
+        parser_unit_key=parser_unit_key,
         applicability=applicability,
         retrieval_aliases=aliases if applicability.status == "resolved" else [],
         structure_revision=PROCESSING_REVISION, dependency_unresolved=unresolved,

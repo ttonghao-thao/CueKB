@@ -37,9 +37,21 @@ Chunk保留`source_text`、`title_path`、单一位置anchor、多位置source_s
 
 Markdown保留章节、段落、列表引导条件和表格整行/表头关系。长原块拆分仍共享源单元身份，必要续块直接关联，不能依赖无界递归。Docling保留其实际provenance；PDF/DOCX复杂表格的可靠程度须按真实样本检验。
 
-applicability仅在可信映射或审核别名与结构匹配时resolved；未确认unknown，多个不一致结论ambiguous。同一稳定实体的缺失型号/版本与人工绑定按兼容信息合并，真正不同的非空型号/版本继续冲突；不同主体集合不被强行合并。归属与document metadata分开。V2同时按产品/软件过滤时，两个值须命中同一个resolved subject。evidence-v2.2处理修订冻结审核别名为内部retrieval_aliases，仅resolved归属可供词法投影，不增加对外subject字段。
+applicability仅在可信映射或审核别名与结构匹配时resolved；未确认unknown，多个不一致结论ambiguous。同一稳定实体的缺失型号/版本与人工绑定按兼容信息合并，真正不同的非空型号/版本继续冲突；不同主体集合不被强行合并。归属与document metadata分开。V2同时按产品/软件过滤时，两个值须命中同一个resolved subject。处理快照冻结审核别名为内部retrieval_aliases，仅resolved归属可供词法投影，不增加对外subject字段。reason_codes区分未提供映射、未匹配审核信息、缺少结构及冲突；不会根据查询、文件名或上传标签补产品。
 
 必要依赖的读取与可选近邻先经过同KB/document/version、主体与条件兼容检查，再考虑位置；不靠同文档越过产品边界。入库拒绝悬空、跨版本、自引用、重复及循环依赖。依赖或预算不足显式unresolved/truncated，不将不完整上下文标成完整。
+
+### 3.1 归属审核与必要章节
+
+evidence-v2.3将产品判定与结构依赖分开。Worker按真实章节边界生成section，重复同名章节保留独立身份；表格逐行使用独立source_unit_id，续块共享该行的源单元。内部parser_unit_key及冻结的origin_unit_aliases用于重处理定位，restore同时重映射关系两端的来源ID，不能把旧块ID当作新事实。
+
+自动必要关系只识别原文中显式的中英文章节引用及能确定类型的适用范围/条件/例外标题，含数字章节号。独立条件标题、位置相邻或正文提及产品都不会自动产生依赖。缺失/重名引用、数量溢出、循环或明确归属冲突保留未解决诊断；不递归读取全文。其他语种、隐含语义及任意远距指代由审核配置补齐，不宣称自动理解。
+
+人工dependency_bindings按精确章节路径或原版本源单元选择source/target，声明必要角色与审核说明，并随处理快照冻结。每块最多20条直接关系；模糊或未匹配人工选择器、自引用及环使任务明确失败且不自动重试。关系链在查询时不跟随第二跳；审核应将主事实需要的条件直接列入同一有界组。
+
+ContextLink.provenance记录parser_reference、curated或parser_continuation及两端源单元；原文引用还必须存在于主块原文。只有这些来源可核验的必要关系可以连接unknown块，且仍拒绝跨KB/document/version、ambiguous、明确产品或条件冲突。普通近邻不因unknown而放开。返回context_parts携带每块自己的applicability与link_provenance，不继承主事实的产品归属。
+
+审核接口在写权限与同一PG读快照中读取包括ready版本的事实，返回全版本汇总和有界分页、当前可重用的映射配置。门户默认先ready后审核；发布前提示unknown/冲突/未完整依赖，可由用户确认通用资料后发布。显式auto_publish仍是跳过人工审核的选择，不表示通过归属或质量认证。
 
 `search_text`可加入可信标题/产品/表头以改善召回，原文不改写。Embedding、generation与rerank输入复用同一模板构造函数；缺少有效模板标识的索引明确拒绝，不按另一种处理方式猜测文本。
 

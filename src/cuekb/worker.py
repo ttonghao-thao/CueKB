@@ -19,6 +19,7 @@ from cuekb.domain.models import Chunk
 from cuekb.services.generations import rebuild_once
 from cuekb.services.evidence import bind_block_dependencies, build_search_text
 from cuekb.services.parsing import ParseError, parse_document
+from cuekb.services.structure import bind_section_dependencies
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,17 @@ def materialize_chunks(repository, storage, job, *, template):
             document_name=job["name"],
         ) for index, block in enumerate(blocks)]
         bind_block_dependencies(chunks)
+        try:
+            bind_section_dependencies(chunks, job["processing_snapshot"],
+                {chunk.id: block.source_unit_aliases for chunk, block in zip(chunks, blocks)})
+        except ValueError as exc:
+            # These are deterministic, reviewed-input failures, not transient
+            # model/SQL failures. Persist only fixed codes and do not retry them.
+            if str(exc) in {"dependency_selector_not_found", "ambiguous_dependency_selector",
+                            "dependency_reference_not_in_source", "dependency_reference_must_identify_one_reference",
+                            "context_self_link", "context_reference_cycle"}:
+                raise ParseError(str(exc)) from None
+            raise
     for chunk in chunks:
         chunk.document_name = job["name"]
         chunk.search_text = build_search_text(chunk, job["name"], template=template)

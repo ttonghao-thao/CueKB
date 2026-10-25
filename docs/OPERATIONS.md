@@ -45,10 +45,11 @@ chmod 600 .env.production
 ## 4. 文档日常操作
 
 1. 上传前整理清晰章节/表头；多产品映射用scope_bindings，不能把全篇metadata标签当成局部证据。
-2. `POST /v2/documents`带幂等键，默认auto_publish=false。轮询Job，failed处理具体错误，ready检查归属、原文与索引后显式publish。
+2. `POST /v2/documents`带幂等键，默认auto_publish=false。轮询Job，failed处理具体错误，ready用版本review接口/门户审核归属、必要章节、原文与索引后显式publish；操作见[接入说明](INTEGRATION_GUIDE.md#4-文件导入与审核发布)。
 3. 更新时传document_id；发布前旧published仍可见。未成功入索引的任务不能切发布指针。
 4. 下载原件用授权接口，不直接暴露存储目录。删除首先使PG不可见，OS通过outbox清理；原件与备份的物理保留另按运行方策略处理。
 5. reprocess/restore的幂等重试保持原payload/key；未知结果先查询Job。不要反复生成新key创建重复任务。
+6. 当前处理修订为evidence-v2.3，新增产品原因诊断、行级表格源单元及有来源的必要关系。已发布事实不会自动改写；审核提示requires_reprocess时先按当前结构重解析，再配置新源单元并审核。API/Worker与门户须一起更新；第三方严格DTO先同步当前契约。数据库仍以完整schema全新初始化，不增加结构升级链。
 
 ## 5. 备份与恢复
 

@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, SecretStr, model
 
 from cuekb.domain.models import (
     Applicability,
+    ContextLink,
+    ContextProvenance,
+    DependencyIssue,
     ContextRole,
     EvidenceStatus,
     RetrievalMode,
@@ -263,6 +266,8 @@ class V2ContextPart(BaseModel):
     source_spans: list[SourceSpan] = Field(default_factory=list, max_length=64)
     role: ContextRole | None = None
     required: bool = False
+    applicability: Applicability = Field(default_factory=Applicability)
+    link_provenance: ContextProvenance | None = None
 
 
 class V2RelationEvidence(BaseModel):
@@ -298,6 +303,7 @@ class V2SearchHit(BaseModel):
     score_type: Literal["rrf", "rerank"]
     stage_scores: dict[str, FiniteFloat] = Field(default_factory=dict)
     applicability: Applicability = Field(default_factory=Applicability)
+    dependency_issues: list[DependencyIssue] = Field(default_factory=list, max_length=5)
     source_spans: list[SourceSpan] = Field(default_factory=list, max_length=64)
     processing_profile: str
     source_unit_id: str | None = Field(default=None, max_length=200)
@@ -432,6 +438,13 @@ class CuratedSubjectInput(BaseModel):
     software_version: str | None = Field(default=None, min_length=1, max_length=200)
     provenance_id: str | None = Field(default=None, min_length=1, max_length=500)
 
+    @model_validator(mode="after")
+    def meaningful_subject(self):
+        if any(value is not None and not value.strip() for value in (
+            self.display_name, self.product_model, self.software_version, self.provenance_id)):
+            raise ValueError("scope_subject_must_not_be_blank")
+        return self
+
 
 class CuratedConditionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -460,6 +473,36 @@ class ScopeBindingInput(CuratedScopeInput):
         return self
 
 
+class SectionSelectorInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title_path: list[Annotated[str, Field(min_length=1, max_length=500)]] | None = Field(
+        default=None, min_length=1, max_length=20)
+    source_unit_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def require_selector(self):
+        if self.title_path is None and self.source_unit_id is None:
+            raise ValueError("section_selector_required")
+        if self.title_path and any(not title.strip() for title in self.title_path):
+            raise ValueError("section_title_must_not_be_blank")
+        return self
+
+
+class SectionDependencyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: SectionSelectorInput
+    target: SectionSelectorInput
+    role: ContextRole
+    provenance_id: str = Field(min_length=1, max_length=500)
+    reference_text: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def meaningful_provenance(self):
+        if not self.provenance_id.strip() or (self.reference_text is not None and not self.reference_text.strip()):
+            raise ValueError("dependency_provenance_must_not_be_blank")
+        return self
+
+
 class ReprocessRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -467,6 +510,7 @@ class ReprocessRequest(BaseModel):
     target_profile: Literal["evidence-v2"] = "evidence-v2"
     scope_bindings: list[ScopeBindingInput] = Field(default_factory=list, max_length=100)
     document_default: CuratedScopeInput | None = None
+    dependency_bindings: list[SectionDependencyInput] = Field(default_factory=list, max_length=100)
     auto_publish: bool = False
 
 
@@ -486,6 +530,7 @@ class V2DocumentMetadata(BaseModel):
 
     scope_bindings: list[ScopeBindingInput] = Field(default_factory=list, max_length=100)
     document_default: CuratedScopeInput | None = None
+    dependency_bindings: list[SectionDependencyInput] = Field(default_factory=list, max_length=100)
 
 
 class V2DocumentVersionInfo(BaseModel):
@@ -514,6 +559,41 @@ class V2DocumentDetail(BaseModel):
     created_at: datetime
     active_version_id: UUID | None = None
     versions: list[V2DocumentVersionInfo]
+
+
+class ProcessingReviewItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chunk_id: UUID
+    source_unit_id: str | None
+    title_path: list[str]
+    source_preview: str = Field(max_length=500)
+    applicability: Applicability
+    context_links: list[ContextLink] = Field(max_length=20)
+    dependency_unresolved: bool
+    dependency_issues: list[str] = Field(max_length=5)
+
+
+class ProcessingReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_id: UUID
+    kb_id: UUID
+    version_id: UUID
+    processing_profile: str
+    status: VersionStatus
+    requires_reprocess: bool
+    total: int = Field(ge=0)
+    resolved: int = Field(ge=0)
+    unknown: int = Field(ge=0)
+    ambiguous: int = Field(ge=0)
+    unresolved_dependencies: int = Field(ge=0)
+    reason_counts: dict[str, int]
+    warnings: list[str] = Field(max_length=5)
+    scope_bindings: list[ScopeBindingInput]
+    document_default: CuratedScopeInput | None
+    dependency_bindings: list[SectionDependencyInput]
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    items: list[ProcessingReviewItem] = Field(max_length=100)
 
 
 class EntityInfo(EntityWrite):

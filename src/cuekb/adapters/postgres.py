@@ -495,7 +495,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
         if requested != "evidence-v2":
             raise ValueError("unsupported_processing_profile")
         supplied = supplied or {}
-        if set(supplied) - {"scope_bindings", "document_default"}:
+        if set(supplied) - {"scope_bindings", "document_default", "dependency_bindings"}:
             raise ValueError("unsupported_processing_snapshot_input")
         bindings = supplied.get("scope_bindings", [])
         if not isinstance(bindings, list) or len(bindings) > 200:
@@ -537,11 +537,20 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             "structure_revision": PROCESSING_REVISION,
             "max_chunk_chars": 1200,
             "scope_bindings": [declaration(b) for b in bindings],
+            "dependency_bindings": [],
             "approved_entities": [],
         }
         if any(not (b.get("title_path") or b.get("source_unit_id")) for b in snapshot["scope_bindings"]):
             raise ValueError("scope_binding_selector_required")
-        unit_selectors = {b["source_unit_id"] for b in snapshot["scope_bindings"] if b.get("source_unit_id")}
+        from cuekb.schemas import SectionDependencyInput
+        dependencies = supplied.get("dependency_bindings", [])
+        if not isinstance(dependencies, list) or len(dependencies) > 100:
+            raise ValueError("dependency_bindings_limit")
+        snapshot["dependency_bindings"] = [SectionDependencyInput.model_validate(d).model_dump(mode="json", exclude_none=True)
+                                            for d in dependencies]
+        selectors = [*snapshot["scope_bindings"], *(selector for dependency in snapshot["dependency_bindings"]
+                     for selector in (dependency["source"], dependency["target"]))]
+        unit_selectors = {b["source_unit_id"] for b in selectors if b.get("source_unit_id")}
         if unit_selectors:
             if origin_version_id is None:
                 raise ValueError("source_unit_mapping_requires_source_version")
@@ -552,6 +561,17 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             if not unit_selectors <= known:
                 raise ValueError("source_unit_mapping_not_in_source_version")
             snapshot["origin_version_id"] = str(origin_version_id)
+            unit_rows = conn.execute(text("""SELECT DISTINCT evidence_structure->>'parser_unit_key' key,
+                evidence_structure->>'source_unit_id' unit FROM chunks WHERE version_id=:v
+                AND evidence_structure->>'source_unit_id'=ANY(CAST(:units AS text[]))
+                AND evidence_structure->>'parser_unit_key' IS NOT NULL"""),
+                {"v": origin_version_id, "units": list(unit_selectors)}).mappings()
+            unit_aliases = {}
+            for row in unit_rows:
+                if row["key"] in unit_aliases and unit_aliases[row["key"]] != row["unit"]:
+                    raise ValueError("ambiguous_origin_unit")
+                unit_aliases[row["key"]] = row["unit"]
+            snapshot["origin_unit_aliases"] = unit_aliases
         if supplied.get("document_default") is not None:
             default = declaration(supplied["document_default"])
             if "title_path" in default or "source_unit_id" in default:
@@ -663,6 +683,9 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                 if link.chunk_id not in identifiers:
                     raise ValueError("restore_dependency_not_in_source_version")
                 link.chunk_id = identifiers[link.chunk_id]
+                if link.provenance:
+                    link.provenance.source_unit_id = source_unit_id(link.provenance.source_unit_id, job["version_id"])
+                    link.provenance.target_unit_id = source_unit_id(link.provenance.target_unit_id, job["version_id"])
             chunks.append(original.model_copy(update={
                 "id": identifiers[original.id], "version_id": job["version_id"],
                 "section_id": None, "evidence_structure": structure,

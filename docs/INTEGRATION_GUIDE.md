@@ -81,7 +81,7 @@ curl --fail-with-body "$CUEKB_BASE_URL/v2/documents" \
   -F 'metadata=<metadata.json' -F 'file=@manual.md;type=text/markdown'
 ```
 
-记录202返回的Job ID；通过`GET /v2/jobs/{id}`轮询。失败记录error_code；ready时使用`GET /v2/documents/{document_id}`检查新版本/profile，需要时下载原件核对。随后用write权限调用publish：
+记录202返回的Job ID；通过`GET /v2/jobs/{id}`轮询。失败记录error_code；ready时使用`GET /v2/documents/{document_id}`检查新版本/profile，并用`GET /v2/documents/{document_id}/versions/{version_id}/review`分页核对产品归属与必要章节，需要时下载原件。汇总为全版本统计，不能只看第一页就认为其余块已通过。随后用write权限调用publish：
 
 ```bash
 curl --fail-with-body "$CUEKB_BASE_URL/v2/documents/$CUEKB_DOCUMENT_ID/publish" \
@@ -93,9 +93,15 @@ publish.json为`{"version_id":"待发布版本UUID","scope_key":"default"}`。�
 
 同一原件换解析/范围映射使用reprocess，不能靠generation改变块边界。restore会产生新版本，先ready后显式publish；不要直接激活superseded版本，也不要复用旧块ID作为新证据。幂等请求超时保持相同key/payload查询或重试，不能每次换key制造重复任务。
 
+门户默认不自动发布。导入前可选择已审核产品实体或明确填写产品名：仅确认全文适用同一产品时勾选全文归属；多产品用精确章节路径映射。处理后打开“审核归属与必要章节”，查看unknown原因、冲突、原文预览及关系来源；可将源单元绑定到产品，并选择主事实/必要章节、填写审核说明。修改提交为新reprocess版本，原published继续服务，等待新结果再次审核后发布。
+
+通用说明可以保持unknown；发布警告需核对后确认，不能为了消除unknown把全篇强配给一个产品。必要关系不赋予产品身份：消费端应保留context_parts自身的归属与来源。若requires_reprocess为true，先用门户“按当前结构重新解析后审核”，再选择新源单元；表格每行有独立定位，拆分续块共享该行源单元。
+
+若原文引用标题与解析标题不同，可在人工关系中填写完整的原文引用并选择真实目标，解除该引用的缺失警告。不要用一条关系确认整段中的多个不同引用；原文、目标和审核说明均须核对。
+
 ## 5. 严格客户端升级
 
-当前默认V2 ranked响应保持既有闭合形状，不附加selection字段；只有显式adaptive响应才包含新选择诊断。新增字段即使为null也可能被严格客户端拒绝，按以下顺序切换：
+V2响应新增applicability.reason_codes、hit.dependency_issues、context_parts.applicability/link_provenance。严格DTO应先同步当前生成契约；不能丢弃未知归属条件的真实状态或将其继承为主事实产品。ranked不附加selection字段；只有显式adaptive响应包含选择诊断。新增字段即使为null也可能被严格客户端拒绝，按以下顺序切换：
 
 1. 先发布支持目标DTO的消费端，保留extra=forbid或等效严格校验。
 2. 使用已导出的契约和合成示例做解析/引用映射测试，必要归属必须进入实际模型证据包，不能被metadata allowlist丢掉。

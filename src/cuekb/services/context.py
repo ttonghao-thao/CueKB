@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID, uuid5
 
-from cuekb.domain.models import Chunk, ContextRole, Section, SourceAnchor, SourceSpan, StructureModel
+from cuekb.domain.models import Applicability, Chunk, ContextProvenance, ContextRole, Section, SourceAnchor, SourceSpan, StructureModel
 from cuekb.services.evidence import scope_compatible
 
 
@@ -13,8 +13,11 @@ def build_sections(chunks: Sequence[Chunk]) -> list[Section]:
     sections: list[Section] = []
     active: list[Section] = []
     previous: list[str] = []
+    previous_markers = {}
     for chunk in chunks:
         path = chunk.title_path
+        markers = {len(span.anchor.heading_path): span.model_dump_json()
+                   for span in chunk.source_spans if span.label == "heading" and span.anchor.heading_path}
         if not active:
             root = Section(
                 id=uuid5(chunk.version_id, "section:root"),
@@ -26,7 +29,9 @@ def build_sections(chunks: Sequence[Chunk]) -> list[Section]:
             sections.append(root)
             active.append(root)
         common = 0
-        while common < min(len(path), len(previous)) and path[common] == previous[common]:
+        while (common < min(len(path), len(previous)) and path[common] == previous[common]
+               and (common + 1 not in markers or common + 1 not in previous_markers
+                    or markers[common + 1] == previous_markers[common + 1])):
             common += 1
         active = active[: common + 1]
         for depth in range(common + 1, len(path) + 1):
@@ -42,6 +47,7 @@ def build_sections(chunks: Sequence[Chunk]) -> list[Section]:
             active.append(section)
         chunk.section_id = active[-1].id
         previous = path
+        previous_markers = markers
     # Direct content only: ancestors do not duplicate the whole document.
     by_section: dict = {}
     for chunk in chunks:
@@ -59,6 +65,8 @@ class EvidenceContextPart(StructureModel):
     source_spans: list[SourceSpan]
     role: ContextRole | None = None
     required: bool = False
+    applicability: Applicability
+    link_provenance: ContextProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +181,8 @@ def assemble_context_v2(
     parts = [EvidenceContextPart(
         chunk_id=chunk.id, source_text=chunk.source_text, anchor=chunk.anchor,
         title_path=chunk.title_path, source_spans=chunk.source_spans, role=role, required=necessary,
+        applicability=chunk.evidence_structure.applicability,
+        link_provenance=next((link.provenance for link in links if link.chunk_id == chunk.id), None),
     ) for chunk, role, necessary in ordered]
     state = "unresolved" if unresolved else "truncated" if truncated else "complete"
     return ContextAssembly("\n\n".join(part.source_text for part in parts), parts,

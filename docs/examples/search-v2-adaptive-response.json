@@ -65,7 +65,7 @@
       "context_chars": 40,
       "context_parts_bytes": 40,
       "context_parts_chars": 40,
-      "hits_bytes": 1873,
+      "hits_bytes": 2175,
       "source_text_bytes": 40,
       "source_text_chars": 40
     },
@@ -91,6 +91,7 @@
       },
       "applicability": {
         "conditions": [],
+        "reason_codes": [],
         "status": "resolved",
         "subjects": [
           {
@@ -120,7 +121,24 @@
             "page": null,
             "start_offset": 0
           },
+          "applicability": {
+            "conditions": [],
+            "reason_codes": [],
+            "status": "resolved",
+            "subjects": [
+              {
+                "display_name": "Product A",
+                "entity_id": null,
+                "product_model": "A",
+                "provenance_id": null,
+                "software_version": null,
+                "source_kind": "curated",
+                "source_spans": []
+              }
+            ]
+          },
           "chunk_id": "55555555-5555-4555-8555-555555555555",
+          "link_provenance": null,
           "required": true,
           "role": null,
           "source_spans": [
@@ -150,6 +168,7 @@
       ],
       "context_state": "complete",
       "context_truncated": false,
+      "dependency_issues": [],
       "document_id": "33333333-3333-4333-8333-333333333333",
       "document_name": "Illustrative manual",
       "metadata": {},
@@ -189,7 +208,7 @@
     }
   ],
   "ranking_method": "keyword_rrf",
-  "ranking_version": "sha256:84644671d287908b316a7b7bbab9d9ffa093b46b3e7343cb1e2685d9f29863a4",
+  "ranking_version": "sha256:5501b97ec35bb95587b0f4b3a24017f2238786a927976963f4850257979b9e00",
   "request_id": "contract-example",
   "retrieval_path": "exact",
   "retrieval_status": "ok",

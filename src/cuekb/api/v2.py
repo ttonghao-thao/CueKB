@@ -7,7 +7,7 @@ import json
 from contextlib import suppress
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from pydantic import ValidationError
@@ -19,7 +19,7 @@ from cuekb.api.v2_dependencies import retrieval_service_v2
 from cuekb.api.routes import _queue
 from cuekb.config import get_settings
 from cuekb.domain.models import Job, Principal
-from cuekb.schemas import ReprocessRequest, RestoreRequest, V2DocumentDetail, V2DocumentMetadata, V2DocumentVersionInfo, V2SearchRequest, V2SearchResponse
+from cuekb.schemas import ProcessingReview, ReprocessRequest, RestoreRequest, V2DocumentDetail, V2DocumentMetadata, V2DocumentVersionInfo, V2SearchRequest, V2SearchResponse
 from cuekb.services.execution import current_execution
 from cuekb.services.retrieval_v2 import V2RetrievalService, encode_v2_response
 
@@ -48,6 +48,7 @@ async def ingest_file(
         _queue, parsed, b"".join(parts), file.filename or "document",
         file.content_type or "application/octet-stream", idempotency_key, principal,
         processing_snapshot={"scope_bindings": [b.model_dump(mode="json") for b in parsed.scope_bindings],
+                             "dependency_bindings": [b.model_dump(mode="json") for b in parsed.dependency_bindings],
                              "document_default": parsed.document_default.model_dump(mode="json") if parsed.document_default else None},
     )
 
@@ -125,6 +126,21 @@ def _management(principal: Principal | None, document_id: UUID) -> PostgreSQLRep
     return repo
 
 
+@router.get("/documents/{document_id}/versions/{version_id}/review",
+    response_model=ProcessingReview, tags=["processing-v2"])
+def review_version(document_id: UUID, version_id: UUID,
+    limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0, le=1000000),
+    principal: Principal | None = Depends(current_principal)):
+    from cuekb.services.review import processing_review
+    repo = _management(principal, document_id)
+    try:
+        with repo.read_snapshot() as snapshot:
+            snapshot.require_role(principal, [snapshot.get_document_kb(document_id)], "write")
+            return processing_review(snapshot, document_id, version_id, limit, offset)
+    except KeyError as exc:
+        raise HTTPException(404, "document_version_not_found") from exc
+
+
 @router.post("/documents/{document_id}/reprocess", response_model=Job, status_code=202, tags=["processing-v2"])
 def reprocess(
     document_id: UUID, body: ReprocessRequest,
@@ -136,7 +152,7 @@ def reprocess(
     canonical = body.model_dump(mode="json")
     identity = {"operation": "reprocess", "document_id": str(document_id), "body": canonical}
     request_sha = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    snapshot = {key: canonical[key] for key in ("scope_bindings", "document_default") if canonical.get(key) is not None}
+    snapshot = {key: canonical[key] for key in ("scope_bindings", "document_default", "dependency_bindings") if canonical.get(key) is not None}
     try:
         return repo.create_reprocess_job(
             principal_id=principal.id, document_id=document_id,

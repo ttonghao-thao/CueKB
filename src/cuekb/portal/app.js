@@ -1,6 +1,8 @@
 const state = {
   apiKey: sessionStorage.getItem("cuekb_api_key") || "",
   knowledgeBases: [], currentKb: null, documents: [], files: [], jobs: new Map(), isSystemAdmin: false, rerankerKeySet: false,
+  processingEditors: new Set(), processingEntities: new Map(), review: null, reviewSubmission: null,
+  processingLoads: new Map(), reviewRequest: 0,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -43,6 +45,7 @@ function showView(name) {
   $$(".view").forEach((item) => item.classList.toggle("active", item.id === `view-${name}`));
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === name));
   if (name === "documents") loadDocuments();
+  if (name === "upload") { ensureProcessingEditor("upload"); loadProcessingEntities("upload"); }
   if (name === "models" && state.isSystemAdmin) { loadModelConfig(); loadGenerations(); }
   if (name === "knowledge") loadKnowledge();
   if (name === "knowledge-bases") renderKnowledgeBaseManagement();
@@ -182,7 +185,12 @@ async function refreshKnowledgeBases() {
 }
 
 async function selectKnowledgeBase(id) {
+  const previousId = state.currentKb?.id;
   state.currentKb = state.knowledgeBases.find((kb) => kb.id === id) || null;
+  if (previousId !== state.currentKb?.id && state.processingEditors.has("upload")) {
+    resetProcessingEditor("upload");
+    if (state.currentKb && $("#view-upload").classList.contains("active")) loadProcessingEntities("upload", id);
+  }
   if (state.currentKb) {
     sessionStorage.setItem("cuekb_kb_id", id);
     $("#kb-select").value = id;
@@ -274,9 +282,10 @@ async function openDocument(id) {
     $("#document-detail").innerHTML = `<p class="eyebrow">文档详情</p><h2>${escapeHtml(doc.name)}</h2><p class="muted">文档 ID：${doc.id}</p>
       ${canWrite ? `<button class="secondary" data-new-version="${doc.id}">导入新版本</button>` : ""}
       <div class="version-list">${doc.versions.map((version) => `<div class="version-row"><div class="version-head"><div><strong>${escapeHtml(version.business_version || version.original_filename || "未命名版本")}</strong><div class="muted">${dateText(version.created_at)} · ${shortId(version.id)}</div></div><span class="status">${version.is_active ? "当前发布" : escapeHtml(statusText[version.status] || version.status)}</span></div>
-      <div class="version-actions"><button class="secondary" data-download="${version.id}">下载原文</button>${canWrite && version.status === "ready" ? `<button class="primary" data-publish="${version.id}">发布此版本</button>` : ""}</div></div>`).join("")}</div>
+      <div class="version-actions"><button class="secondary" data-download="${version.id}">下载原文</button>${canWrite ? `<button class="secondary" data-review="${version.id}">审核归属与必要章节</button>` : ""}${canWrite && version.status === "ready" ? `<button class="primary" data-publish="${version.id}">发布此版本</button>` : ""}</div></div>`).join("")}</div>
       ${canDelete ? `<div class="dialog-actions"><button class="danger-button" data-delete-document="${doc.id}">删除文档</button></div>` : ""}`;
     $$('[data-download]').forEach((button) => button.addEventListener("click", () => downloadSource(doc.id, button.dataset.download)));
+    $$('[data-review]').forEach(button => button.addEventListener('click', () => openProcessingReview(doc.id, button.dataset.review)));
     $$('[data-publish]').forEach((button) => button.addEventListener("click", () => publishVersion(doc.id, button.dataset.publish)));
     const deleteButton = $('[data-delete-document]');
     if (deleteButton) deleteButton.addEventListener("click", () => deleteDocument(doc));
@@ -293,9 +302,13 @@ async function openDocument(id) {
 
 async function publishVersion(documentId, versionId) {
   try {
+    const review = await api(`/documents/${documentId}/versions/${versionId}/review?limit=1`);
+    if (!review.total) return toast("该版本尚无处理结果，请等待处理完成", "error");
+    if (review.warnings.length && !confirm(`该版本有 ${review.unknown} 个归属未确定、${review.ambiguous} 个归属冲突、${review.unresolved_dependencies} 个依赖未完整的块。确认核验后仍发布？`)) return;
     await api(`/documents/${documentId}/publish`, { method: "POST", body: JSON.stringify({ version_id: versionId, scope_key: "default" }) });
     toast("版本已发布");
     $("#document-dialog").close();
+    $("#review-dialog").close();
     await loadDocuments();
   } catch (error) { handleError(error, "发布失败"); }
 }
@@ -334,11 +347,15 @@ async function uploadFiles(event) {
   if (!state.currentKb) return toast("请先选择知识库", "error");
   if (!state.files.length) return toast("请选择需要导入的文件", "error");
   if (!["write", "admin"].includes(state.currentKb.role)) return toast("当前账号没有写入权限", "error");
+  let processing;
+  try { processing = processingInputs("upload"); }
+  catch (error) { return toast(error.message, "error"); }
+  if ($("#auto-publish").checked && !confirm("自动发布将跳过处理后的归属与必要章节审核。确认继续？")) return;
   const button = $("#upload-button"); button.disabled = true;
   const existingId = $("#existing-document-id").value.trim();
   if (existingId && state.files.length > 1) { button.disabled = false; return toast("为现有文档添加版本时一次只能上传一个文件", "error"); }
   for (const file of state.files) {
-    const metadata = { kb_id: state.currentKb.id, name: file.name.replace(/\.[^.]+$/, ""), business_version: $("#business-version").value.trim() || null, auto_publish: $("#auto-publish").checked };
+    const metadata = { kb_id: state.currentKb.id, name: file.name.replace(/\.[^.]+$/, ""), business_version: $("#business-version").value.trim() || null, auto_publish: $("#auto-publish").checked, ...processing };
     if (existingId) metadata.document_id = existingId;
     const form = new FormData(); form.append("metadata", JSON.stringify(metadata)); form.append("file", file);
     try {
@@ -350,7 +367,8 @@ async function uploadFiles(event) {
 }
 
 function renderJobs() {
-  $("#upload-jobs").innerHTML = [...state.jobs.values()].reverse().map((job) => `<div class="job-card"><div class="job-main"><strong>${escapeHtml(job.filename)}</strong><span class="muted">${escapeHtml(statusText[job.status] || job.stage)}${job.error_message ? ` · ${escapeHtml(job.error_message)}` : ""}</span><div class="progress"><span style="width:${job.progress}%"></span></div></div><span>${job.progress}%</span></div>`).join("");
+  $("#upload-jobs").innerHTML = [...state.jobs.values()].reverse().map((job) => `<div class="job-card"><div class="job-main"><strong>${escapeHtml(job.filename)}</strong><span class="muted">${escapeHtml(statusText[job.status] || job.stage)}${job.error_message ? ` · ${escapeHtml(job.error_message)}` : ""}</span><div class="progress"><span style="width:${job.progress}%"></span></div></div><span>${job.progress}%</span>${job.status === "succeeded" ? `<button class="secondary" data-review-job="${job.id}">审核处理结果</button>` : ""}</div>`).join("");
+  $$("[data-review-job]").forEach(button => button.addEventListener("click", () => { const job = state.jobs.get(button.dataset.reviewJob); openProcessingReview(job.document_id, job.version_id); }));
 }
 
 async function pollJob(id) {
@@ -361,10 +379,182 @@ async function pollJob(id) {
   } catch (error) { handleError(error, "查询导入进度失败"); }
 }
 
+const scopeReasonText = {
+  missing_binding: "未提供产品映射或可匹配的审核实体", no_reviewed_match: "标题或表格行未匹配审核归属",
+  structure_missing: "缺少可匹配的章节或行标签", scope_conflict: "归属声明冲突",
+};
+function scopeLabel(scope) {
+  const names = (scope?.subjects || []).map(s => s.display_name).join("、");
+  const reasons = (scope?.reason_codes || []).map(code => scopeReasonText[code] || code).join("；");
+  return `${names || "产品归属未确定"} (${scope?.status || "unknown"})${reasons ? ` · ${reasons}` : ""}`;
+}
+function ensureProcessingEditor(prefix) {
+  if (state.processingEditors.has(prefix)) return;
+  $(`#${prefix}-processing`).innerHTML = `<h3>产品与章节配置</h3>
+    <p class="muted">选择已审核实体或填写明确的产品名；未确认时保留空白。本配置应用于本次所有文件；文档标题和查询中的产品名不会自动成为归属。</p>
+    <div class="field-grid"><label><span>产品实体</span><select id="${prefix}-entity"><option value="">未选择 / 手工声明</option></select></label>
+    <label><span>手工声明的产品名</span><input id="${prefix}-product-name" maxlength="200"></label>
+    <label><span>产品型号（可选）</span><input id="${prefix}-model" maxlength="200"></label>
+    <label><span>软件版本（可选）</span><input id="${prefix}-software" maxlength="200"></label></div>
+    <label class="check-row"><input id="${prefix}-whole" type="checkbox"><span>已确认所选产品适用于全文（多产品文档请使用章节映射）</span></label>
+    <label><span>章节路径（每行一级，填写原文的精确标题）</span><textarea id="${prefix}-section-path" rows="2"></textarea></label>
+    <button id="${prefix}-add-scope" class="secondary" type="button">将该章节绑定到所选产品</button>
+    <details><summary>查看或编辑产品映射</summary>
+      <label><span>章节映射 JSON</span><textarea id="${prefix}-scope-bindings" rows="5">[]</textarea></label>
+      <label><span>已确认的全文归属 JSON（可选）</span><textarea id="${prefix}-document-default" rows="3">null</textarea></label></details>
+    <details><summary>必要章节关系配置</summary><p class="muted">在下方预览中选择主事实与必要章节，并填写审核说明。未知归属不会因此变成所选产品；跨产品冲突仍会排除。</p>
+      <div class="field-grid"><label><span>主事实源单元</span><input id="${prefix}-dependency-source" readonly></label>
+      <label><span>必要章节源单元</span><input id="${prefix}-dependency-target" readonly></label>
+      <label><span>必要关系</span><select id="${prefix}-dependency-role"><option value="condition">条件</option><option value="exception">例外</option><option value="attribution">适用范围</option><option value="table_header">表头</option><option value="continuation">续块</option></select></label>
+      <label><span>审核说明</span><input id="${prefix}-dependency-note" maxlength="500"></label></div>
+      <label><span>完整原文引用（可选，用于修正未匹配的引用，如 See section "Conditions"）</span><input id="${prefix}-dependency-reference" maxlength="500"></label>
+      <button id="${prefix}-add-dependency" class="secondary" type="button">确认并添加必要关系</button>
+      <label><span>必要关系 JSON（首次导入可用 source/target.title_path 定位）</span><textarea id="${prefix}-dependency-bindings" rows="5">[]</textarea></label></details>`;
+  $(`#${prefix}-add-scope`).addEventListener("click", () => {
+    try {
+      const path = $(`#${prefix}-section-path`).value.split("\n").map(x => x.trim()).filter(Boolean);
+      if (!path.length) throw new Error("请填写章节路径，或在处理结果中选择具体块");
+      addScopeMapping(prefix, {title_path: path});
+    } catch (error) { toast(error.message, "error"); }
+  });
+  $(`#${prefix}-add-dependency`).addEventListener("click", () => {
+    try {
+      const source = $(`#${prefix}-dependency-source`).value, target = $(`#${prefix}-dependency-target`).value;
+      const note = $(`#${prefix}-dependency-note`).value.trim();
+      if (!source || !target || source === target || !note) throw new Error("请选择不同的主事实和必要章节，并填写审核说明");
+      const rows = editorJson(prefix, "dependency-bindings", []);
+      const reference = $(`#${prefix}-dependency-reference`).value.trim();
+      rows.push({source: {source_unit_id: source}, target: {source_unit_id: target}, role: $(`#${prefix}-dependency-role`).value, provenance_id: note, ...(reference ? {reference_text: reference} : {})});
+      $(`#${prefix}-dependency-bindings`).value = JSON.stringify(rows, null, 2);
+    } catch (error) { toast(error.message, "error"); }
+  });
+  state.processingEditors.add(prefix);
+}
+function editorJson(prefix, field, fallback) {
+  const value = $(`#${prefix}-${field}`).value.trim();
+  try { return value ? JSON.parse(value) : fallback; }
+  catch (_) { throw new Error("配置 JSON 格式错误，请检查章节映射、全文归属或必要关系"); }
+}
+function editorProduct(prefix) {
+  const id = $(`#${prefix}-entity`).value;
+  const entity = state.processingEntities.get(prefix)?.rows.find(row => row.id === id);
+  const name = entity?.name || $(`#${prefix}-product-name`).value.trim();
+  if (!name) throw new Error("请先选择产品实体或填写已确认的产品名");
+  return {display_name: name, ...(entity ? {entity_id: entity.id} : {}),
+    product_model: $(`#${prefix}-model`).value.trim() || null,
+    software_version: $(`#${prefix}-software`).value.trim() || null};
+}
+function addScopeMapping(prefix, selector) {
+  const rows = editorJson(prefix, "scope-bindings", []);
+  const subject = editorProduct(prefix);
+  rows.push({...selector, subjects: [subject]});
+  $(`#${prefix}-scope-bindings`).value = JSON.stringify(rows, null, 2);
+  toast("已添加产品映射，重处理后生效");
+}
+function processingInputs(prefix) {
+  ensureProcessingEditor(prefix);
+  const scope = editorJson(prefix, "scope-bindings", []), dependencies = editorJson(prefix, "dependency-bindings", []);
+  if (!Array.isArray(scope) || !Array.isArray(dependencies)) throw new Error("章节映射与必要关系必须为列表");
+  return {scope_bindings: scope, dependency_bindings: dependencies,
+    document_default: $(`#${prefix}-whole`).checked ? {subjects: [editorProduct(prefix)]} : editorJson(prefix, "document-default", null)};
+}
+function resetProcessingEditor(prefix) {
+  state.processingEntities.delete(prefix); state.processingLoads.delete(prefix);
+  $(`#${prefix}-entity`).innerHTML = '<option value="">未选择 / 手工声明</option>';
+  $(`#${prefix}-whole`).checked = false;
+  for (const field of ["product-name", "model", "software", "section-path", "dependency-source", "dependency-target", "dependency-note", "dependency-reference"]) $(`#${prefix}-${field}`).value = "";
+  for (const field of ["scope-bindings", "dependency-bindings"]) $(`#${prefix}-${field}`).value = "[]";
+  $(`#${prefix}-document-default`).value = "null";
+}
+async function loadProcessingEntities(prefix, kbId = state.currentKb?.id) {
+  if (!kbId) return;
+  if (state.processingEntities.get(prefix)?.kbId !== kbId && state.processingEntities.has(prefix)) resetProcessingEditor(prefix);
+  const token = {};
+  state.processingLoads.set(prefix, token);
+  try {
+    const rows = [];
+    for (let offset = 0; offset < 1000; offset += 200) {
+      const page = await api(`/knowledge-bases/${kbId}/entities?limit=200&offset=${offset}`);
+      rows.push(...page);
+      if (page.length < 200) break;
+    }
+    if (state.processingLoads.get(prefix) !== token) return;
+    const old = state.processingEntities.get(prefix);
+    const selected = old?.kbId === kbId ? $(`#${prefix}-entity`).value : "";
+    if (old && old.kbId !== kbId) {
+      $(`#${prefix}-whole`).checked = false;
+      for (const field of ["product-name", "model", "software"]) $(`#${prefix}-${field}`).value = "";
+      for (const field of ["scope-bindings", "dependency-bindings"]) $(`#${prefix}-${field}`).value = "[]";
+      $(`#${prefix}-document-default`).value = "null";
+    }
+    state.processingEntities.set(prefix, {kbId, rows});
+    $(`#${prefix}-entity`).innerHTML = '<option value="">未选择 / 手工声明</option>' + rows.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name)} · ${escapeHtml(row.kind)}</option>`).join("");
+    $(`#${prefix}-entity`).value = rows.some(row => row.id === selected) ? selected : "";
+  } catch (error) { if (state.processingLoads.get(prefix) === token) handleError(error, "读取产品实体失败，可使用手工声明"); }
+}
+async function openProcessingReview(documentId, versionId, offset = 0) {
+  const request = ++state.reviewRequest;
+  $("#review-form").inert = true; $("#review-items").inert = true;
+  $("#review-publish").disabled = true;
+  try {
+    const data = await api(`/documents/${documentId}/versions/${versionId}/review?limit=25&offset=${offset}`);
+    if (request !== state.reviewRequest) return;
+    const fresh = state.review?.version_id !== versionId;
+    state.review = data;
+    ensureProcessingEditor("review");
+    if (fresh) {
+      await loadProcessingEntities("review", data.kb_id);
+      if (request !== state.reviewRequest) return;
+      $("#review-whole").checked = false;
+      $("#review-scope-bindings").value = JSON.stringify(data.scope_bindings, null, 2);
+      $("#review-document-default").value = JSON.stringify(data.document_default, null, 2);
+      $("#review-dependency-bindings").value = JSON.stringify(data.dependency_bindings, null, 2);
+      for (const field of ["dependency-source", "dependency-target", "dependency-note", "dependency-reference"]) $(`#review-${field}`).value = "";
+    }
+    $("#review-summary").textContent = `共 ${data.total} 块 · 已确定 ${data.resolved} · 未确定 ${data.unknown} · 冲突 ${data.ambiguous} · 依赖未完整 ${data.unresolved_dependencies}`;
+    $("#review-warning").textContent = data.requires_reprocess ? "处理结构或源单元定位已变化，请先按当前结构重新解析，再对新版本配置归属与必要关系，避免源单元定位变化。当前发布版本继续有效。" : data.unknown === data.total && data.total ? "全文归属未确定。单产品可确认全文归属；多产品请逐章节映射；通用资料可在核验后保留未确定。" : data.warnings.length ? "部分归属或必要依赖需要核验。请检查以下结果与原件。" : "";
+    $("#review-items").innerHTML = data.items.map((item, index) => `<article class="version-row"><strong>${escapeHtml(item.title_path.join(" / ") || "无章节标题")}</strong><p>${escapeHtml(item.source_preview)}</p><p class="muted">${escapeHtml(scopeLabel(item.applicability))}</p><p class="muted">必要关系 ${item.context_links.length} · ${escapeHtml(item.dependency_issues.join("、"))} · ${escapeHtml(item.source_unit_id || "无源单元")}</p>${item.context_links.map(link => `<p class="muted">${escapeHtml(link.role)} → ${escapeHtml(shortId(link.chunk_id))} · ${escapeHtml(link.provenance?.provenance_id || "来源未记录")}${link.provenance?.reference_text ? ` · ${escapeHtml(link.provenance.reference_text)}` : ""}</p>`).join("")}<div class="version-actions"><button type="button" class="secondary" data-map-unit="${index}">本块绑定所选产品</button><button type="button" class="secondary" data-review-source="${index}">作为主事实</button><button type="button" class="secondary" data-review-target="${index}">作为必要章节</button></div></article>`).join("") || "尚无可审核块，请等待处理完成后刷新。";
+    $$("[data-map-unit]").forEach(button => button.addEventListener("click", () => {
+      try { addScopeMapping("review", {source_unit_id: state.review.items[Number(button.dataset.mapUnit)].source_unit_id}); }
+      catch (error) { toast(error.message, "error"); }
+    }));
+    for (const end of ["source", "target"]) $$(`[data-review-${end}]`).forEach(button => button.addEventListener("click", () => {
+      $(`#review-dependency-${end}`).value = state.review.items[Number(button.dataset[end === "source" ? "reviewSource" : "reviewTarget"])].source_unit_id || "";
+      $(`#review-dependency-${end}`).closest("details").open = true;
+    }));
+    $("#review-previous").disabled = offset === 0;
+    $("#review-next").disabled = offset + data.items.length >= data.total;
+    $("#review-publish").disabled = data.status !== "ready";
+    $("#review-submit").disabled = data.requires_reprocess;
+    $("#review-reparse").hidden = !data.requires_reprocess;
+    if (!$("#review-dialog").open) $("#review-dialog").showModal();
+  } catch (error) { if (request === state.reviewRequest) handleError(error, "读取归属与章节审核失败"); }
+  finally { if (request === state.reviewRequest) { $("#review-form").inert = false; $("#review-items").inert = false; } }
+}
+async function submitProcessingReview(event, reparse = false) {
+  event.preventDefault();
+  if (!state.review) return;
+  const button = event.submitter;
+  if (button) button.disabled = true;
+  try {
+    if (state.review.requires_reprocess && !reparse) throw new Error("请先按当前结构重新解析后审核");
+    const docId = state.review.document_id;
+    const body = {...(reparse ? {} : processingInputs("review")), source_version_id: state.review.version_id, auto_publish: false};
+    const fingerprint = JSON.stringify({document_id: docId, body});
+    if (state.reviewSubmission?.fingerprint !== fingerprint) state.reviewSubmission = {fingerprint, key: newId()};
+    const job = await api(`/documents/${docId}/reprocess`, {method: "POST", headers: {"Idempotency-Key": state.reviewSubmission.key}, body: JSON.stringify(body)});
+    state.reviewSubmission = null;
+    state.jobs.set(job.id, {...job, filename: "归属与章节重处理"}); renderJobs(); pollJob(job.id);
+    $("#review-dialog").close(); $("#document-dialog").close(); showView("upload");
+    toast("已创建新的待审核版本，处理完成后请检查并发布");
+  } catch (error) { handleError(error, "提交重处理失败"); }
+  finally { if (button) button.disabled = false; }
+}
+
 function renderSearchEvidence(hit) {
   const primary = `<div class="evidence-primary"><p class="muted">命中原文</p><p>${escapeHtml(hit.source_text)}</p></div>`;
   const parts = (hit.context_parts || []).filter(part => part.chunk_id !== hit.chunk_id);
-  const context = parts.map(part => `<div class="evidence-context"><p class="muted">${part.required ? "必要上下文" : "相关上下文"} · ${escapeHtml(shortId(part.chunk_id))}</p><p>${escapeHtml(part.source_text)}</p></div>`).join("");
+  const context = parts.map(part => `<div class="evidence-context"><p class="muted">${part.required ? "必要上下文" : "相关上下文"} · ${escapeHtml(shortId(part.chunk_id))} · ${escapeHtml(scopeLabel(part.applicability))}${part.link_provenance ? ` · ${escapeHtml(part.link_provenance.kind === "curated" ? "审核确认" : "原文结构")}` : ""}</p><p>${escapeHtml(part.source_text)}</p></div>`).join("");
   const note = hit.context_state === "unresolved"
     ? '<p class="evidence-note">必要上下文不完整，请核验适用条件。</p>'
     : hit.context_truncated ? '<p class="evidence-note">部分上下文因预算省略，命中原文仍完整展示。</p>' : "";
@@ -382,7 +572,7 @@ async function search(event) {
     $("#search-summary").textContent = `${result.hits.length} 条证据${result.scope_limited ? " · 仅有界一跳，不代表全部影响范围" : ""} · 路径 ${result.retrieval_path} · ${(result.timings_ms.total || 0).toFixed(1)} ms${result.degraded_reasons.length ? ` · 降级：${result.degraded_reasons.join(", ")}` : ""}`;
     if (result.ranking_method) $("#search-summary").textContent += ` · 排序 ${result.ranking_method} · 证据状态 ${result.evidence_status} · ${result.diagnostics.sizes.hits_bytes} bytes`;
     if (result.diagnostics?.selection) $("#search-summary").textContent += ` · 动态停止 ${result.diagnostics.selection.stop_reason} · 校准 ${result.diagnostics.selection.calibration_status}`;
-    $("#search-results").innerHTML = result.hits.length ? result.hits.map((hit) => `<article class="panel result-card"><div class="result-meta"><span>#${hit.rank}</span><span>文档 ${escapeHtml(hit.document_name || shortId(hit.document_id))}</span><span>${escapeHtml(hit.title_path.join(" / ") || "正文")}</span><span>${escapeHtml(hit.retrieval_sources.join(" + "))}</span></div>${hit.applicability ? `<p class="muted">归属：${escapeHtml(hit.applicability.subjects.map(s => s.display_name).join("、") || "未确定")} (${escapeHtml(hit.applicability.status)}) · 上下文 ${escapeHtml(hit.context_state)}</p>` : ""}${renderSearchEvidence(hit)}<p class="muted">块 ID：${escapeHtml(hit.chunk_id)}${hit.context_truncated ? " · 上下文受预算截断" : ""}</p>${(hit.relations || []).map(r => `<p class="muted">${escapeHtml(r.relation_type)} · ${escapeHtml(r.stance)} · ${escapeHtml(r.subject_id)} → ${escapeHtml(r.object_id)}</p>`).join("")}</article>`).join("") : `<div class="panel empty">本次没有可返回证据 · ${escapeHtml(result.retrieval_status)}</div>`;
+    $("#search-results").innerHTML = result.hits.length ? result.hits.map((hit) => `<article class="panel result-card"><div class="result-meta"><span>#${hit.rank}</span><span>文档 ${escapeHtml(hit.document_name || shortId(hit.document_id))}</span><span>${escapeHtml(hit.title_path.join(" / ") || "正文")}</span><span>${escapeHtml(hit.retrieval_sources.join(" + "))}</span></div>${hit.applicability ? `<p class="muted">归属：${escapeHtml(scopeLabel(hit.applicability))} · 上下文 ${escapeHtml(hit.context_state)}${hit.dependency_issues?.length ? ` · ${escapeHtml(hit.dependency_issues.join("、"))}` : ""}</p>` : ""}${renderSearchEvidence(hit)}<p class="muted">块 ID：${escapeHtml(hit.chunk_id)}${hit.context_truncated ? " · 上下文受预算截断" : ""}</p>${(hit.relations || []).map(r => `<p class="muted">${escapeHtml(r.relation_type)} · ${escapeHtml(r.stance)} · ${escapeHtml(r.subject_id)} → ${escapeHtml(r.object_id)}</p>`).join("")}</article>`).join("") : `<div class="panel empty">本次没有可返回证据 · ${escapeHtml(result.retrieval_status)}</div>`;
   } catch (error) { $("#search-results").innerHTML = ""; handleError(error, "检索失败"); }
 }
 
@@ -487,4 +677,12 @@ $("#create-generation").addEventListener("click",async event => {
     $("#embedding-api-key").value=""; $("#reranker-api-key").value="";
     toast("重建任务已创建，请刷新查看状态"); await loadGenerations();
   } catch(error) { handleError(error,"创建重建任务失败"); } finally { $("#create-generation").disabled=false; }
+});
+
+$("#review-form").addEventListener("submit", submitProcessingReview);
+$("#review-previous").addEventListener("click", () => { const r = state.review; if (r) openProcessingReview(r.document_id, r.version_id, Math.max(0, r.offset - r.limit)); });
+$("#review-next").addEventListener("click", () => { const r = state.review; if (r) openProcessingReview(r.document_id, r.version_id, r.offset + r.limit); });
+$("#review-publish").addEventListener("click", () => { const r = state.review; if (r) publishVersion(r.document_id, r.version_id); });
+$("#review-reparse").addEventListener("click", event => {
+  if (confirm("将按当前处理结构创建新版本，原有映射留在原版本中，新版本需要重新审核归属与必要关系。确认继续？")) submitProcessingReview(event, true);
 });

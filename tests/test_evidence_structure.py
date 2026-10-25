@@ -142,7 +142,7 @@ def test_table_rows_keep_headers_cells_scope_and_different_products_separate():
     assert len(blocks) == 2
     assert all(b.text.startswith("| Product | Weight (g) | Storage |") for b in blocks)
     assert [b.evidence_structure.applicability.subjects[0].display_name for b in blocks] == ["Black Pig", "Golden Yolk"]
-    assert blocks[0].evidence_structure.source_unit_id == blocks[1].evidence_structure.source_unit_id
+    assert blocks[0].evidence_structure.source_unit_id != blocks[1].evidence_structure.source_unit_id
     assert any(s.column_index == 1 and s.text.strip() == "100" for s in blocks[0].source_spans)
     for block in blocks:
         for span in block.source_spans:

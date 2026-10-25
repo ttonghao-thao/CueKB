@@ -14,6 +14,7 @@ PostgreSQL是授权、删除、发布版本和正文权威；OpenSearch是可重
 
 - 同文档、同章节、相邻、提及产品名均不等于同产品归属。自动resolved只依赖清晰结构中的冻结审核别名或明确标注；未知/冲突为unknown/ambiguous，不根据query补名。
 - 保留已识别结构条件，不保证任意文档的所有远距自然语言例外都能自动识别。复杂扫描件、多页/合并表格和图形仍需真实样本核对；source_spans可空或有限，不能虚构精确cell定位。
+- unknown与结构依赖独立：仅有冻结来源、同版本并无明确归属/条件冲突的必要关系可携带unknown条件段；返回仍为unknown。可选近邻不放宽，所有多跳依赖必须在直接关系中核验，否则unresolved。
 - context_state=complete只是已识别有限依赖已装入，不是回答充分；evidence_status当前始终unassessed，其他充分/不足/冲突枚举不是已启用的通用分类器。
 - 多证据覆盖是优化和验收指标，不保证任意复合问题全部召回。没有命中或缺某属性不证明KB客观不存在它。
 - adaptive根据字面观察、必要依赖、差异和负载动态选择；query_facets不是语义分类器，观察到词项不证明值已提供。未配置匹配的人工校准文件时不保证自动拒收低相关候选；绑定失配明确报告binding_mismatch，证据充分性始终unassessed。
@@ -32,7 +33,8 @@ PostgreSQL是授权、删除、发布版本和正文权威；OpenSearch是可重
 | Reranker | 窗口至少覆盖top_k且最多100；每次尝试最多一次，版本重试时累计最多两次 |
 | context | 默认8块/命中、4000字符/命中、12000字符/响应；只读一跳结构依赖。最终候选每块最多20链接，批量必要依赖读取≤5000个ID；输出最多20组/400依赖节点 |
 | 动态选择 | 默认ranked；adaptive显式启用。selection_query最多2000字符，query_facets最多8项/每项200字符；返回数0—top_k，不保证填满 |
-| 结构/归属 | 每块最多20引用、8 subjects、20 conditions、64 source_spans；写入拒绝循环/越界/缺失目标 |
+| 结构/归属 | 每块最多20引用、8 subjects、20 conditions、64 source_spans；每个请求最多100条必要关系配置；写入拒绝循环/越界/缺失目标 |
+| 处理审核 | KB write；每页默认25、最多100块，offset最多1000000；汇总包含全版本；不返回服务器完整实体快照 |
 | V2 evidence bytes | 请求缺省48000，上限128000，另受服务端CUEKB_V2_MAX_EVIDENCE_BYTES；约束实际UTF-8 hits JSON，含重复字段 |
 | V2总响应 | 256KiB硬上限；过大明确503，不截断原文伪装成功 |
 | 搜索预算 | CUEKB_SEARCH_DEADLINE_MS默认900ms；模型阶段默认400ms、OS默认500ms；不是已验收P95 |
@@ -54,7 +56,7 @@ V2完整ASGI入口建立一个绝对预算；鉴权/配置依赖、召回、重�
 
 原件、PG与模型配置加密密钥必须一起备份；OpenSearch可重建。更新为整文件新版本；新profile新块ID；restore派生新ID避免旧outbox误删。未标注的产品归属保持unknown，需明确补标/重处理。
 
-generation只重编码当前PG块，build_source_profiles是构建快照，不是active索引实时库存。旧投影缺少V2或scope-lexical-v2.2标记时返回409，需要重建；旧profile正文不足不能靠重建修复。profile/别名/映射快照不可变，修改需要新处理版本。evidence-v2.2处理修订不静默重解释旧处理快照；新部署无需旧数据转换，业务原件重处理产生新版本。
+generation只重编码当前PG块，build_source_profiles是构建快照，不是active索引实时库存。旧投影缺少V2或scope-lexical-v2.2标记时返回409，需要重建；旧profile正文不足不能靠重建修复。profile/别名/映射快照不可变，修改需要新处理版本。evidence-v2.3处理修订不静默重解释旧处理快照；新部署无需旧数据转换，业务原件重处理产生新版本。
 
 删除是软删除与投影异步清理，不承诺原件硬删除、备份清除期限或恢复SLA。没有应用级查询结果缓存、自动生成金标/充分性校准、自动澄清、对象存储连接器、OIDC或HA自动故障切换。可选相关性门控只消费人工标注的评分校准文件，未提供实测生产阈值。memory模式重启丢数据、不鉴权、无生产向量/PDF链路，仅用于开发。
 

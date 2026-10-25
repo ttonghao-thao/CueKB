@@ -59,9 +59,9 @@ CREATE TABLE document_versions (
   media_type text,
   original_filename text,
   auto_publish boolean NOT NULL DEFAULT false,
-  processing_profile text NOT NULL DEFAULT 'evidence-v2:beaab5502495a35e109b598235cbfd9553a3bce0a4756d74681195a09a9a28b0'
+  processing_profile text NOT NULL DEFAULT 'evidence-v2:b4cf1a93f980c37510e305566b53d2b5d819ccca2856abf259152db0c78e4433'
     CHECK(processing_profile ~ '^evidence-v2:[0-9a-f]{64}$'),
-  processing_snapshot jsonb NOT NULL DEFAULT '{"approved_entities":[],"chunker_revision":"evidence-v2.2","max_chunk_chars":1200,"parser_revision":"evidence-v2.2","profile_revision":"evidence-v2","scope_bindings":[],"structure_revision":"evidence-v2.2"}'::jsonb
+  processing_snapshot jsonb NOT NULL DEFAULT '{"approved_entities":[],"chunker_revision":"evidence-v2.3","dependency_bindings":[],"max_chunk_chars":1200,"parser_revision":"evidence-v2.3","profile_revision":"evidence-v2","scope_bindings":[],"structure_revision":"evidence-v2.3"}'::jsonb
     CONSTRAINT document_versions_snapshot_object CHECK(jsonb_typeof(processing_snapshot)='object'),
   derivation_kind text NOT NULL DEFAULT 'ingest'
     CHECK(derivation_kind IN ('ingest','reprocess','restore')),

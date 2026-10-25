@@ -11,6 +11,20 @@
           "title": "Conditions",
           "type": "array"
         },
+        "reason_codes": {
+          "items": {
+            "enum": [
+              "missing_binding",
+              "no_reviewed_match",
+              "structure_missing",
+              "scope_conflict"
+            ],
+            "type": "string"
+          },
+          "maxItems": 4,
+          "title": "Reason Codes",
+          "type": "array"
+        },
         "status": {
           "default": "unknown",
           "enum": [
@@ -165,6 +179,60 @@
         "display_name"
       ],
       "title": "ApplicableSubject",
+      "type": "object"
+    },
+    "ContextProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "parser_reference",
+            "curated",
+            "parser_continuation"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "provenance_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provenance Id",
+          "type": "string"
+        },
+        "reference_text": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Text"
+        },
+        "source_unit_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Source Unit Id",
+          "type": "string"
+        },
+        "target_unit_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Target Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "source_unit_id",
+        "target_unit_id",
+        "provenance_id"
+      ],
+      "title": "ContextProvenance",
       "type": "object"
     },
     "EvidenceStatus": {
@@ -445,10 +513,24 @@
         "anchor": {
           "$ref": "#/$defs/SourceAnchor"
         },
+        "applicability": {
+          "$ref": "#/$defs/Applicability"
+        },
         "chunk_id": {
           "format": "uuid",
           "title": "Chunk Id",
           "type": "string"
+        },
+        "link_provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "required": {
           "default": false,
@@ -883,6 +965,21 @@
           "default": false,
           "title": "Context Truncated",
           "type": "boolean"
+        },
+        "dependency_issues": {
+          "items": {
+            "enum": [
+              "unmatched_reference",
+              "ambiguous_reference",
+              "dependency_limit_exceeded",
+              "dependency_cycle",
+              "unsafe_dependency"
+            ],
+            "type": "string"
+          },
+          "maxItems": 5,
+          "title": "Dependency Issues",
+          "type": "array"
         },
         "document_id": {
           "format": "uuid",

@@ -246,14 +246,16 @@ def _split_block_v2(
 ) -> list[ParsedBlock]:
     unit_id = source_unit_id(identity, version_id)
     origin_version = snapshot.get("origin_version_id") if snapshot else None
-    aliases = (source_unit_id(identity, origin_version),) if origin_version else ()
+    mapped = (snapshot or {}).get("origin_unit_aliases", {}).get(identity)
+    aliases = (mapped,) if mapped else (source_unit_id(identity, origin_version),) if origin_version else ()
     lines = value.splitlines(keepends=True)
     is_table = len(lines) > 2 and "|" in lines[0] and re.match(r"^\s*\|?[\s:|\-]+\|?\s*$", lines[1])
     if is_table:
         return _split_table_v2(
             value, headings, anchor, heading_spans=heading_spans, snapshot=snapshot,
             unit_id=unit_id, max_chars=max_chars, original_spans=original_spans,
-            source_unit_aliases=aliases,
+            parser_unit_key=identity,
+            version_id=version_id,
         )
     kind = "list" if re.match(r"\s*(?:[-*+]\s|\d+[.)]\s)", value) else "text"
     ranges = _safe_ranges(value, max_chars)
@@ -274,7 +276,7 @@ def _split_block_v2(
             piece, headings.copy(), child, spans,
             structure_for(block_kind=kind, unit_id=unit_id, title_path=headings,
                           source_spans=spans, snapshot=snapshot, unresolved=unresolved,
-                          source_unit_aliases=aliases), aliases,
+                          source_unit_aliases=aliases, parser_unit_key=identity), aliases,
         ))
     return result
 
@@ -283,7 +285,7 @@ def _split_table_v2(
     value: str, headings: list[str], anchor: SourceAnchor, *, heading_spans: list[SourceSpan],
     snapshot: dict[str, Any] | None, unit_id: str, max_chars: int,
     original_spans: list[SourceSpan] | None,
-    source_unit_aliases: tuple[str, ...] = (),
+    parser_unit_key: str | None = None, version_id: UUID | None = None,
 ) -> list[ParsedBlock]:
     lines = value.splitlines(keepends=True)
     header_raw = "".join(lines[:2])
@@ -338,11 +340,19 @@ def _split_table_v2(
         unresolved = (any(row[2] for row in grouped) or len(spans) > 64
                       or bool(original_spans and len(original_spans) > 1)
                       or len(header) > 32768)
+        # A row is a distinct scope selector, not just a distinct returned fact.
+        # Otherwise mapping one product row would silently bind the whole table.
+        row_index = next((span.row_index for row in grouped for span in row[1]), 0)
+        key = f"{parser_unit_key or unit_id}:row:{row_index}"
+        row_unit = source_unit_id(key, version_id)
+        mapped = (snapshot or {}).get("origin_unit_aliases", {}).get(key)
+        origin = (snapshot or {}).get("origin_version_id")
+        aliases = (mapped,) if mapped else (source_unit_id(key, origin),) if origin else ()
         result.append(ParsedBlock(
             body, headings.copy(), anchor, spans[:64],
-            structure_for(block_kind="table", unit_id=unit_id, title_path=headings,
+            structure_for(block_kind="table", unit_id=row_unit, title_path=headings,
                           source_spans=spans[:64], snapshot=snapshot, unresolved=unresolved,
-                          source_unit_aliases=source_unit_aliases), source_unit_aliases,
+                          source_unit_aliases=aliases, parser_unit_key=key), aliases,
         ))
         grouped.clear()
 

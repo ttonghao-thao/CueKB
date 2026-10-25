@@ -117,3 +117,43 @@ run.then(() => process.stdout.write(JSON.stringify(sent))).catch(error => {
     assert adaptive["selection_mode"] == "adaptive" and adaptive["query_facets"] == ["voltage", "storage"]
     html = (Path(__file__).parents[1] / "src/cuekb/portal/index.html").read_text()
     assert 'id="search-contract"' not in html
+
+
+def test_processing_editor_requires_explicit_whole_document_scope_and_keeps_section_inputs():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js required for the processing editor")
+    script = r"""
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const fields = new Map();
+const field = name => { if (!fields.has(name)) fields.set(name, {value:'',checked:false}); return fields.get(name); };
+const source = fs.readFileSync('src/cuekb/portal/app.js','utf8');
+vm.runInNewContext(source.slice(0, source.indexOf('\nasync function search(')) + `
+state.processingEditors.add('upload');
+state.processingEntities.set('upload', {rows:[{id:'entity-a',name:'Product A'}]});
+$('#upload-entity').value='entity-a';
+$('#upload-model').value='A-100';
+let inputs=processingInputs('upload');
+assert.equal(inputs.document_default,null);
+assert.equal(inputs.scope_bindings.length,0);
+$('#upload-whole').checked=true;
+inputs=processingInputs('upload');
+assert.equal(inputs.document_default.subjects[0].entity_id,'entity-a');
+assert.equal(inputs.document_default.subjects[0].product_model,'A-100');
+$('#upload-whole').checked=false;
+$('#upload-scope-bindings').value=JSON.stringify([{title_path:['Product A'],subjects:[{display_name:'Product A'}]}]);
+$('#upload-dependency-bindings').value=JSON.stringify([{source:{title_path:['Product A']},target:{title_path:['Conditions']},role:'condition',provenance_id:'owner-review'}]);
+inputs=processingInputs('upload');
+assert.equal(inputs.document_default,null);
+assert.equal(inputs.scope_bindings[0].title_path[0],'Product A');
+assert.equal(inputs.dependency_bindings[0].provenance_id,'owner-review');
+$('#upload-scope-bindings').value='{bad JSON';
+assert.throws(()=>processingInputs('upload'), error=>error.message.includes('JSON'));
+`, {sessionStorage:{getItem:()=>''}, document:{querySelector:field}, assert});
+process.stdout.write('processing editor passed');
+"""
+    result = subprocess.run([node, "-e", script], text=True, capture_output=True, check=True,
+                            timeout=10, cwd=Path(__file__).parents[1])
+    assert result.stdout == "processing editor passed"
+    html = (Path(__file__).parents[1] / "src/cuekb/portal/index.html").read_text()
+    assert 'id="auto-publish" type="checkbox" checked' not in html

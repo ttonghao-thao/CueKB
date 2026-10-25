@@ -14,6 +14,7 @@
 | Embedding和可选Reranker协议 | [模型接入](MODEL_INTEGRATION.md) |
 | V2完整测试、质量、更新一致性和10并发测量方法 | [验收方法](ACCEPTANCE.md) |
 | 动态选择、相关性门控和校准操作 | [系统设计](SYSTEM_DESIGN.md#41-动态证据选择)、[操作手册](OPERATIONS.md#7-相关性校准配置) |
+| unknown归属修复与必要章节审核 | [设计](SYSTEM_DESIGN.md#31-归属审核与必要章节)、[导入与审核操作](INTEGRATION_GUIDE.md#4-文件导入与审核发布) |
 | 自动关联独立离线实验 | [实验说明](../experiments/associations/README.md) |
 | 已接受的架构决策 | [DECISIONS](../DECISIONS.md) |
 | 机器可读契约 | [OpenAPI](contracts/openapi.json)、[V2请求Schema](contracts/search-v2-request.schema.json)、[V2响应Schema](contracts/search-v2-response.schema.json) |

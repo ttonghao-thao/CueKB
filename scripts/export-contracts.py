@@ -49,7 +49,48 @@ def examples():
     return {"search-v2-request.json": request.model_dump(mode="json"),
             "search-v2-response.json": json.loads(encode_v2_response(result)),
             "search-v2-adaptive-request.json": adaptive_request.model_dump(mode="json"),
-            "search-v2-adaptive-response.json": json.loads(encode_v2_response(adaptive))}
+            "search-v2-adaptive-response.json": json.loads(encode_v2_response(adaptive)),
+            **dependency_examples()}
+
+
+def dependency_examples():
+    """An actual deterministic parse, not a fabricated product on the condition."""
+    import hashlib
+    from types import SimpleNamespace
+    from uuid import UUID
+    from cuekb.adapters.memory import InMemoryRepository, InMemorySearchBackend
+    from cuekb.config import Settings
+    from cuekb.domain.models import Document, DocumentVersion, KnowledgeBase, default_processing_snapshot
+    from cuekb.services.execution import SearchExecution
+    from cuekb.services.retrieval_v2 import V2RetrievalService, encode_v2_response
+    from cuekb.worker import materialize_chunks
+    kb, doc, version = (UUID(value) for value in (
+        "11111111-1111-4111-8111-111111111111", "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"))
+    source = b'# Product A\n\nInput voltage: 12 V. See section "Usage conditions".\n\n# Usage conditions\n\nOnly indoors; do not use in rain.\n'
+    snapshot = {**default_processing_snapshot(), "scope_bindings": [{"title_path": ["Product A"],
+        "subjects": [{"display_name": "Product A", "product_model": "A"}]}]}
+    profile = "evidence-v2:" + hashlib.sha256(json.dumps(snapshot, sort_keys=True,
+        ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    job = dict(kb_id=kb, document_id=doc, version_id=version, name="Illustrative manual",
+        source_uri="fixture://manual", original_filename="manual.md", media_type="text/markdown",
+        processing_profile=profile, processing_snapshot=snapshot, business_version=None, scope={})
+    chunks = materialize_chunks(None, SimpleNamespace(read=lambda _: source), job, template="evidence-v2")
+    repo, backend = InMemoryRepository(), InMemorySearchBackend()
+    repo.create_knowledge_base(KnowledgeBase(id=kb, name="Illustrative contract fixture"))
+    repo.documents[doc] = Document(id=doc, kb_id=kb, name=job["name"])
+    repo.versions[version] = DocumentVersion(id=version, document_id=doc, status="published",
+        content_sha256=hashlib.sha256(source).hexdigest(), processing_profile=profile, processing_snapshot=snapshot)
+    repo.chunks.update({chunk.id: chunk for chunk in chunks})
+    backend.index(chunks)
+    request = V2SearchRequest(query="Input voltage", kb_ids=[kb], mode="exact", include_context=False,
+                              request_id="required-context-example")
+    result = V2RetrievalService(repo, backend, Settings()).search_evidence(request,
+        execution=SearchExecution.create(10000, UUID("22222222-2222-4222-8222-222222222222")))
+    result.timings_ms = {key: 0.0 for key in result.timings_ms}
+    assert result.hits[0].context_state == "complete" and any(
+        part.applicability.status == "unknown" and part.link_provenance for part in result.hits[0].context_parts)
+    return {"search-v2-required-context-request.json": request.model_dump(mode="json"),
+            "search-v2-required-context-response.json": json.loads(encode_v2_response(result))}
 
 
 def contracts():

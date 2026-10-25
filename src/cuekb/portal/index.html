@@ -94,7 +94,8 @@
             <label><span>业务版本（可选）</span><input id="business-version" maxlength="100" placeholder="例如 2026.09"></label>
             <label><span>新版本所属文档 ID（可选）</span><input id="existing-document-id" placeholder="留空则创建新文档"></label>
           </div>
-          <label class="check-row"><input id="auto-publish" type="checkbox" checked><span>处理成功后自动发布</span></label>
+          <div id="upload-processing"></div>
+          <label class="check-row"><input id="auto-publish" type="checkbox"><span>处理成功后自动发布（跳过归属与必要章节审核）</span></label>
           <div class="form-actions"><button id="upload-button" class="primary" type="submit">开始导入</button></div>
         </form>
         <div id="upload-jobs" class="job-list"></div>
@@ -195,6 +196,19 @@
   <dialog id="copy-dialog" class="wide-dialog">
     <h2>复制接入信息</h2><p>浏览器未允许自动复制。请选中文本后按 Ctrl/Cmd+C 复制。</p>
     <textarea id="copy-value" rows="9" readonly aria-label="待复制的接入信息"></textarea>
+    <div class="dialog-actions"><button class="secondary" data-close-dialog>关闭</button></div>
+  </dialog>
+  <dialog id="review-dialog" class="wide-dialog">
+    <h2>产品归属与必要章节审核</h2>
+    <p id="review-summary" role="status"></p>
+    <p id="review-warning" class="error-text" role="alert"></p>
+    <div id="review-items"></div>
+    <div class="version-actions"><button id="review-previous" class="secondary">上一页</button><button id="review-next" class="secondary">下一页</button></div>
+    <form id="review-form" class="form-panel">
+      <div id="review-processing"></div>
+      <p class="muted">提交后按原件生成新的待发布版本；当前发布内容继续有效。索引重建不会更改产品归属。</p>
+      <div class="form-actions"><button class="primary" type="submit" id="review-submit">按配置重处理并审核新版本</button><button id="review-reparse" class="secondary" type="button" hidden>按当前结构重新解析后审核</button><button id="review-publish" class="secondary" type="button">发布当前审核版本</button></div>
+    </form>
     <div class="dialog-actions"><button class="secondary" data-close-dialog>关闭</button></div>
   </dialog>
   <div id="toast-region" class="toast-region" aria-live="polite"></div>

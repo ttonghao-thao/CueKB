@@ -401,6 +401,7 @@ class V2RetrievalService:
                 json.dumps(structure.applicability.model_dump(mode="json"), sort_keys=True),
                 json.dumps([link.model_dump(mode="json") for link in structure.context_links], sort_keys=True),
                 structure.dependency_unresolved,
+                tuple(structure.dependency_issues),
             )
             if key in seen:
                 removed += 1
@@ -681,6 +682,7 @@ class V2RetrievalService:
             score=state.rerank_scores.get(chunk.id, state.scores[chunk.id]),
             score_type="rerank" if state.rerank_scores else "rrf", stage_scores=stage_scores,
             applicability=chunk.evidence_structure.applicability,
+            dependency_issues=chunk.evidence_structure.dependency_issues,
             source_spans=chunk.source_spans, context_state=assembly.state,
             context_omissions=assembly.omissions, context_truncated=assembly.truncated,
             context_parts=[V2ContextPart.model_validate(part.model_dump()) for part in assembly.parts],
@@ -711,6 +713,7 @@ class V2RetrievalService:
             "rerank_enabled": self.settings.rerank_enabled,
             "reranker_configured": self.reranker_configured,
             "context_max_chunks": self.settings.context_max_chunks,
+            "context_rules_revision": "audited-section-dependencies-v1",
             "context_per_hit_chars": self.settings.context_per_hit_chars,
             "context_max_chars": self.settings.context_max_chars,
             "binding": {key: self.ranking_config[key] for key in binding_keys if key in self.ranking_config},
