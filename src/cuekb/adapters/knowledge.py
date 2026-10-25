@@ -372,7 +372,11 @@ class KnowledgeOperations:
               AND (:local OR CAST(:product AS text) IS NULL OR c.metadata->>'product_model'=:product)
               AND (:local OR CAST(:software AS text) IS NULL OR c.metadata->>'software_version'=:software)
               AND (CAST(:category AS text) IS NULL OR c.metadata->>'category'=:category)
-            ORDER BY r.id,c.id,ev.stance LIMIT :n
+            ORDER BY CASE WHEN :local THEN
+                ts_rank_cd(to_tsvector('simple',c.source_text),plainto_tsquery('simple',:query))
+                ELSE 0 END DESC,
+              CASE WHEN :local AND c.id=ANY(CAST(:seeds AS uuid[])) THEN 0 ELSE 1 END,
+              r.id,c.id,ev.stance LIMIT :n
             """
                     ),
                     {

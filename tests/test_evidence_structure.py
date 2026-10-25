@@ -9,8 +9,32 @@ from cuekb.domain.models import (
 from cuekb.services.context import assemble_context_v2
 from cuekb.services.evidence import (
     bind_block_dependencies, build_search_text, scope_compatible, scope_matches,
-    validate_evidence_links,
+    validate_evidence_links, resolve_applicability, structure_for,
 )
+
+
+def test_production_entity_snapshot_merges_missing_attributes_and_keeps_true_conflicts():
+    identity = uuid4()
+    snapshot = {
+        "approved_entities": [{"entity_id": str(identity), "display_name": "Model A", "aliases": ["Alias A"]}],
+        "scope_bindings": [{"title_path": ["Alias A"], "subjects": [
+            {"entity_id": str(identity), "display_name": "Model A", "product_model": "A-100"}]}],
+    }
+    structure = structure_for(block_kind="text", unit_id="unit:a", title_path=["Alias A"],
+                              source_spans=[], snapshot=snapshot)
+    hit = chunk()
+    hit.evidence_structure = structure
+    assert structure.applicability.status == "resolved"
+    assert scope_matches(hit, "A-100")
+    assert structure.retrieval_aliases == ["Alias A"]
+    snapshot["scope_bindings"][0]["subjects"] = [
+        {"entity_id": str(identity), "display_name": "Model A", "product_model": "A-100", "software_version": version}
+        for version in ("1", "2")]
+    multi = resolve_applicability(["Alias A"], [], "unit:a", snapshot)
+    assert multi.status == "resolved" and {s.software_version for s in multi.subjects} == {"1", "2"}
+    snapshot["document_default"] = {"subjects": [{"entity_id": str(identity),
+        "display_name": "Model A", "product_model": "A-200"}]}
+    assert resolve_applicability(["Alias A"], [], "unit:a", snapshot).status == "ambiguous"
 from cuekb.services.parsing import ParseError, parse_document
 
 

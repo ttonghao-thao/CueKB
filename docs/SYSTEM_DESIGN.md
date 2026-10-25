@@ -1,6 +1,6 @@
 # 当前系统设计
 
-更新：2026-10-24。本文描述已落地代码；接口字段在[接口规范](API_GUIDE.md)，未执行验收在[任务板](../TASK_BOARD.md)。
+更新：2026-10-25。本文描述已落地代码；接口字段在[接口规范](API_GUIDE.md)，未执行验收在[任务板](../TASK_BOARD.md)。
 
 ## 1. 模块与权威边界
 
@@ -8,6 +8,7 @@
 | --- | --- |
 | api/routes.py、api/v2.py、schemas.py | 鉴权后的V1管理/兼容检索、显式V2证据接口及严格DTO |
 | services/retrieval.py、retrieval_v2.py | 分离的V1/V2检索流程；V2有真实融合评分、统一重排窗口及有界输出 |
+| services/selection.py | V2动态证据集合、字面覆盖与保守差异保护、固定绑定的可选相关性门控 |
 | services/parsing.py、evidence.py、context.py | 解析、来源位置、可信局部归属、必要依赖和上下文组装 |
 | adapters/postgres.py、knowledge.py | PG权威内容/ACL/发布/删除/关系及读快照；V2读任务取消与SQL预算 |
 | adapters/opensearch.py | BM25和k-NN候选ID/分数、V2投影映射、同步Worker与异步在线访问 |
@@ -36,7 +37,7 @@ Chunk保留`source_text`、`title_path`、兼容anchor、多位置source_spans�
 
 Markdown保留章节、段落、列表引导条件和表格整行/表头关系。长原块拆分仍共享源单元身份，必要续块直接关联，不能依赖无界递归。Docling保留其实际provenance；PDF/DOCX复杂表格的可靠程度须按真实样本检验。
 
-applicability仅在可信映射或审核别名与结构匹配时resolved；未确认unknown，多个不一致结论ambiguous。归属与document metadata分开。V2同时按产品/软件过滤时，两个值须命中同一个resolved subject。
+applicability仅在可信映射或审核别名与结构匹配时resolved；未确认unknown，多个不一致结论ambiguous。同一稳定实体的缺失型号/版本与人工绑定按兼容信息合并，真正不同的非空型号/版本继续冲突；不同主体集合不被强行合并。归属与document metadata分开。V2同时按产品/软件过滤时，两个值须命中同一个resolved subject。evidence-v2.2处理修订冻结审核别名为内部retrieval_aliases，仅resolved归属可供词法投影，不增加对外subject字段。
 
 必要依赖的读取与可选近邻先经过同KB/document/version、主体与条件兼容检查，再考虑位置；不靠同文档越过产品边界。入库拒绝悬空、跨版本、自引用、重复及循环依赖。依赖或预算不足显式unresolved/truncated，不将不完整上下文标成完整。
 
@@ -46,12 +47,22 @@ applicability仅在可信映射或审核别名与结构匹配时resolved；未�
 
 1. HTTP入口创建trace和绝对deadline；校验请求、principal及全部KB权限。按模型配置修订借用有容量上限的模型/OS客户端，并检查V2投影版本。
 2. exact只做词法候选；hybrid并行做BM25与query Embedding/k-NN；related还在PG做有证据的一跳关系扩展。所有候选数、时间和调用次数有界。
-3. 在权威快照读取当前可见chunk，过滤删除、ACL、文档及局部归属，剔除纯标题与不合法关系。RRF使用各通道真实名次，原始分数仅作诊断。
+3. 在权威快照读取当前可见chunk，过滤删除、ACL、文档及局部归属，剔除纯标题与不合法关系。V2的BM25/向量各以1权重参与RRF；关系先按查询词法信号排序，以0.5权重参与，最终复验失效关系同时移除其分数贡献。原始分数保留诊断，不跨量纲相加。
 4. 归一正文去重时同时保留版本、主体、条件、否定等差异。有足够预算且实际配置Reranker才执行重排；未配置正常跳过。成功重排只返回同一窗口，故障整体回RRF并如实降级。
 5. 新PG事务再次检查Key、ACL、内容修订、模型/索引绑定、全部候选/上下文/关系及原文结构。内容转变可在同一deadline内重试一次；模型绑定变化不能复用旧向量继续检索。
-6. 先给各hit分配必要证据组，再分配可选近邻；按精确UTF-8 JSON字节预算省略整组/整块，不切半个事实。结果依次编号，返回真实排序、上下文状态与精简诊断。
+6. 在最终权威快照批量读取有限必要依赖，构造最小组；ranked按原排序选择可放入预算的组，adaptive按新增信息选择。过大组跳过后继续考察候选，必要组全部选定后才分配可选近邻。按精确UTF-8 JSON字节成本返回整块，不切半个事实。结果按原RRF/重排顺序编号，返回真实分数。
 
-召回不足可全请求补召回一次：提高每通道候选上限、用新列表替代旧列表，复用同一query向量，不累计重复通道RRF贡献。版本重试也共享补召回和绝对时间预算，不乘法放大请求。
+召回不足，或adaptive明确给出的query_facets尚未在候选原文观察到时，可全请求补召回一次：提高每通道候选上限、用新列表替代旧列表，复用同一query向量，不累计重复通道RRF贡献。不因返回条数未满循环检索。版本重试共享补召回和绝对时间预算。
+
+### 4.1 动态证据选择
+
+`selection_mode=adaptive`显式启用；默认ranked保持兼容。候选数、重排窗口和返回上限是三个独立概念。选择器每轮计算新facet/查询词项观察、已知必要依赖的补齐和新增数值/否定/条件差异，并用精确字节成本控制负载。没有新观察时仅允许保守文本多样性增益；已观察的范围重复则停止，不以凑满top_k为目标。数值、业务版本、局部主体/条件差异保留；没有普适的语义去重或全库冲突裁决。
+
+每个请求的InformationSelector、候选、已选集合和覆盖观察独立。必要条件、表头及归属保持真实身份；已包含在必要上下文的同一块不再次占主结果名额。可选近邻排除其他结果已返回的块，并要求同原始单元、明确条件/例外链接或新增查询信息，避免单凭邻近注入无关介绍。共享必要依赖仍可重复序列化，实际重复字节完整计费，现有契约不改成悬空ID引用。
+
+可选校准文件由`scripts/calibrate-retrieval.py`从冻结人工标签生成，按Embedding、Reranker、配置revision、active generation、词法revision及检索路径绑定。重排校准存在时优先使用；否则使用已校准向量/字面覆盖信号的OR接受策略，无适用分数时保留unassessed候选。未配置或绑定失配明确诊断，不能把未经校准的分数断崖、RRF名次或本查询归一化值当成无答案概率。
+
+动态选择在候选耗尽、无新收益或到达数量/字节/上下文预算时停止；deadline始终覆盖整个流程。诊断的字面facet观察与evidence_status均不认证问题已完整回答。可选selection_query补充原始问题的选择语境，实际召回仍使用query，不能从短query恢复被消费端省略的信息。
 
 `evidence_status`保持unassessed。去重、上下文、融合与多片段返回改善可用证据，不代表已证明全部属性齐备或冲突已裁决。关系supports/refutes保留来源立场，不决定事实真伪。
 
@@ -65,7 +76,7 @@ PG驱动为同步psycopg：V2将一个完整读批次放入有执行上下文的
 
 ## 6. generation与升级
 
-generation维护锁阻止内容写入，查询继续。重建读取PG已存事实，记录build_source_profiles及其聚合标识，不重新解析原件。新投影带V2词法/局部归属字段及输入模板revision。验证完成后同一PG事务切换物理index、模型配置及revision。
+generation维护锁阻止内容写入，查询继续。重建读取PG已存事实，记录build_source_profiles及其聚合标识，不重新解析原件。新投影带V2词法/局部归属字段、scope_text/table_labels/identifier_terms、`lexical_revision=scope-lexical-v2.2`及输入模板revision。验证完成后同一PG事务切换物理index、模型配置及revision。新字段由PG已冻结的结构与别名生成，不从查询或任意metadata猜归属。
 
 解析/归属升级先重处理、人工检查并publish；Embedding/投影升级再generation。旧V1投影不具备V2字段，V2返回INDEX_UPGRADE_REQUIRED而不假装已使用新路径。旧配置rollback也重建当前PG事实，不将旧index直接当成当前内容。
 

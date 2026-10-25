@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     v2_max_evidence_bytes: int = Field(default=128000, ge=4096, le=128000)
     v2_max_inflight: int = Field(default=16, ge=1, le=128)
     v2_refill_min_remaining_ms: int = Field(default=180, ge=10, le=5000)
+    v2_relevance_profile_path: str = ""
     exact_identifier_pattern: str = (
         r"^(?:[A-Za-z][A-Za-z0-9_.:/+-]*\d[A-Za-z0-9_.:/+-]*|[A-Z][A-Z0-9_./:-]{2,})$"
     )

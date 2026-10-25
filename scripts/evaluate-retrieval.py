@@ -29,14 +29,43 @@ def evidence_metrics(case, response):
         for hit in response["hits"]:
             ranked.append({hit["chunk_id"], *(part["chunk_id"] for part in hit["context_parts"])})
     returned = set().union(*ranked) if ranked else set()
-    matched = sum(bool(group & returned) for group in groups)
+    safe_returned = set().union(*(ids for ids, hit in zip(ranked, response["hits"])
+        if hit.get("context_state") != "unresolved")) if response else set()
     first = next((index for index, ids in enumerate(ranked, 1) if any(ids & group for group in groups)), None)
     forbidden = set(case.get("forbidden_chunk_ids", [])) & returned
+    covered_safe = {unit["unit_id"] for unit, group in zip(gold, groups) if group & safe_returned}
+    plans = case.get("gold_plans", [{"unit_ids": [unit["unit_id"] for unit in gold]}])
+    covered = {unit["unit_id"] for unit, group in zip(gold, groups) if group & returned}
+    recall = max((len(set(plan["unit_ids"]) & covered) / len(plan["unit_ids"])
+                  for plan in plans if plan["unit_ids"]), default=0.0) if gold else None
+    documents = {hit.get("document_id") for hit in response["hits"]} if response else set()
+    complete = any(set(plan["unit_ids"]) <= covered_safe and set(plan.get("document_ids", [])) <= documents
+                   for plan in plans) if gold else None
+    # Same equivalence-unit matching as the independent association evaluator:
+    # repeated positions cannot earn multiple precision credits for one unit.
+    assigned = {}
+    def assign(position, seen):
+        for unit, group in enumerate(groups):
+            if unit in seen or not (ranked[position] & group):
+                continue
+            seen.add(unit)
+            if unit not in assigned or assign(assigned[unit], seen):
+                assigned[unit] = position
+                return True
+        return False
+    for position in range(len(ranked)):
+        assign(position, set())
+    answerable = case.get("answerable")
     return {
-        "recall": matched / len(groups) if groups else None,
-        "complete": matched == len(groups) if groups else None,
+        "recall": recall,
+        "complete": complete,
         "reciprocal_rank": 1 / first if first else (0.0 if groups else None),
         "forbidden_count": len(forbidden),
+        "precision_returned": len(assigned) / len(ranked) if groups and ranked else (0.0 if groups else None),
+        "no_answer_false_positive": bool(ranked) if answerable is False else None,
+        "answerable_empty": not bool(ranked) if answerable is True else None,
+        "returned": len(ranked),
+        "hits_bytes": (response.get("diagnostics", {}).get("sizes", {}).get("hits_bytes")) if response else None,
     }
 
 
@@ -52,6 +81,10 @@ def summarize(records):
         "p99_ms": percentile(elapsed, .99), "percentile_method": "nearest-rank; all requests including errors",
         "recall_macro": mean("recall"), "mrr": mean("reciprocal_rank"),
         "complete_evidence_rate": mean("complete"),
+        "precision_returned": mean("precision_returned"),
+        "no_answer_false_positive_rate": mean("no_answer_false_positive"),
+        "answerable_empty_rate": mean("answerable_empty"),
+        "mean_returned": mean("returned"), "mean_hits_bytes": mean("hits_bytes"),
         "forbidden_evidence_count": sum(row["quality"]["forbidden_count"] for row in records),
         "expected_status_checked": sum(row.get("expected_status_matches") is not None for row in records),
         "expected_status_matched": sum(row.get("expected_status_matches") is True for row in records),
@@ -138,6 +171,13 @@ def main():
             parser.error("Every gold evidence unit needs unit_id and nonempty equivalent chunk_ids")
         if len({unit["unit_id"] for unit in units}) != len(units):
             parser.error("Evidence unit_id values must be unique within each case")
+        known = {unit["unit_id"] for unit in units}
+        if "gold_plans" in case and (not case["gold_plans"] or any(
+            not plan.get("unit_ids") or not set(plan["unit_ids"]) <= known for plan in case["gold_plans"]
+        )):
+            parser.error("Every gold plan needs nonempty known unit_ids")
+        if "answerable" in case and not isinstance(case["answerable"], bool):
+            parser.error("answerable must be boolean")
     summary, records = asyncio.run(evaluate(args, cases, token))
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

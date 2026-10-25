@@ -97,8 +97,16 @@ services:
       CUEKB_PROCESS_ROLE: api
       CUEKB_API_KEY_PEPPER: ${CUEKB_API_KEY_PEPPER:?set CUEKB_API_KEY_PEPPER}
       CUEKB_BOOTSTRAP_API_KEY: ${CUEKB_BOOTSTRAP_API_KEY:?set CUEKB_BOOTSTRAP_API_KEY}
+      CUEKB_V2_RELEVANCE_PROFILE_PATH: ${CUEKB_V2_RELEVANCE_PROFILE_PATH:-}
     ports: ["0.0.0.0:8085:8080"]
-    volumes: [cuekb_files:/data/originals]
+    volumes:
+      - cuekb_files:/data/originals
+      - type: bind
+        source: ./deploy/relevance
+        target: /etc/cuekb/relevance
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       postgres: {condition: service_healthy}
       opensearch: {condition: service_healthy}

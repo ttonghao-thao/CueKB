@@ -10,6 +10,7 @@ import httpx
 from opensearchpy import OpenSearch, helpers
 
 from cuekb.domain.models import Chunk
+from cuekb.services.selection import LEXICAL_REVISION, chunk_identifiers, identifier_terms
 
 
 class OpenSearchBackend:
@@ -37,6 +38,7 @@ class OpenSearchBackend:
                         "embedding_model": self.embedding_model,
                         "projection_version": "evidence-v2",
                         "input_template_revision": "evidence-v2",
+                        "lexical_revision": LEXICAL_REVISION,
                     },
                     "properties": {
                         "kb_id": {"type": "keyword"},
@@ -46,6 +48,9 @@ class OpenSearchBackend:
                         "search_text": {"type": "text", "analyzer": "cjk"},
                         "title_text": {"type": "text", "analyzer": "cjk"},
                         "document_name": {"type": "text", "analyzer": "cjk"},
+                        "scope_text": {"type": "text", "analyzer": "cjk"},
+                        "table_labels": {"type": "text", "analyzer": "cjk"},
+                        "identifier_terms": {"type": "keyword"},
                         "block_kind": {"type": "keyword"},
                         "applicable_product_models": {"type": "keyword"},
                         "applicable_software_versions": {"type": "keyword"},
@@ -82,7 +87,8 @@ class OpenSearchBackend:
         mapping = self.client.indices.get_mapping(index=self.index_name)[self.index_name][
             "mappings"
         ]
-        if mapping.get("_meta", {}).get("projection_version") != "evidence-v2":
+        if (mapping.get("_meta", {}).get("projection_version") != "evidence-v2"
+                or mapping.get("_meta", {}).get("lexical_revision") != LEXICAL_REVISION):
             raise ValueError("index_upgrade_required")
 
     def get_input_template(self) -> str:
@@ -123,6 +129,15 @@ class OpenSearchBackend:
                         "search_text": chunk.search_text,
                         "title_text": " / ".join(chunk.title_path),
                         "document_name": chunk.document_name or "",
+                        "scope_text": "\n".join([
+                            *(value for s in subjects for value in
+                              (s.display_name, s.product_model, s.software_version) if value),
+                            *(structure.retrieval_aliases if subjects else []),
+                            *(c.text for c in applicability.conditions if subjects),
+                        ]),
+                        "table_labels": "\n".join(span.text for span in chunk.source_spans
+                                                  if span.label in {"table_header", "table_row_label"}),
+                        "identifier_terms": sorted(chunk_identifiers(chunk)),
                         "block_kind": getattr(structure, "block_kind", "text"),
                         "applicable_product_models": sorted(
                             {s.product_model for s in subjects if s.product_model}
@@ -161,7 +176,7 @@ class OpenSearchBackend:
     def _keyword_body(self, query, kb_ids, filters, limit, phrase=False) -> dict:
         local = filters.get("_local_applicability", False)
         fields = (
-            ["source_text^3", "title_text", "document_name^0.25"]
+            ["source_text^3", "title_text", "scope_text^1.5", "table_labels", "document_name^0.25"]
             if local else ["search_text^2", "source_text"]
         )
         product_field = "applicable_product_models" if local else "product_model"
@@ -185,6 +200,10 @@ class OpenSearchBackend:
                     "minimum_should_match": 1,
                 }
             }
+            # Identifier queries use punctuation-preserving keyword tokens. An
+            # analyzed phrase alone can otherwise conflate nearby model numbers.
+            if local and identifier_terms(query) == {query.casefold().strip()}:
+                must = {"term": {"identifier_terms": query.casefold().strip()}}
         else:
             must = {
                 "multi_match": {
@@ -257,6 +276,7 @@ class OpenSearchBackend:
         meta = mapping.get("_meta", {})
         if (
             meta.get("projection_version") != "evidence-v2"
+            or meta.get("lexical_revision") != LEXICAL_REVISION
             or meta.get("input_template_revision") != "evidence-v2"
             or meta.get("embedding_model") != self.embedding_model
             or mapping.get("properties", {}).get("embedding", {}).get("dimension") != self.dimension
@@ -307,10 +327,17 @@ class OpenSearchBackend:
 
     @staticmethod
     def _hits(response: dict) -> list[tuple[UUID, float]]:
-        hits = [(UUID(hit["_id"]), float(hit["_score"])) for hit in response["hits"]["hits"]]
-        if any(not math.isfinite(score) for _, score in hits):
+        if (response.get("timed_out") is True
+                or response.get("_shards", {}).get("failed", 0) > 0
+                or response.get("terminated_early") is True):
+            from opensearchpy.exceptions import OpenSearchException
+
+            raise OpenSearchException("search_backend_partial_results")
+        raw = response["hits"]["hits"]
+        if any(not isinstance(hit["_score"], (int, float)) or isinstance(hit["_score"], bool)
+               or not math.isfinite(hit["_score"]) for hit in raw):
             raise ValueError("invalid_search_score")
-        return hits
+        return [(UUID(hit["_id"]), float(hit["_score"])) for hit in raw]
 
     @staticmethod
     def _filters(kb_ids: Sequence[UUID], filters: dict[str, Any]) -> list[dict]:
@@ -328,4 +355,6 @@ class OpenSearchBackend:
                 result.append({"term": {field: filters[key]}})
         if filters.get("_local_applicability"):
             result.append({"bool": {"must_not": [{"term": {"block_kind": "heading"}}]}})
+            if filters.get("_query_identifiers"):
+                result.append({"terms": {"identifier_terms": filters["_query_identifiers"]}})
         return result

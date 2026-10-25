@@ -162,6 +162,16 @@
       "title": "Query",
       "type": "string"
     },
+    "query_facets": {
+      "items": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Query Facets",
+      "type": "array"
+    },
     "relations": {
       "$ref": "#/$defs/RelationQuery"
     },
@@ -178,6 +188,29 @@
       ],
       "default": null,
       "title": "Request Id"
+    },
+    "selection_mode": {
+      "default": "ranked",
+      "enum": [
+        "ranked",
+        "adaptive"
+      ],
+      "title": "Selection Mode",
+      "type": "string"
+    },
+    "selection_query": {
+      "anyOf": [
+        {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Selection Query"
     },
     "top_k": {
       "default": 8,

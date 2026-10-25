@@ -91,13 +91,15 @@ def test_unconfigured_reranker_is_healthy_with_real_rrf_scores():
     assert all(hit.stage_scores == {} for hit in result.hits)
 
 
-def test_ten_overlapping_queries_keep_scope_trace_and_counts_isolated():
+@pytest.mark.parametrize("selection_mode", ["ranked", "adaptive"])
+def test_ten_overlapping_queries_keep_scope_trace_and_counts_isolated(selection_mode):
     async def run():
         repo = InMemoryRepository()
         requests, expected = [], []
         for _ in range(10):
             _, chunks, _, _, _, request = fixture(count=1, repository=repo)
             request.top_k = 1
+            request.selection_mode = selection_mode
             requests.append(request)
             expected.append(chunks[0].id)
         ready = asyncio.Event()

@@ -1,6 +1,6 @@
 # 第三方接入与使用说明
 
-更新：2026-10-24。配合[接口规范](API_GUIDE.md)、[系统约束](SYSTEM_CONSTRAINTS.md)及[OpenAPI](contracts/openapi.json)使用。本文不要求调用方安装CueKB服务代码。
+更新：2026-10-25。配合[接口规范](API_GUIDE.md)、[系统约束](SYSTEM_CONSTRAINTS.md)及[OpenAPI](contracts/openapi.json)使用。本文不要求调用方安装CueKB服务代码。
 
 ## 1. 获取接入资料
 
@@ -35,7 +35,9 @@ async def main():
             headers={"Authorization": "Bearer " + os.environ["CUEKB_API_KEY"]},
             json={"query": "What are the storage conditions after opening?",
                   "kb_ids": [os.environ["CUEKB_KB_ID"]],
-                  "request_id": str(uuid.uuid4()), "mode": "hybrid", "top_k": 8})
+                  "request_id": str(uuid.uuid4()), "mode": "hybrid",
+                  "selection_mode": "adaptive", "top_k": 20,
+                  "query_facets": ["storage"]})
         if response.status_code != 200:
             error = response.json()
             raise RuntimeError((response.status_code, error["error_code"], error["trace_id"]))
@@ -52,6 +54,8 @@ asyncio.run(main())
 ```
 
 客户端timeout应覆盖服务端预算加网络余量；示例10秒不是服务器SLA。生产代码应按提供的JSON Schema校验整个嵌套响应、处理非JSON网关错误，并保留HTTP状态、trace、request_id。不要仅检查hits是否非空。
+
+新客户端建议显式启用adaptive，把top_k当安全上限，主要通过max_evidence_bytes约束消费负载。query应保留完整检索需求；selection_query可以补充原始问题用于选择，但不改变召回文本，不能弥补召回query缺失产品/属性造成的遗漏。query_facets可提供最多8个关注子项；它们是字面观察线索，不是必须返回的业务字段，也不承诺语义覆盖。
 
 ## 3. 证据消费规则
 
@@ -89,11 +93,11 @@ publish.json为`{"version_id":"待发布版本UUID","scope_key":"default"}`。�
 
 ## 5. 严格客户端升级
 
-当前V1为D23形状，已含request_id与分数字段；更早的M3 strict客户端需要升级，新增字段即使为null也可能被拒绝。正确顺序：
+当前默认V2 ranked响应保持既有闭合形状，不附加selection字段；只有显式adaptive响应才包含新选择诊断。新增字段即使为null也可能被严格客户端拒绝，按以下顺序切换：
 
 1. 先发布支持目标DTO的消费端，保留extra=forbid或等效严格校验。
 2. 使用已导出的契约和合成示例做解析/引用映射测试，必要归属必须进入实际模型证据包，不能被metadata allowlist丢掉。
-3. 在固定语料/权限/query下对照后显式切`/v2/search`；未知版本或坏响应明确失败，不自动重试另一个协议。
-4. 需要回退时明确配置D23 endpoint与D23 DTO；不得使用V2局部过滤解释V1文档标签过滤，也不得跨V1混合score_type比较分数。
+3. 在固定语料/权限/query及相同负载预算下对照ranked/adaptive，确认selection诊断可解析，再显式发送selection_mode=adaptive。不启用时省略selection_query/query_facets。
+4. 回退选择策略时用ranked并移除动态专用输入。V1调用继续使用其独立DTO；不得使用V2局部过滤解释V1文档标签过滤。未知版本或坏响应明确失败，不自动重试另一个协议。
 
 voice-service-agent尤其需要同步请求/响应模型、Adapter、Citation/ContextPart、native evidence选择、外部LLM证据及错误映射。现有“任何空hits都视作无资料”和“完整主块可丢弃所有截断上下文”的规则不足以消费V2必要依赖。这些第三方改造由调用方执行，本仓库交付不代表其他仓库已自动完成升级。

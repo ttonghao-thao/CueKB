@@ -77,6 +77,7 @@ docker compose --env-file .env.production exec -T api \
 | 知识库 UUID 列表 | 必需；放入 `kb_ids`，例如 `["11111111-1111-4111-8111-111111111111"]`；使用实际 ID，名称仅供展示 |
 | 接口和契约 | 新接入为 `POST /v2/search`；提供 [OpenAPI](docs/contracts/openapi.json)、[接口规范](docs/API_GUIDE.md)及[接入说明](docs/INTEGRATION_GUIDE.md) |
 | 运行预算 | 提供服务端检索时限和建议客户端超时，约定 `top_k` 与消费端证据预算；默认值与上限见[系统约束](docs/SYSTEM_CONSTRAINTS.md) |
+| 选择策略与校准 | 建议新客户端显式使用 `selection_mode=adaptive`，升级严格DTO后启用；确认运行方是否提供匹配的相关性校准，未校准不能保证低相关拒收 |
 | 知识库名称、描述 | 可选展示信息，不参与权限判断或按名路由 |
 
 调用方变量名由其实现决定；以下以 `CUEKB_BASE_URL`、`CUEKB_API_KEY`、`CUEKB_KB_ID` 为例。这些是调用方配置，不是新增的 CueKB 服务端设置。先用业务 Key 调用 `GET /v1/knowledge-bases` 确认目标 ID 和权限，再检索：
@@ -88,10 +89,12 @@ curl --fail-with-body "$CUEKB_BASE_URL/v1/knowledge-bases" \
 curl --fail-with-body "$CUEKB_BASE_URL/v2/search" \
   -H "Authorization: Bearer $CUEKB_API_KEY" \
   -H 'Content-Type: application/json' \
-  --data "{\"query\":\"What are the storage conditions?\",\"kb_ids\":[\"$CUEKB_KB_ID\"],\"mode\":\"hybrid\",\"top_k\":8}"
+  --data "{\"query\":\"What are the storage conditions?\",\"kb_ids\":[\"$CUEKB_KB_ID\"],\"mode\":\"hybrid\",\"selection_mode\":\"adaptive\",\"top_k\":20,\"max_evidence_bytes\":48000}"
 ```
 
 200 但 `retrieval_status=not_found` 表示本次未召回证据，可能尚未发布文档；不代表系统错误或整个知识库不存在。401 检查 Key，403 检查 KB 授权，422 检查 UUID/请求字段。检索高分不等于证据充分，第三方应保留归属、条件、出处和 `evidence_status`；消费规则见接入说明。
+
+adaptive按必要证据组、新增信息、去重与预算动态决定条数，top_k只是安全上限。可选query_facets提供关注项，selection_query提供原始选择语境，完整字段与停止原因见[接口规范](docs/API_GUIDE.md#2-v2检索请求)。门户检索验证页可切换动态/排序策略。人工相关性校准、只读配置挂载及新词法投影要求见[操作手册](docs/OPERATIONS.md)；初次全新部署无需旧库转换。
 
 ## 本地开发
 

@@ -21,7 +21,7 @@ from cuekb.domain.models import (
     SourceSpan,
 )
 
-PROCESSING_REVISION = "evidence-v2.1"
+PROCESSING_REVISION = "evidence-v2.2"
 
 
 def _identity(subject: ApplicableSubject) -> tuple[str, str | None, str | None]:
@@ -203,10 +203,50 @@ def resolve_applicability(
         declarations.append(_declaration(default, source_kind="curated"))
     if not declarations:
         return Applicability()
-    keys = {_subject_keys(scope) for scope in declarations}
-    subjects = {_identity(s): s for scope in declarations for s in scope.subjects}
+    # An absent model/version is incomplete information about an entity, not a
+    # second entity. Compare entity sets first, then merge compatible attributes.
+    def entity_key(subject):
+        return str(subject.entity_id) if subject.entity_id else subject.display_name.casefold()
+
+    keys = {frozenset(entity_key(s) for s in scope.subjects) for scope in declarations}
+    grouped: dict[str, list[list[ApplicableSubject]]] = {}
+    for declaration in declarations:
+        declared: dict[str, list[ApplicableSubject]] = {}
+        for subject in declaration.subjects:
+            declared.setdefault(entity_key(subject), []).append(subject)
+        for identity, subjects_in_declaration in declared.items():
+            grouped.setdefault(identity, []).append(subjects_in_declaration)
+    subjects = {}
+    conflict = False
+    for group in grouped.values():
+        variants = group[0]
+        for declaration_variants in group[1:]:
+            pairs = [(left, right) for left in variants for right in declaration_variants
+                     if all(getattr(left, field) is None or getattr(right, field) is None
+                            or getattr(left, field) == getattr(right, field)
+                            for field in ("product_model", "software_version"))]
+            # Multiple versions explicitly allowed in one declaration remain
+            # alternatives. Every declared alternative must have a compatible
+            # counterpart; never silently narrow a conflicting declaration.
+            if (any(not any(left is value for left, _ in pairs) for value in variants)
+                    or any(not any(right is value for _, right in pairs) for value in declaration_variants)):
+                conflict = True
+                variants = [s for declaration_group in group for s in declaration_group]
+                break
+            merged = {}
+            for left, right in pairs:
+                preferred = left if left.source_kind == "curated" else right
+                spans = {span.model_dump_json(): span for s in (left, right) for span in s.source_spans}
+                subject = preferred.model_copy(update={
+                    "product_model": left.product_model or right.product_model,
+                    "software_version": left.software_version or right.software_version,
+                    "source_spans": list(spans.values())[:20],
+                })
+                merged[_identity(subject)] = subject
+            variants = list(merged.values())
+        subjects.update({_identity(s): s for s in variants})
     conditions = {c.text: c for scope in declarations for c in scope.conditions}
-    ambiguous = (len(keys) > 1 or any(d.status != "resolved" for d in declarations)
+    ambiguous = (conflict or len(keys) > 1 or any(d.status != "resolved" for d in declarations)
                  or len(subjects) > 8 or len(conditions) > 20)
     return Applicability(
         status="ambiguous" if ambiguous else "resolved",
@@ -233,10 +273,16 @@ def structure_for(
     snapshot: Mapping[str, Any] | None, unresolved: bool = False,
     source_unit_aliases: Sequence[str] = (),
 ) -> EvidenceStructure:
+    applicability = resolve_applicability(title_path, source_spans, unit_id, snapshot,
+                                        source_unit_aliases=source_unit_aliases)
+    entity_ids = {str(s.entity_id) for s in applicability.subjects if s.entity_id}
+    aliases = sorted({str(alias) for entity in (snapshot or {}).get("approved_entities", [])
+                      if str(entity.get("entity_id", entity.get("id"))) in entity_ids
+                      for alias in entity.get("aliases", [])})
     return EvidenceStructure(
         block_kind=block_kind, source_unit_id=unit_id,
-        applicability=resolve_applicability(title_path, source_spans, unit_id, snapshot,
-                                           source_unit_aliases=source_unit_aliases),
+        applicability=applicability,
+        retrieval_aliases=aliases if applicability.status == "resolved" else [],
         structure_revision=PROCESSING_REVISION, dependency_unresolved=unresolved,
     )
 

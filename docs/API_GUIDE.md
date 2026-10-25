@@ -1,6 +1,6 @@
 # CueKB 第三方接口规范
 
-更新：2026-10-24。本文描述当前代码契约，不是性能或模型质量承诺。新集成使用V2证据检索；管理能力同时复用V1。不要按版本号猜字段兼容性。
+更新：2026-10-25。本文描述当前代码契约，不是性能或模型质量承诺。新集成使用V2证据检索；管理能力同时复用V1。不要按版本号猜字段兼容性。
 
 ## 1. 契约文件与通用约定
 
@@ -24,7 +24,9 @@
   "kb_ids": ["11111111-1111-4111-8111-111111111111"],
   "request_id": "order-support-42",
   "mode": "hybrid",
-  "top_k": 8,
+  "selection_mode": "adaptive",
+  "query_facets": ["storage"],
+  "top_k": 20,
   "filters": {"product_model": "A"},
   "include_context": true,
   "include_diagnostics": false,
@@ -39,6 +41,9 @@
 | request_id | null | 可选1—128字符，成功原样回传；不提供幂等或缓存语义 |
 | mode | auto | auto、exact、hybrid、related |
 | top_k | 8 | 1—20，最终hit数量上限，允许少返，不放松权限/版本/预算凑数 |
+| selection_mode | ranked | ranked按原排序逐组装入预算、过大组继续替补；adaptive按新增证据收益动态选择，实际数量可小于上限 |
+| selection_query | null | 仅adaptive；1—2000字符的可选原始完整问题，用于选择、型号约束和字面覆盖观察；不替换query的Embedding/词法召回文本 |
+| query_facets | [] | 仅adaptive；最多8项、每项1—200字符且不能全为空白。调用方关心的子项；字面命中用于选择和一次补召回触发，不是通用语义充分性判定 |
 | filters.document_ids | [] | 最多100个UUID，只在这些文档中检索 |
 | filters.product_model | null | 精确、区分大小写的**局部已确认产品型号**；不匹配随意上传的全篇标签或未知归属 |
 | filters.software_version | null | 已确认局部软件版本；与产品条件同时给出时须属于同一个subject，不是document business_version |
@@ -50,11 +55,19 @@
 
 请求及filters/relations/归属映射中的未知字段返回422；`retrieval_mode`不是`mode`别名，也没有original_question、version_policy、历史版本检索等隐含字段。
 
-auto以服务端标识符正则选择exact或hybrid。exact沿V1短语/型号字段等值路径跳过Embedding与重排；不保证任意自然语言查询的事实精确。hybrid使用OpenSearch BM25与Embedding/k-NN、RRF。related加有出处的一跳，scope_limited为true。
+auto以服务端标识符正则选择exact或hybrid。V2 exact对单个含字母和数字的标识符使用保留标点、大小写归一化的keyword token等值，其他文本使用分析器短语匹配，跳过Embedding与重排；V1保持原短语/型号路径。hybrid使用OpenSearch BM25与Embedding/k-NN、RRF。related加有出处的一跳，scope_limited为true。
+
+adaptive对问题中`A-100`等含字母、数字及分隔符的标识符施加有界token约束；多个标识符按OR处理，PG最终也复验，`A-1000`不能冒充`A-100`。这不是产品自动消歧器，不推断无明确标识符的产品归属。规范名、冻结审核别名、型号、表格标签参与新的V2词法投影；缺少`scope-lexical-v2.2`投影时返回INDEX_UPGRADE_REQUIRED。
+
+动态选择将已知必要依赖视作证据组，优先补充不同属性/适用范围，保护数值、条件和否定差异，按精确JSON成本跳过过大的组；无新增收益、候选耗尽或到达预算时停止。未提供query_facets时仍可按问题词项和保守多样性选择，不保证任意复合问题全部召回。有明确未观察到的facet且预算允许时，至多一次扩大原始召回窗口，复用原query向量；不自动改写query或递归搜索。
+
+相关性接受门控只在运行方提供人工样本生成、且绑定匹配的校准文件时启用。缺配置或绑定不匹配时继续有界选择，并明确报告未应用校准；不使用未经验证的通用分数阈值。部署方法见[操作手册](OPERATIONS.md#7-相关性校准配置)。
 
 ## 3. V2响应与排序
 
 完整可校验示例见[请求](examples/search-v2-request.json)、[响应](examples/search-v2-response.json)；示例是合成契约数据，数值不是质量/性能实测。
+
+动态策略示例：[adaptive请求](examples/search-v2-adaptive-request.json)、[adaptive响应](examples/search-v2-adaptive-response.json)。它们由同一导出脚本生成，适合严格客户端先验证新诊断字段。
 
 | 响应字段 | 语义 |
 | --- | --- |
@@ -88,7 +101,7 @@ auto以服务端标识符正则选择exact或hybrid。exact沿V1短语/型号字
 | metadata | 上传标签，例如business_version/product_model/software_version/category；不将标签自动提升为事实归属 |
 | context / context_parts | 整块原文按次序组成的上下文；parts保留真实chunk_id、正文、锚点、spans、role和required标记 |
 | context_state / context_omissions / context_truncated | 已识别依赖的完整性与省略信息，不能推导问题已被全部回答 |
-| stage_scores | 仅include_diagnostics=true时存在，包含实际keyword/vector/rrf/rerank分项；不得跨量纲直接比较 |
+| stage_scores | 仅include_diagnostics=true时存在，包含实际keyword/vector/rrf/rerank分项；adaptive额外含lexical字面词项覆盖比例，用于校准记录，不是BM25或事实正确率；不得跨量纲直接比较 |
 | relations | 有出处且经过最终复验的关系；supports/refutes是证据立场，不是真伪裁决 |
 
 applicability.status为resolved、unknown、ambiguous。subject携带可空entity_id、可读display_name、可空product_model/software_version、source_kind、provenance_id和source_spans；内部ID不是要求口述的产品名。source_kind为curated/reviewed_alias/parser：管理员标注不伪装成原文已陈述。conditions保留原文或明确标注的条件，不自动发明包装/开封等业务枚举。
@@ -97,7 +110,9 @@ applicability.status为resolved、unknown、ambiguous。subject携带可空entit
 
 context_state优先级：必要依赖缺失unresolved；可选内容被预算省略truncated；已识别必要组完整complete；没有必要依赖且关闭可选上下文时disabled。context_truncated=false不代表充分；unknown产品归属不能被调用方补成查询中的产品。已知必要依赖缺失时，不应将裸source_text作为该产品的完整适用证据肯定作答。
 
-RRF公式是`sum(1/(60+source_rank))`，source_rank从1开始；它是正式融合分数，不是按最终rank伪造的分数。V2成功重排只返回同次窗口内结果，不拼RRF尾部；重排故障整体保留RRF并标降级。未配置Reranker是正常路径。原始BM25、向量与重排分数不相加，也不等于事实正确率。当前支持方法的hit始终有有限score；未来不可评分方法若引入null将另行约定，不把NaN/Inf改成null掩盖错误。
+V2加权RRF公式是`sum(weight/(60+source_rank))`，keyword/vector权重各1，relation权重0.5，source_rank从1开始。关系SQL先按查询词法相关性排列有界候选，应用层按原文查询词项交集排序；UUID只作同分确定性排序。降低相关关系通道的投票权重，避免将其当作独立的第三路等权召回。V1仍为原等权RRF。评分是正式融合分数，不是按最终rank伪造的分数。
+
+V2成功重排只返回同次窗口内结果，不拼RRF尾部；重排故障整体保留RRF并标降级。adaptive只选择集合，输出仍按实际RRF/重排分数排序，score不会改成选择收益。未配置Reranker是正常路径。原始BM25、向量与重排分数不相加，也不等于事实正确率。当前hit始终有有限score，不把NaN/Inf改成null掩盖错误。
 
 排序复现还要固定query、filters、授权、PG发布修订、generation、processing_profile、代码和外部不可变模型修订；同名模型服务更换权重后不能仅凭ranking_version保证重复结果完全一致。
 
@@ -110,11 +125,23 @@ diagnostics中：
 - sizes：source_text/context/context_parts的chars与bytes，及精确hits_bytes；重复字段计入实际传输大小，不能把字符当token。
 - backend_calls：keyword/embedding/vector/relation/rerank累计调用次数；attempt_count最多2，包含一次版本过渡重试。
 - reranker：configured、executed、skipped_reason；另有active_generation、processing_profiles、algorithm_revision和实际keyword/vector/relation limit。
+- selection：**仅显式adaptive响应存在**；ranked不输出该属性，兼容既有严格V2消费者。字段见下表，旧客户端必须先升级DTO再启用adaptive。
+
+| selection字段 | 语义 |
+| --- | --- |
+| method / version | adaptive / evidence-set-v1；选择算法版本独立于原RRF核心revision |
+| calibration_status / profile_id | not_configured、applied或binding_mismatch；可空的校准文件SHA-256标识。applied表示绑定匹配，不是生产准确率已验收 |
+| considered / assessed / rejected / redundant | 最终合法候选数、实际有适用校准分数的候选数、校准拒收数、无新增收益/已由必要上下文包含的候选数；不是全库统计 |
+| stop_reason | no_candidates、relevance_exhausted、no_information_gain、max_hits、payload_budget、candidates_exhausted；数量/预算可能先于覆盖完成 |
+| facet_count / observed_facet_indices | 请求facet数及观察到完整字面词项的0起始索引；不等于这些属性已给出完整事实或所有产品均已覆盖 |
+| coverage_assessment | 固定unassessed；避免将字面覆盖解释为充分性 |
+
+OpenSearch HTTP 200中若timed_out、terminated_early或失败分片非零，该通道按失败处理；其他健康通道仍可提供明确降级证据。失败造成的空结果不会被当作正常not_found。
 
 | HTTP/状态 | 调用方应如何处理 |
 | --- | --- |
 | 200 + ok + hits | 可使用有据原文，但充分性仍未评估，检查每条归属/必要依赖 |
-| 200 + not_found + [] | 正常流程本次没有合法候选；不等于整个知识库没有某事实 |
+| 200 + not_found + [] | 本次没有合法/经过已应用门控的可接受候选；不等于整个知识库没有某事实 |
 | 200 + degraded + hits | 合法证据可用但检索受限，保留原因，不能伪称完整 |
 | 200 + degraded + [] | 区分依赖失败和预算/范围不可用，不能一律写成“查无资料” |
 | 401/403 | 身份或授权问题；不放宽KB/filters重试 |
@@ -209,7 +236,7 @@ detail为字符串或校验错误列表（仅loc/msg/type，不回显input/ctx�
 | 401 | INVALID_API_KEY |
 | 403 | ACCESS_DENIED |
 | 404/405 | NOT_FOUND / METHOD_NOT_ALLOWED |
-| 409 | CONFLICT、INDEX_MAINTENANCE_IN_PROGRESS、INDEX_UPGRADE_REQUIRED、SEARCH_CONFIGURATION_CHANGED；detail区分重复版本、幂等payload冲突、缺Embedding配置等 |
+| 409 | CONFLICT、INDEX_MAINTENANCE_IN_PROGRESS、INDEX_UPGRADE_REQUIRED、SEARCH_CONFIGURATION_CHANGED、RELEVANCE_PROFILE_INVALID；detail区分重复版本、幂等payload冲突、缺Embedding配置或损坏校准文件等 |
 | 413/415/422 | FILE_TOO_LARGE / UNSUPPORTED_FILE_TYPE / INVALID_REQUEST |
 | 503 | DATABASE_UNAVAILABLE、SEARCH_BACKEND_UNAVAILABLE、SEARCH_CAPACITY_EXCEEDED、MODEL_CONFIGURATION_BUSY、SEARCH_RESPONSE_LIMIT_EXCEEDED |
 | 504 | SEARCH_DEADLINE_EXCEEDED；不返回未完成最终复验的正文 |

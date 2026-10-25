@@ -13,6 +13,7 @@
   "max_evidence_bytes": 48000,
   "mode": "exact",
   "query": "Input voltage",
+  "query_facets": [],
   "relations": {
     "at": null,
     "direction": "outgoing",
@@ -20,5 +21,7 @@
     "types": []
   },
   "request_id": "contract-example",
+  "selection_mode": "ranked",
+  "selection_query": null,
   "top_k": 8
 }

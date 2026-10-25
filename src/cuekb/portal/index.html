@@ -107,7 +107,9 @@
           <div class="search-options">
             <label><span>接口契约</span><select id="search-contract"><option value="v2">V2 归属与诊断</option><option value="v1">V1 兼容检索</option></select></label>
             <label><span>检索模式</span><select id="search-mode"><option value="auto">自动</option><option value="exact">精确</option><option value="hybrid">混合</option><option value="related">关系（一跳）</option></select></label>
-            <label><span>返回数量</span><select id="top-k"><option>5</option><option selected>8</option><option>10</option><option>20</option></select></label>
+            <label><span>选择策略（V2）</span><select id="selection-mode"><option value="adaptive" selected>动态证据选择</option><option value="ranked">按排序选择</option></select></label>
+            <label><span>最多返回</span><select id="top-k"><option>5</option><option>8</option><option>10</option><option selected>20</option></select></label>
+            <label><span>关注项（V2动态，每行一项，可选）</span><textarea id="query-facets" rows="2" maxlength="1608" placeholder="例如：price&#10;weight&#10;storage"></textarea></label>
             <button class="primary" type="submit">开始检索</button>
           </div>
         </form>

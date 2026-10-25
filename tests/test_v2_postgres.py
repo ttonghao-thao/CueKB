@@ -11,6 +11,7 @@ from cuekb.adapters.postgres import ConflictError
 from cuekb.domain.models import KnowledgeBase
 from cuekb.services.execution import SearchExecution, SearchDeadlineExceeded, activate_execution
 from cuekb.worker import materialize_chunks
+from cuekb.schemas import EntityWrite
 
 
 SOURCE = b"# Product A\n\nInput voltage: 12 V. Do not exceed 30 C."
@@ -64,6 +65,28 @@ def test_profile_snapshot_reprocess_and_idempotency(pg):
     assert pg.load_chunks([prepared[0].id], [kb.id])[0].evidence_structure.applicability.status == "resolved"
     with pytest.raises(ConflictError, match="duplicate_document_version"):
         pg.create_reprocess_job(**{**args, "idempotency_key": "another"})
+
+
+def test_real_snapshot_alias_and_curated_model_survive_processing_and_persistence(pg):
+    from uuid import uuid4
+    from cuekb.services.evidence import scope_matches
+    principal, kb, original, _ = create_version(pg)
+    entity_id = uuid4()
+    pg.put_entity(kb.id, entity_id, EntityWrite(name="Product A", kind="product", aliases=["Device A"]))
+    replacement = pg.create_reprocess_job(principal_id=principal, document_id=original.document_id,
+        source_version_id=original.version_id, processing_snapshot={"scope_bindings": [
+            {"title_path": ["Product A"], "subjects": [{"entity_id": str(entity_id),
+                "display_name": "Product A", "product_model": "A-100"}]}]},
+        idempotency_key="scope-merge", request_sha256="d" * 64)
+    claimed = pg.claim_job("fixture", 300, 3)
+    entity = claimed["processing_snapshot"]["approved_entities"][0]
+    assert "product_model" not in entity
+    chunks = materialize_chunks(pg, SimpleNamespace(read=lambda _: SOURCE), claimed, template="evidence-v2")
+    pg.save_ready(replacement.id, "fixture", chunks)
+    pg.publish(replacement.document_id, replacement.version_id, "default")
+    stored = pg.load_chunks([chunks[0].id], [kb.id])[0]
+    assert scope_matches(stored, "A-100")
+    assert stored.evidence_structure.retrieval_aliases == ["Device A"]
 
 
 def test_restore_derives_new_identities_and_old_cleanup_cannot_target_them(pg):

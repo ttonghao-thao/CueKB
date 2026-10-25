@@ -164,7 +164,8 @@ function renderKnowledgeBaseManagement() {
   $("#kb-display-name").value = state.currentKb?.name || "";
   $("#kb-full-id").value = state.currentKb?.id || "";
   $("#kb-request-example").value = state.currentKb ? JSON.stringify({
-    query: "What information is available?", kb_ids: [state.currentKb.id], mode: "hybrid", top_k: 8,
+    query: "What information is available?", kb_ids: [state.currentKb.id], mode: "hybrid",
+    selection_mode: "adaptive", top_k: 20, max_evidence_bytes: 48000,
   }, null, 2) : "";
 }
 
@@ -365,9 +366,13 @@ async function search(event) {
   if (!state.currentKb) return toast("请先选择知识库", "error");
   $("#search-results").innerHTML = '<div class="loading">正在检索…</div>';
   try {
-    const result = await api("/search", { method: "POST", body: JSON.stringify({ query: $("#query").value.trim(), kb_ids: [state.currentKb.id], mode: $("#search-mode").value, top_k: Number($("#top-k").value), include_context: true, filters: { product_model: $("#search-product").value.trim() || null, software_version: $("#search-software").value.trim() || null }, relations: { entity_ids: splitValues($("#search-entities").value), types: splitValues($("#search-relation-types").value), direction: $("#search-direction").value, at: $("#search-at").value.trim() || null } }) }, $("#search-contract").value);
+    const contract = $("#search-contract").value;
+    const selection = contract === "v2" ? { selection_mode: $("#selection-mode").value,
+      ...($("#selection-mode").value === "adaptive" ? { query_facets: $("#query-facets").value.split("\n").map(value => value.trim()).filter(Boolean) } : {}) } : {};
+    const result = await api("/search", { method: "POST", body: JSON.stringify({ query: $("#query").value.trim(), kb_ids: [state.currentKb.id], mode: $("#search-mode").value, top_k: Number($("#top-k").value), include_context: true, ...selection, filters: { product_model: $("#search-product").value.trim() || null, software_version: $("#search-software").value.trim() || null }, relations: { entity_ids: splitValues($("#search-entities").value), types: splitValues($("#search-relation-types").value), direction: $("#search-direction").value, at: $("#search-at").value.trim() || null } }) }, contract);
     $("#search-summary").textContent = `${result.hits.length} 条证据${result.scope_limited ? " · 仅有界一跳，不代表全部影响范围" : ""} · 路径 ${result.retrieval_path} · ${(result.timings_ms.total || 0).toFixed(1)} ms${result.degraded_reasons.length ? ` · 降级：${result.degraded_reasons.join(", ")}` : ""}`;
     if (result.ranking_method) $("#search-summary").textContent += ` · 排序 ${result.ranking_method} · 证据状态 ${result.evidence_status} · ${result.diagnostics.sizes.hits_bytes} bytes`;
+    if (result.diagnostics?.selection) $("#search-summary").textContent += ` · 动态停止 ${result.diagnostics.selection.stop_reason} · 校准 ${result.diagnostics.selection.calibration_status}`;
     $("#search-results").innerHTML = result.hits.length ? result.hits.map((hit) => `<article class="panel result-card"><div class="result-meta"><span>#${hit.rank}</span><span>文档 ${escapeHtml(hit.document_name || shortId(hit.document_id))}</span><span>${escapeHtml(hit.title_path.join(" / ") || "正文")}</span><span>${escapeHtml(hit.retrieval_sources.join(" + "))}</span></div>${hit.applicability ? `<p class="muted">归属：${escapeHtml(hit.applicability.subjects.map(s => s.display_name).join("、") || "未确定")} (${escapeHtml(hit.applicability.status)}) · 上下文 ${escapeHtml(hit.context_state)}</p>` : ""}<p>${escapeHtml(hit.context || hit.source_text)}</p><p class="muted">块 ID：${escapeHtml(hit.chunk_id)}${hit.context_truncated ? " · 上下文受预算截断" : ""}</p>${(hit.relations || []).map(r => `<p class="muted">${escapeHtml(r.relation_type)} · ${escapeHtml(r.stance)} · ${escapeHtml(r.subject_id)} → ${escapeHtml(r.object_id)}</p>`).join("")}</article>`).join("") : `<div class="panel empty">本次没有可返回证据 · ${escapeHtml(result.retrieval_status)}</div>`;
   } catch (error) { $("#search-results").innerHTML = ""; handleError(error, "检索失败"); }
 }

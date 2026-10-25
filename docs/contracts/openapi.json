@@ -2839,6 +2839,16 @@
           "reranker": {
             "$ref": "#/components/schemas/V2RerankerDiagnostics"
           },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/V2SelectionDiagnostics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sizes": {
             "$ref": "#/components/schemas/V2PayloadSizes"
           },
@@ -3154,6 +3164,16 @@
             "title": "Query",
             "type": "string"
           },
+          "query_facets": {
+            "items": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Query Facets",
+            "type": "array"
+          },
           "relations": {
             "$ref": "#/components/schemas/RelationQuery"
           },
@@ -3169,6 +3189,28 @@
               }
             ],
             "title": "Request Id"
+          },
+          "selection_mode": {
+            "default": "ranked",
+            "enum": [
+              "ranked",
+              "adaptive"
+            ],
+            "title": "Selection Mode",
+            "type": "string"
+          },
+          "selection_query": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Query"
           },
           "top_k": {
             "default": 8,
@@ -3303,6 +3345,113 @@
           "diagnostics"
         ],
         "title": "V2SearchResponse",
+        "type": "object"
+      },
+      "V2SelectionDiagnostics": {
+        "additionalProperties": false,
+        "properties": {
+          "assessed": {
+            "default": 0,
+            "maximum": 250.0,
+            "minimum": 0.0,
+            "title": "Assessed",
+            "type": "integer"
+          },
+          "calibration_status": {
+            "enum": [
+              "not_configured",
+              "applied",
+              "binding_mismatch"
+            ],
+            "title": "Calibration Status",
+            "type": "string"
+          },
+          "considered": {
+            "default": 0,
+            "maximum": 250.0,
+            "minimum": 0.0,
+            "title": "Considered",
+            "type": "integer"
+          },
+          "coverage_assessment": {
+            "const": "unassessed",
+            "default": "unassessed",
+            "title": "Coverage Assessment",
+            "type": "string"
+          },
+          "facet_count": {
+            "default": 0,
+            "maximum": 8.0,
+            "minimum": 0.0,
+            "title": "Facet Count",
+            "type": "integer"
+          },
+          "method": {
+            "const": "adaptive",
+            "default": "adaptive",
+            "title": "Method",
+            "type": "string"
+          },
+          "observed_facet_indices": {
+            "items": {
+              "maximum": 7.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxItems": 8,
+            "title": "Observed Facet Indices",
+            "type": "array"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "redundant": {
+            "default": 0,
+            "maximum": 250.0,
+            "minimum": 0.0,
+            "title": "Redundant",
+            "type": "integer"
+          },
+          "rejected": {
+            "default": 0,
+            "maximum": 250.0,
+            "minimum": 0.0,
+            "title": "Rejected",
+            "type": "integer"
+          },
+          "stop_reason": {
+            "enum": [
+              "no_candidates",
+              "relevance_exhausted",
+              "no_information_gain",
+              "max_hits",
+              "payload_budget",
+              "candidates_exhausted"
+            ],
+            "title": "Stop Reason",
+            "type": "string"
+          },
+          "version": {
+            "const": "evidence-set-v1",
+            "default": "evidence-set-v1",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calibration_status",
+          "stop_reason"
+        ],
+        "title": "V2SelectionDiagnostics",
         "type": "object"
       },
       "VersionStatus": {

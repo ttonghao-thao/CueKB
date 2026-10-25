@@ -53,7 +53,34 @@ def test_v2_payload_bytes_trace_and_strict_contract(api):
     assert body.hits and body.evidence_status == "unassessed"
     assert body.diagnostics.sizes.hits_bytes == len(encode_v2_hits(body.hits))
     assert "stage_scores" not in response.json()["hits"][0]
+    assert "selection" not in response.json()["diagnostics"]
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_adaptive_api_contract_and_bounded_facets(api):
+    client, kb, _ = api
+    request = {"query": "input voltage", "kb_ids": [str(kb.id)], "selection_mode": "adaptive",
+               "selection_query": "What is the input voltage?", "query_facets": ["voltage"], "top_k": 20}
+    response = client.post("/v2/search", json=request)
+    assert response.status_code == 200, response.text
+    result = V2SearchResponse.model_validate(response.json())
+    assert result.diagnostics.selection.method == "adaptive"
+    assert result.diagnostics.selection.calibration_status == "not_configured"
+    assert result.evidence_status == "unassessed"
+    request["query_facets"] = ["voltage"] * 9
+    assert client.post("/v2/search", json=request).status_code == 422
+
+
+def test_bad_calibration_configuration_is_explicit_and_safe(api):
+    from cuekb.services.selection import RelevanceProfileInvalid
+    client, kb, app = api
+    def invalid():
+        raise RelevanceProfileInvalid("private-file-content")
+    app.dependency_overrides[retrieval_service_v2] = invalid
+    response = client.post("/v2/search", json={"query": "voltage", "kb_ids": [str(kb.id)]})
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "RELEVANCE_PROFILE_INVALID"
+    assert "private-file-content" not in response.text
 
 
 def test_validation_does_not_echo_body_and_unknown_alias_is_rejected(api):

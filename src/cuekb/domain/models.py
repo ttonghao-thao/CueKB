@@ -151,6 +151,8 @@ class EvidenceStructure(StructureModel):
     context_links: list[ContextLink] = Field(default_factory=list, max_length=20)
     structure_revision: str = Field(default="legacy-unknown", min_length=1, max_length=100)
     dependency_unresolved: bool = False
+    # Frozen reviewed aliases for lexical projection; not a user-facing scope assertion.
+    retrieval_aliases: list[str] = Field(default_factory=list, max_length=800)
 
 
 class Chunk(BaseModel):

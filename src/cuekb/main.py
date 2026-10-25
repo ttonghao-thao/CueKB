@@ -24,6 +24,7 @@ from cuekb.config import get_settings
 from cuekb.services.execution import (
     SearchConfigurationChanged, SearchDeadlineExceeded, SearchExecution, activate_execution,
 )
+from cuekb.services.selection import RelevanceProfileInvalid
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,10 @@ def create_app() -> FastAPI:
     @application.exception_handler(SearchConfigurationChanged)
     async def binding_changed(request: Request, _: SearchConfigurationChanged) -> JSONResponse:
         return error(request, 409, "search_configuration_changed", "SEARCH_CONFIGURATION_CHANGED")
+
+    @application.exception_handler(RelevanceProfileInvalid)
+    async def invalid_relevance_profile(request: Request, _: RelevanceProfileInvalid) -> JSONResponse:
+        return error(request, 409, "relevance_profile_invalid", "RELEVANCE_PROFILE_INVALID")
 
     @application.exception_handler(MaintenanceBusy)
     async def maintenance_busy(request: Request, exc: MaintenanceBusy) -> JSONResponse:

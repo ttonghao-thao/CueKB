@@ -24,6 +24,7 @@ def validate_generation(settings, row):
         if not search.client.indices.exists(index=search.index_name):
             raise ValueError("generation_index_missing")
         search.validate_existing_index()
+        search.validate_v2_projection()
         if search.client.count(index=search.index_name)["count"] != row["chunk_count"]:
             raise ValueError("generation_chunk_count_mismatch")
     finally:

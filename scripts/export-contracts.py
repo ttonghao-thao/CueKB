@@ -42,8 +42,14 @@ def examples():
     execution = SearchExecution.create(10000, UUID("22222222-2222-4222-8222-222222222222"))
     result = V2RetrievalService(repo, backend, Settings()).search_evidence(request, execution=execution)
     result.timings_ms = {key: 0.0 for key in result.timings_ms}
+    adaptive_request = request.model_copy(update={"selection_mode": "adaptive", "query_facets": ["voltage"], "top_k": 20})
+    adaptive = V2RetrievalService(repo, backend, Settings()).search_evidence(adaptive_request,
+        execution=SearchExecution.create(10000, UUID("22222222-2222-4222-8222-222222222222")))
+    adaptive.timings_ms = {key: 0.0 for key in adaptive.timings_ms}
     return {"search-v2-request.json": request.model_dump(mode="json"),
-            "search-v2-response.json": json.loads(encode_v2_response(result))}
+            "search-v2-response.json": json.loads(encode_v2_response(result)),
+            "search-v2-adaptive-request.json": adaptive_request.model_dump(mode="json"),
+            "search-v2-adaptive-response.json": json.loads(encode_v2_response(adaptive))}
 
 
 def contracts():

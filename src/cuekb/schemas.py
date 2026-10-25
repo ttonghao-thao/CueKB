@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -326,6 +326,17 @@ class V2SearchRequest(SearchRequest):
     filters: V2SearchFilters = Field(default_factory=V2SearchFilters)
     max_evidence_bytes: int = Field(default=48000, ge=4096, le=128000)
     include_diagnostics: bool = False
+    selection_mode: Literal["ranked", "adaptive"] = "ranked"
+    selection_query: str | None = Field(default=None, min_length=1, max_length=2000)
+    query_facets: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def adaptive_inputs(self):
+        if self.selection_mode != "adaptive" and (self.selection_query is not None or self.query_facets):
+            raise ValueError("selection_inputs_require_adaptive_mode")
+        if any(not facet.strip() for facet in self.query_facets) or (self.selection_query is not None and not self.selection_query.strip()):
+            raise ValueError("selection_inputs_must_not_be_blank")
+        return self
 
 
 ContextOmission = Literal[
@@ -446,6 +457,23 @@ class V2SearchDiagnostics(BaseModel):
     keyword_limit: int = Field(ge=1, le=100)
     vector_limit: int = Field(ge=0, le=100)
     relation_limit: int = Field(ge=0, le=50)
+    selection: "V2SelectionDiagnostics | None" = None
+
+
+class V2SelectionDiagnostics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    method: Literal["adaptive"] = "adaptive"
+    version: Literal["evidence-set-v1"] = "evidence-set-v1"
+    calibration_status: Literal["not_configured", "applied", "binding_mismatch"]
+    profile_id: str | None = Field(default=None, pattern=r"^sha256:[a-f0-9]{64}$")
+    stop_reason: Literal["no_candidates", "relevance_exhausted", "no_information_gain", "max_hits", "payload_budget", "candidates_exhausted"]
+    considered: int = Field(default=0, ge=0, le=250)
+    assessed: int = Field(default=0, ge=0, le=250)
+    rejected: int = Field(default=0, ge=0, le=250)
+    redundant: int = Field(default=0, ge=0, le=250)
+    facet_count: int = Field(default=0, ge=0, le=8)
+    observed_facet_indices: list[Annotated[int, Field(ge=0, le=7)]] = Field(default_factory=list, max_length=8)
+    coverage_assessment: Literal["unassessed"] = "unassessed"
 
 
 class V2SearchResponse(SearchResponse):

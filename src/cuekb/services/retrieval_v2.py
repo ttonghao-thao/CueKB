@@ -23,6 +23,7 @@ from cuekb.schemas import (
     V2BackendCalls, V2CandidateCounts, V2ContextPart, V2OmissionCounts,
     V2PayloadSizes, V2RelationEvidence, V2RerankerDiagnostics, V2SearchDiagnostics, V2SearchHit,
     V2SearchRequest, V2SearchResponse,
+    V2SelectionDiagnostics,
 )
 from cuekb.services.evidence import build_search_text, scope_matches
 from cuekb.services.execution import (
@@ -30,6 +31,10 @@ from cuekb.services.execution import (
     activate_execution, current_execution,
 )
 from cuekb.services.retrieval import QueryRouter, rrf
+from cuekb.services.selection import (
+    InformationSelector, LEXICAL_REVISION, SELECTION_REVISION, accepts, chunk_identifiers,
+    identifiers, literal_coverage, load_profile, runtime_binding, tokens,
+)
 
 T = TypeVar("T")
 ALGORITHM_REVISION = "evidence-ranking-v2.1"
@@ -55,6 +60,9 @@ def _hit_payload(hit: V2SearchHit) -> dict:
 def encode_v2_response(response: V2SearchResponse) -> bytes:
     """The route must send this exact buffer, without a second JSON encoder."""
     value = response.model_dump(mode="json")
+    if response.diagnostics.selection is None:
+        # Closed V2 clients opting out receive the established response shape.
+        value["diagnostics"].pop("selection", None)
     value["hits"] = [_hit_payload(hit) for hit in response.hits]
     return _encode(value)
 
@@ -85,6 +93,7 @@ class _Attempt:
     vector_limit: int = 50
     relation_limit: int = 30
     rerank_window: int = 30
+    selection: V2SelectionDiagnostics | None = None
 
 
 class V2RetrievalService:
@@ -99,6 +108,7 @@ class V2RetrievalService:
         self.reranker_configured = reranker_configured
         self.ranking_config = dict(ranking_config or {})
         self.router = QueryRouter(settings.exact_identifier_pattern)
+        self.relevance_profile = load_profile(settings.v2_relevance_profile_path)
 
     def search_evidence(
         self, request: V2SearchRequest, principal=None, execution: SearchExecution | None = None,
@@ -178,6 +188,9 @@ class V2RetrievalService:
             (not filters.document_ids or chunk.document_id in filters.document_ids)
             and (not filters.category or chunk.metadata.get("category") == filters.category)
             and scope_matches(chunk, filters.product_model, filters.software_version)
+            and (request.selection_mode != "adaptive"
+                 or not identifiers(request.selection_query or request.query)
+                 or bool(identifiers(request.selection_query or request.query) & chunk_identifiers(chunk)))
         )
 
     @staticmethod
@@ -200,6 +213,8 @@ class V2RetrievalService:
         query_vector: list[float] | None,
     ) -> list[float] | None:
         filters = {**request.filters.model_dump(), "_local_applicability": True}
+        if request.selection_mode == "adaptive":
+            filters["_query_identifiers"] = sorted(identifiers(request.selection_query or request.query))
 
         async def keyword():
             execution.record_call("keyword")
@@ -301,7 +316,8 @@ class V2RetrievalService:
                 if self._matches(chunk, request)
             }
             if state.path == "related" and discover_relations:
-                state.seeds = list(legal)[:100]
+                seed_scores = rrf(rankings)
+                state.seeds = sorted(legal, key=lambda item: (-seed_scores[item], str(item)))[:100]
                 try:
                     execution.record_call("relation")
                     with execution.stage("relation"):
@@ -320,9 +336,11 @@ class V2RetrievalService:
                     state.degraded.append("relation_unavailable")
             relation_ids = list(dict.fromkeys(row["chunk_id"] for row in state.relations))
             if relation_ids:
-                rankings.append(relation_ids)
+                relation_chunks = {c.id: c for c in repository.load_chunks(relation_ids, request.kb_ids)}
+                state.relations = self._rank_relations(state.relations, relation_chunks, request)
+                relation_ids = list(dict.fromkeys(row["chunk_id"] for row in state.relations))
             with execution.stage("fusion"):
-                state.scores = rrf(rankings)
+                state.scores = self._fuse(rankings, relation_ids)
                 candidate_ids = sorted(state.scores, key=lambda item: (-state.scores[item], str(item)))
             chunks = repository.load_chunks(candidate_ids, request.kb_ids)
             by_id = {chunk.id: chunk for chunk in chunks}
@@ -344,6 +362,24 @@ class V2RetrievalService:
                 if stage not in state.executed:
                     state.executed.append(stage)
             execution.checkpoint()
+
+    @staticmethod
+    def _fuse(rankings, relation_ids):
+        scores = rrf(rankings)
+        for item, bonus in rrf([relation_ids]).items():
+            # Relation provenance is correlated with direct recall. Bound its
+            # vote rather than pretending it is a third independent retriever.
+            scores[item] = scores.get(item, 0.0) + 0.5 * bonus
+        return scores
+
+    @staticmethod
+    def _rank_relations(rows, chunks, request):
+        query_words = tokens(request.selection_query or request.query)
+        def key(row):
+            chunk = chunks.get(row["chunk_id"])
+            overlap = len(query_words & tokens(chunk.source_text + " " + " ".join(chunk.title_path))) if chunk else 0
+            return -overlap, str(row["relation_id"]), str(row["chunk_id"]), row["stance"]
+        return sorted(rows, key=key)
 
     @staticmethod
     def _dedup(ordered: list[UUID], chunks: dict[UUID, Chunk]):
@@ -417,8 +453,6 @@ class V2RetrievalService:
             state.skipped.append({"stage": "rerank", "reason": "dependency_unavailable"})
 
     def _final_snapshot(self, request, state, principal, execution, retry_allowed):
-        from cuekb.services.context import assemble_context_v2
-
         with self._snapshot() as repository, execution.stage("final_validation"):
             self._authorize(repository, request, principal)
             self._binding_check(repository)
@@ -455,75 +489,170 @@ class V2RetrievalService:
                 rankings = [[item for item, _ in state.keyword]]
                 if state.path != "exact":
                     rankings.append([item for item, _ in state.vector])
-                rankings.append(list(dict.fromkeys(row["chunk_id"] for row in relations)))
-                state.scores = rrf(rankings)
+                relations = self._rank_relations(relations, current, request)
+                state.scores = self._fuse(rankings, list(dict.fromkeys(row["chunk_id"] for row in relations)))
                 ordered.sort(key=lambda item: (-state.scores[item], str(item)))
             state.omissions.stale_candidate += len(state.ordered) - len(ordered)
-            ordered = ordered[:request.top_k]
-            plans = []
-            remaining = self.settings.context_max_chars
             with execution.stage("context"):
-                # All necessary groups are reserved before a single optional
-                # neighbor can consume another hit's budget.
-                for item in ordered:
-                    execution.checkpoint()
-                    chunk = current[item]
-                    context_fn = getattr(repository, "context_chunks_v2", None)
-                    if context_fn:
-                        neighbors = context_fn(chunk, min(20, self.settings.context_max_chunks), include_optional=request.include_context)
-                    else:
-                        required = [link.chunk_id for link in chunk.evidence_structure.context_links]
-                        neighbors = repository.load_chunks(required, request.kb_ids)
-                        if request.include_context:
-                            neighbors += repository.context_chunks(chunk, self.settings.context_max_chunks)
-                    # Never depend on stale objects from candidate/reranker snapshots.
-                    ids = list(dict.fromkeys(c.id for c in neighbors if c.id != chunk.id))[:20]
-                    neighbors = repository.load_chunks(ids, request.kb_ids)
-                    assembly = assemble_context_v2(
-                        chunk, neighbors, min(remaining, self.settings.context_per_hit_chars),
-                        include_optional=request.include_context, max_chunks=self.settings.context_max_chunks,
-                        required_only=True,
-                    )
-                    remaining -= len(assembly.context)
-                    hit = self._hit(chunk, state, request, relations, assembly, len(plans) + 1)
-                    plans.append([hit, chunk, neighbors])
-                hits = [plan[0] for plan in plans]
-                maximum = min(request.max_evidence_bytes, self.settings.v2_max_evidence_bytes)
-                while hits and len(encode_v2_hits(hits)) > maximum:
-                    removed = plans.pop()
-                    remaining += len(removed[0].context or "")
-                    hits.pop()
-                    state.omissions.payload_budget_exhausted += 1
-                for index, (hit, chunk, neighbors) in enumerate(plans):
-                    if not request.include_context:
-                        continue
-                    budget = min(self.settings.context_per_hit_chars, remaining + len(hit.context or ""))
-                    assembly = assemble_context_v2(
-                        chunk, neighbors, budget, include_optional=True,
-                        max_chunks=self.settings.context_max_chunks, required_only=False,
-                    )
-                    expanded = self._hit(chunk, state, request, relations, assembly, hit.rank)
-                    trial = hits.copy()
-                    trial[index] = expanded
-                    if len(encode_v2_hits(trial)) <= maximum:
-                        remaining -= len(expanded.context or "") - len(hit.context or "")
-                        hits[index] = expanded
-                    elif expanded.context_parts != hit.context_parts:
-                        hit.context_truncated = True
-                        hit.context_state = "unresolved" if hit.context_state == "unresolved" else "truncated"
-                        hit.context_omissions = list(dict.fromkeys([*hit.context_omissions, "budget_omitted"]))
-                # State labels themselves cost bytes. Recheck the final exact
-                # buffer after all changes; source facts are never sliced.
-                while hits and len(encode_v2_hits(hits)) > maximum:
-                    hits.pop()
-                    state.omissions.payload_budget_exhausted += 1
-                for rank, hit in enumerate(hits, 1):
-                    hit.rank = rank
-                state.omissions.dependency_unresolved += sum(hit.context_state == "unresolved" for hit in hits)
-                state.omissions.scope_excluded += sum("unsafe_scope_excluded" in hit.context_omissions for hit in hits)
-                state.omissions.context_budget_omitted += sum("budget_omitted" in hit.context_omissions for hit in hits)
+                hits = self._select_groups(repository, request, state, current, ordered, relations, execution)
             execution.checkpoint()
             return hits, revisions
+
+    def _select_groups(self, repository, request, state, current, ordered, relations, execution):
+        from cuekb.services.context import assemble_context_v2
+
+        adaptive = request.selection_mode == "adaptive"
+        profile = self.relevance_profile
+        status = "not_configured"
+        if profile is not None:
+            status = "applied" if profile.binding == runtime_binding(self.ranking_config, self.model, state.path) else "binding_mismatch"
+            if status != "applied":
+                profile = None
+        if adaptive:
+            state.selection = V2SelectionDiagnostics(
+                calibration_status=status, profile_id=self.relevance_profile.fingerprint if self.relevance_profile else None,
+                stop_reason="no_candidates", considered=len(ordered), facet_count=len(request.query_facets),
+            )
+        selector = InformationSelector(request.selection_query or request.query, request.query_facets,
+                                       [current[item] for item in ordered])
+        # Batch-load all one-hop necessary identities in the final authority
+        # snapshot; optional neighborhoods are read only for selected groups.
+        dependency_ids = list(dict.fromkeys(link.chunk_id for item in ordered
+            for link in current[item].evidence_structure.context_links if link.required))
+        dependencies = {c.id: c for c in repository.load_chunks(dependency_ids, request.kb_ids)} if dependency_ids else {}
+        keyword, vector = dict(state.keyword), dict(state.vector)
+        related = {row["chunk_id"] for row in relations}
+        plans, costs = {}, {}
+        for position, item in enumerate(ordered):
+            execution.checkpoint()
+            if adaptive:
+                decision = accepts(profile, vector=vector.get(item), rerank=state.rerank_scores.get(item),
+                    lexical=literal_coverage(request.selection_query or request.query, current[item]),
+                    keyword=item in keyword, related=item in related)
+                state.selection.assessed += decision is not None
+                if decision is False:
+                    state.selection.rejected += 1
+                    continue
+            chunk = current[item]
+            neighbors = [dependencies[link.chunk_id] for link in chunk.evidence_structure.context_links
+                         if link.required and link.chunk_id in dependencies]
+            assembly = assemble_context_v2(
+                chunk, neighbors, self.settings.context_per_hit_chars,
+                include_optional=request.include_context, required_only=True,
+                max_chunks=self.settings.context_max_chunks,
+            )
+            hit = self._hit(chunk, state, request, relations, assembly, 1)
+            extra = "\n".join(part.source_text for part in assembly.parts if part.chunk_id != item and part.required)
+            plans[item] = (position, hit, selector.features(chunk, extra))
+            costs[position] = len(_encode(_hit_payload(hit)))
+        maximum = min(request.max_evidence_bytes, self.settings.v2_max_evidence_bytes)
+        selected, seen_parts, budget_skipped, redundant = [], set(), set(), set()
+        chars = 0
+        while plans and len(selected) < request.top_k:
+            execution.checkpoint()
+            choices = []
+            for item, (position, hit, features) in plans.items():
+                if adaptive and item in seen_parts:
+                    redundant.add(item)
+                    continue
+                gain = selector.gain(features, position) if adaptive else 1.0
+                if adaptive and gain > 0:
+                    gain += .5 * sum(part.required and part.chunk_id != item and part.chunk_id not in seen_parts
+                                     for part in hit.context_parts)
+                if gain <= 0:
+                    redundant.add(item)
+                    continue
+                # JSON array brackets/commas and the extra digit at ranks >=10
+                # are exact; avoid re-encoding up to 20 complete groups for each
+                # of the bounded 250 candidates on every greedy iteration.
+                count = len(selected) + 1
+                cost = 2 + sum(costs[p[0]] for p in selected) + costs[position] + count - 1 + max(0, count - 9)
+                if cost > maximum or chars + len(hit.context or "") > self.settings.context_max_chars:
+                    budget_skipped.add(item)
+                    continue
+                utility = gain / (1 + cost / maximum) if adaptive else -position
+                choices.append((utility, -position, item))
+            if not choices:
+                break
+            _, _, item = max(choices)
+            plan = plans.pop(item)
+            selected.append(plan)
+            chars += len(plan[1].context or "")
+            selector.add(plan[2])
+            seen_parts.update([item, *(part.chunk_id for part in plan[1].context_parts)])
+        selected.sort(key=lambda plan: plan[0])
+        hits = self._ordered_hits(selected)
+        state.omissions.payload_budget_exhausted += len(budget_skipped)
+        if adaptive:
+            state.selection.redundant = len(redundant)
+            state.selection.observed_facet_indices = sorted(set().union(*(f.facets for f in selector.selected)))
+            state.selection.stop_reason = (
+                "max_hits" if len(hits) >= request.top_k else
+                "payload_budget" if budget_skipped else
+                "no_information_gain" if redundant else
+                "relevance_exhausted" if not hits and state.selection.rejected else
+                "candidates_exhausted" if hits else "no_candidates"
+            )
+            state.executed.append("adaptive_selection")
+        # Required groups have all been reserved. Optional neighbors may consume
+        # only the remainder and cannot duplicate other returned evidence groups.
+        optional_seen = set(seen_parts)
+        for index, (position, _, _) in enumerate(selected):
+            execution.checkpoint()
+            if not request.include_context:
+                break
+            hit, chunk = hits[index], current[ordered[position]]
+            context_fn = getattr(repository, "context_chunks_v2", None)
+            neighbors = (context_fn(chunk, self.settings.context_max_chunks, include_optional=True)
+                         if context_fn else repository.context_chunks(chunk, self.settings.context_max_chunks))
+            required_ids = [link.chunk_id for link in chunk.evidence_structure.context_links if link.required]
+            if adaptive:
+                focused = []
+                for candidate in neighbors:
+                    features = selector.features(candidate, "")
+                    unit = chunk.evidence_structure.source_unit_id
+                    same_unit = bool(unit and unit == candidate.evidence_structure.source_unit_id)
+                    linked_condition = any(link.chunk_id == candidate.id and link.role in {"condition", "exception"}
+                                           for link in chunk.evidence_structure.context_links)
+                    if (candidate.id == chunk.id or candidate.id in required_ids or same_unit or linked_condition
+                            or selector.gain(features, position) > 0):
+                        focused.append(candidate)
+                neighbors = focused
+            ids = list(dict.fromkeys([*required_ids, *(c.id for c in neighbors
+                if not adaptive or c.id not in optional_seen or c.id == chunk.id)]))[:20]
+            neighbors = repository.load_chunks(ids, request.kb_ids)
+            assembly = assemble_context_v2(chunk, neighbors,
+                min(self.settings.context_per_hit_chars, self.settings.context_max_chars - chars + len(hit.context or "")),
+                max_chunks=self.settings.context_max_chunks)
+            expanded = self._hit(chunk, state, request, relations, assembly, hit.rank)
+            trial = hits.copy()
+            trial[index] = expanded
+            if len(encode_v2_hits(trial)) <= maximum:
+                chars += len(expanded.context or "") - len(hit.context or "")
+                hits[index] = expanded
+                optional_seen.update(part.chunk_id for part in expanded.context_parts)
+            elif expanded.context_parts != hit.context_parts:
+                # Marking an omission itself costs bytes; retain the required
+                # group if the annotation fits, otherwise count it in diagnostics.
+                marked = hit.model_copy(update={
+                    "context_truncated": True,
+                    "context_state": "unresolved" if hit.context_state == "unresolved" else "truncated",
+                    "context_omissions": list(dict.fromkeys([*hit.context_omissions, "budget_omitted"])),
+                })
+                trial[index] = marked
+                if len(encode_v2_hits(trial)) <= maximum:
+                    hits[index] = marked
+                else:
+                    state.omissions.context_budget_omitted += 1
+        state.omissions.dependency_unresolved += sum(hit.context_state == "unresolved" for hit in hits)
+        state.omissions.scope_excluded += sum("unsafe_scope_excluded" in hit.context_omissions for hit in hits)
+        state.omissions.context_budget_omitted += sum("budget_omitted" in hit.context_omissions for hit in hits)
+        return hits
+
+    @staticmethod
+    def _ordered_hits(plans):
+        return [hit.model_copy(update={"rank": rank})
+                for rank, (_, hit, _) in enumerate(sorted(plans, key=lambda plan: plan[0]), 1)]
 
     def _hit(self, chunk, state, request, relations, assembly, rank):
         stage_scores = {}
@@ -535,6 +664,8 @@ class V2RetrievalService:
                     stage_scores[name] = values[chunk.id]
             if chunk.id in state.rerank_scores:
                 stage_scores["rerank"] = state.rerank_scores[chunk.id]
+            if request.selection_mode == "adaptive":
+                stage_scores["lexical"] = literal_coverage(request.selection_query or request.query, chunk)
         source_ids = {
             "keyword": {item for item, _ in state.keyword},
             "vector": {item for item, _ in state.vector},
@@ -569,12 +700,15 @@ class V2RetrievalService:
         )
         value = {
             "algorithm_revision": ALGORITHM_REVISION, "rrf_constant": 60,
-            "weights": [1, 1, 1], "keyword_limit": state.keyword_limit,
+            "weights": [1, 1, 0.5], "keyword_limit": state.keyword_limit,
             "vector_limit": state.vector_limit, "relation_limit": state.relation_limit,
             "rerank_window": state.rerank_window,
-            "field_boosts": {"source_text": 3, "title_path": 1, "document_name": 0.25},
+            "field_boosts": {"source_text": 3, "title_path": 1, "scope_text": 1.5, "table_labels": 1, "document_name": 0.25},
+            "lexical_revision": LEXICAL_REVISION,
             "dedup": "exact-scope-document-version-dependencies-v1",
-            "selection": "required-groups-before-optional-v1",
+            "selection": SELECTION_REVISION if state.selection else "budget-backfill-v2",
+            "selection_profile": state.selection.profile_id if state.selection else None,
+            "selection_calibration": state.selection.calibration_status if state.selection else None,
             "rerank_enabled": self.settings.rerank_enabled,
             "reranker_configured": self.reranker_configured,
             "context_max_chunks": self.settings.context_max_chunks,
@@ -616,14 +750,19 @@ class V2RetrievalService:
             query_vector = await self._recall(request, state, execution, query_vector)
             await self._read(lambda: self._candidate_snapshot(request, state, principal, execution, True))
             filtered = state.counts.union - len(state.ordered)
+            missing_facets = (request.selection_mode == "adaptive" and any(
+                not any(tokens(facet) <= tokens(chunk.source_text) for chunk in state.chunks.values())
+                for facet in request.query_facets
+            ))
             can_refill = (
-                not execution.refill_used and filtered > 0 and len(state.ordered) < request.top_k
+                not execution.refill_used and ((filtered > 0 and len(state.ordered) < request.top_k) or missing_facets)
                 and execution.remaining_ms() >= self.settings.v2_refill_min_remaining_ms
                 and ((state.keyword_ok and state.keyword_limit < 100)
                      or (state.vector_ok and state.vector_limit < 100))
             )
             if can_refill:
                 execution.refill_used = True
+                state.skipped.append({"stage": "refill_trigger", "reason": "missing_literal_facet" if missing_facets else "filtered_candidates"})
                 state.keyword_limit = min(100, state.keyword_limit * 2)
                 if state.vector_limit:
                     state.vector_limit = min(100, state.vector_limit * 2)
@@ -664,6 +803,7 @@ class V2RetrievalService:
                     processing_profiles=sorted({hit.processing_profile for hit in hits}),
                     keyword_limit=state.keyword_limit, vector_limit=state.vector_limit,
                     relation_limit=state.relation_limit,
+                    selection=state.selection,
                 ),
             )
         raise RuntimeError("unreachable_version_retry")

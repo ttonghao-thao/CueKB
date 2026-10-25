@@ -1,0 +1,29 @@
+{
+  "filters": {
+    "category": null,
+    "document_ids": [],
+    "product_model": "A",
+    "software_version": null
+  },
+  "include_context": true,
+  "include_diagnostics": false,
+  "kb_ids": [
+    "11111111-1111-4111-8111-111111111111"
+  ],
+  "max_evidence_bytes": 48000,
+  "mode": "exact",
+  "query": "Input voltage",
+  "query_facets": [
+    "voltage"
+  ],
+  "relations": {
+    "at": null,
+    "direction": "outgoing",
+    "entity_ids": [],
+    "types": []
+  },
+  "request_id": "contract-example",
+  "selection_mode": "adaptive",
+  "selection_query": null,
+  "top_k": 20
+}

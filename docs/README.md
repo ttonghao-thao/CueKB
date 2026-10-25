@@ -1,6 +1,6 @@
 # 文档导航
 
-当前规范更新于2026-10-24。源码、初始化schema和生成契约共同描述实现；测试结论以[任务板](../TASK_BOARD.md)为准。
+当前规范更新于2026-10-25。源码、初始化schema和生成契约共同描述实现；测试结论以[任务板](../TASK_BOARD.md)为准。
 
 | 阅读目的 | 主文档 |
 | --- | --- |
@@ -13,9 +13,10 @@
 | 全新部署、备份、索引与排错 | [操作手册](OPERATIONS.md) |
 | Embedding和可选Reranker协议 | [模型接入](MODEL_INTEGRATION.md) |
 | 质量、更新一致性和10并发测量方法 | [验收方法](ACCEPTANCE.md) |
-| 自动关联独立离线实验 | [实验说明](../experiments/associations/README.md)、[后续研究方案](plans/AUTOMATIC_ASSOCIATION.md) |
+| 动态选择、相关性门控和校准操作 | [系统设计](SYSTEM_DESIGN.md#41-动态证据选择)、[操作手册](OPERATIONS.md#7-相关性校准配置) |
+| 自动关联独立离线实验 | [实验说明](../experiments/associations/README.md) |
 | 已接受的架构决策 | [DECISIONS](../DECISIONS.md) |
 | 机器可读契约 | [OpenAPI](contracts/openapi.json)、[V2请求Schema](contracts/search-v2-request.schema.json)、[V2响应Schema](contracts/search-v2-response.schema.json) |
 | 可校验的合成示例 | [请求](examples/search-v2-request.json)、[响应](examples/search-v2-response.json) |
 
-本轮删除了已被实现替代的计划与旧归档副本，保留远端独立离线关联实验及其研究方案，避免其字段、能力和进度与当前规范冲突；历史变更可用Git追溯。每项事实在上表主文档维护，不复制为另一套接口或验收结论。
+已被实现替代的审查方案和使用旧源码基线的关联研究方案已删除，当前能力与操作以上表主文档为准；独立离线实验保留实际可运行说明。历史设计用Git追溯，不再维护与当前实现冲突的副本。每项事实只在其主文档维护。

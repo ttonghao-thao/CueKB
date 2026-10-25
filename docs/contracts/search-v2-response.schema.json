@@ -768,6 +768,17 @@
         "reranker": {
           "$ref": "#/$defs/V2RerankerDiagnostics"
         },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/V2SelectionDiagnostics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "sizes": {
           "$ref": "#/$defs/V2PayloadSizes"
         },
@@ -993,6 +1004,114 @@
         "context_state"
       ],
       "title": "V2SearchHit",
+      "type": "object"
+    },
+    "V2SelectionDiagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "assessed": {
+          "default": 0,
+          "maximum": 250,
+          "minimum": 0,
+          "title": "Assessed",
+          "type": "integer"
+        },
+        "calibration_status": {
+          "enum": [
+            "not_configured",
+            "applied",
+            "binding_mismatch"
+          ],
+          "title": "Calibration Status",
+          "type": "string"
+        },
+        "considered": {
+          "default": 0,
+          "maximum": 250,
+          "minimum": 0,
+          "title": "Considered",
+          "type": "integer"
+        },
+        "coverage_assessment": {
+          "const": "unassessed",
+          "default": "unassessed",
+          "title": "Coverage Assessment",
+          "type": "string"
+        },
+        "facet_count": {
+          "default": 0,
+          "maximum": 8,
+          "minimum": 0,
+          "title": "Facet Count",
+          "type": "integer"
+        },
+        "method": {
+          "const": "adaptive",
+          "default": "adaptive",
+          "title": "Method",
+          "type": "string"
+        },
+        "observed_facet_indices": {
+          "items": {
+            "maximum": 7,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 8,
+          "title": "Observed Facet Indices",
+          "type": "array"
+        },
+        "profile_id": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile Id"
+        },
+        "redundant": {
+          "default": 0,
+          "maximum": 250,
+          "minimum": 0,
+          "title": "Redundant",
+          "type": "integer"
+        },
+        "rejected": {
+          "default": 0,
+          "maximum": 250,
+          "minimum": 0,
+          "title": "Rejected",
+          "type": "integer"
+        },
+        "stop_reason": {
+          "enum": [
+            "no_candidates",
+            "relevance_exhausted",
+            "no_information_gain",
+            "max_hits",
+            "payload_budget",
+            "candidates_exhausted"
+          ],
+          "title": "Stop Reason",
+          "type": "string"
+        },
+        "version": {
+          "const": "evidence-set-v1",
+          "default": "evidence-set-v1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "calibration_status",
+        "stop_reason"
+      ],
+      "title": "V2SelectionDiagnostics",
       "type": "object"
     }
   },

@@ -1,6 +1,6 @@
 # 验收与评测方法
 
-更新：2026-10-24。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
+更新：2026-10-25。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
 
 ## 1. 本地与数据库验证
 
@@ -30,13 +30,14 @@ sh -n scripts/deploy-production.sh
 | --- | --- |
 | Recall@K | K为最终hit上限；hit与其合法context_parts形成返回证据组，命中gold必要单元数/必要单元总数；等价ID不重复计数 |
 | MRR | 第一条命中任意gold单元的hit组名次倒数；有gold但失败/空结果计0 |
-| 证据完整率 | 所有必要单元同时返回的有gold问题比例；不等于系统自动充分性判定 |
+| 证据完整率 | 所有必要单元同时返回；gold_plans可声明多个OR替代方案，每个方案unit_ids为AND；context_state=unresolved组不计完整覆盖，不等于系统自动充分性判定 |
 | 无答案效果 | 人工无答案集统计not_found正确识别、误有答案、错误/降级；高分不作为充分性标签 |
 | 归属与事实保持 | 人工检查产品/版本、表头、数值、单位、比例、否定及限定条件，无误归属或编造 |
 | 延迟与稳定性 | 所有请求（含错误）P50/P95/P99、HTTP错误/超时、吞吐、资源占用；同时检查并发质量变化 |
 | 负载 | 返回hits精确bytes、正文及context大小、省略原因；语音模型实际注入token另测 |
+| 动态选择 | 同预算下实际返回precision、平均条数/字节、Recall与完整率，停止原因及校准状态；不能仅靠多返回内容宣称改进 |
 
-验收阈值应在目标语料和业务风险下确认；当前没有经过实测的通用通过阈值。单元测试中的无答案只能验证状态规则；BM25/RRF未校准时，不能保证低相关即自动空结果。冲突证据可以并列返回，系统不自动裁决新旧或真伪。
+验收阈值应在目标语料和业务风险下确认；当前没有经过实测的通用通过阈值。相关性校准先按独立family划分calibration/test，拟合方法见[操作手册](OPERATIONS.md#7-相关性校准配置)。对比ranked、adaptive无校准及adaptive已校准，并分别跑无Reranker/有Reranker；逐项消融词法字段、预算替补、覆盖选择和门控。单元测试只验证算法规则，未校准不能保证低相关即空结果。冲突证据可以并列返回，系统不自动裁决新旧或真伪。
 
 ## 4. 可执行质量与10并发工具
 
@@ -46,7 +47,9 @@ sh -n scripts/deploy-production.sh
 {"sample_id":"voltage","request":{"query":"Input voltage","kb_ids":["11111111-1111-4111-8111-111111111111"],"mode":"hybrid","top_k":8},"gold_evidence":[{"unit_id":"voltage-with-condition","chunk_ids":["55555555-5555-4555-8555-555555555555"]}],"forbidden_chunk_ids":[],"expected_status":"ok"}
 ```
 
-`chunk_ids`是一个单元的等价证据ID列表；多个必要单元分开列出。无答案题可用空gold和expected_status=not_found，同时人工检查假阳性。forbidden_chunk_ids可标记过期、错误产品或撤权证据。gold不能通过同名产品无版本地匹配。
+chunk_ids是一个单元的OR等价ID列表；事实、必要条件分别列为AND单元，不能把它们误填为等价项。可选gold_plans形如`[{"unit_ids":["fact","condition"],"document_ids":["来源文档UUID"]},{"unit_ids":["complete-alternative"]}]`，方案之间OR，方案内AND。未提供时所有gold单元均必需。完整率排除unresolved上下文，普通Recall仍统计实际返回ID；不能把一个孤立高分块算成完整证据。
+
+无答案题设置answerable=false、空gold及expected_status=not_found；有答案题设置answerable=true，分别计算误收和空返率。forbidden_chunk_ids可标记过期、错误产品或撤权证据；未标负例需人工检查。gold不能通过同名产品无版本地匹配。precision_returned采用与离线关联实验相同的最大匹配口径，重复等价单元不会多得分；一组含多个必要单元时完整率与precision口径需分别理解。
 
 在安全环境设置`CUEKB_TEST_API_KEY`为专用read Key后：
 
