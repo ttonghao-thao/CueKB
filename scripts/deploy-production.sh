@@ -45,7 +45,7 @@ while :; do
   sleep 3
 done
 
-bootstrap_key=$(sed -n 's/^CUEKB_BOOTSTRAP_API_KEY=//p' "$env_file")
-curl --fail-with-body --retry 20 --retry-delay 3 \
-  -H "Authorization: Bearer $bootstrap_key" \
+# Readiness is public. Keep this probe compatible with older host curl versions.
+curl --fail --silent --show-error --retry 20 --retry-delay 3 \
+  --connect-timeout 3 --max-time 10 \
   http://127.0.0.1:8085/v1/ready

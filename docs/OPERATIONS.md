@@ -28,7 +28,7 @@ chmod 600 .env.production
 
 自定义镜像标签须写入env中的`CUEKB_API_IMAGE`/`CUEKB_WORKER_IMAGE`。部署脚本只做Compose检查及`up --no-build`，不自动构建或拉取应用镜像。PostgreSQL首次在空数据目录启动时自动初始化当前完整结构；API/Worker等待PG和OS健康后启动。健康检查不代表模型质量已验收。
 
-检查`GET /v1/health`、`GET /v1/ready`与`/portal/`。生产业务API使用Bearer Key；健康和ready公开但不返回凭据。创建业务Key并授予目标KB read/write/admin，第三方查询不要使用bootstrap。
+检查`GET /v1/health`、`GET /v1/ready`与`/portal/`。部署脚本的宿主机探针使用兼容旧版curl的`--fail --silent --show-error`，带连接/单次请求超时及有界重试。旧脚本若报`--fail-with-body: is unknown`，将该选项替换为`--fail --show-error`后重跑脚本即可，无需为此重建应用镜像。生产业务API使用Bearer Key；健康和ready公开但不返回凭据。创建业务Key并授予目标KB read/write/admin，第三方查询不要使用bootstrap。
 
 知识库通过Portal的“知识库管理”或`python -m cuekb.admin ... kb create`创建；命令复用HTTP API，不直接写数据库。创建、列举、业务Key签发和授权的可执行命令，以及第三方所需的Base URL、业务Key和KB UUID，统一见[接入说明](INTEGRATION_GUIDE.md#6-创建知识库与第三方配置)。更新应用后须重新构建API镜像才能使用新页面及命令模块。
 
