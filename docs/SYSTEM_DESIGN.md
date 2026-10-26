@@ -1,6 +1,6 @@
 # 当前系统设计
 
-更新：2026-10-25。本文是当前架构与设计的主文档；接口字段在[接口规范](API_GUIDE.md)，验证方法在[验收方法](ACCEPTANCE.md)，实际需求复核/验证结果及未验收项只在[任务板](../TASK_BOARD.md)维护。全部CueKB接口、处理链与验证统一为V2。
+更新：2026-10-26。本文是当前架构与设计的主文档；接口字段在[接口规范](API_GUIDE.md)，验证方法在[验收方法](ACCEPTANCE.md)，实际需求复核/验证结果及未验收项只在[任务板](../TASK_BOARD.md)维护。全部CueKB接口、处理链与验证统一为V2。
 
 ## 1. 模块与权威边界
 
@@ -43,7 +43,7 @@ applicability仅在可信映射或审核别名与结构匹配时resolved；未�
 
 ### 3.1 归属审核与必要章节
 
-evidence-v2.3将产品判定与结构依赖分开。Worker按真实章节边界生成section，重复同名章节保留独立身份；表格逐行使用独立source_unit_id，续块共享该行的源单元。内部parser_unit_key及冻结的origin_unit_aliases用于重处理定位，restore同时重映射关系两端的来源ID，不能把旧块ID当作新事实。
+evidence-v2.4将产品判定与结构依赖分开。Worker按真实章节边界生成section，重复同名章节保留独立身份；表格逐行使用独立source_unit_id，续块共享该行的源单元。内部parser_unit_key及冻结的origin_unit_aliases用于重处理定位，restore同时重映射关系两端的来源ID，不能把旧块ID当作新事实。
 
 自动必要关系只识别原文中显式的中英文章节引用及能确定类型的适用范围/条件/例外标题，含数字章节号。独立条件标题、位置相邻或正文提及产品都不会自动产生依赖。缺失/重名引用、数量溢出、循环或明确归属冲突保留未解决诊断；不递归读取全文。其他语种、隐含语义及任意远距指代由审核配置补齐，不宣称自动理解。
 
@@ -51,9 +51,27 @@ evidence-v2.3将产品判定与结构依赖分开。Worker按真实章节边界�
 
 ContextLink.provenance记录parser_reference、curated或parser_continuation及两端源单元；原文引用还必须存在于主块原文。只有这些来源可核验的必要关系可以连接unknown块，且仍拒绝跨KB/document/version、ambiguous、明确产品或条件冲突。普通近邻不因unknown而放开。返回context_parts携带每块自己的applicability与link_provenance，不继承主事实的产品归属。
 
-审核接口在写权限与同一PG读快照中读取包括ready版本的事实，返回全版本汇总和有界分页、当前可重用的映射配置。门户默认先ready后审核；发布前提示unknown/冲突/未完整依赖，可由用户确认通用资料后发布。显式auto_publish仍是跳过人工审核的选择，不表示通过归属或质量认证。
+审核接口在写权限与同一PG读快照中读取包括ready版本的事实，返回全版本汇总和有界分页、当前可重用的映射配置。门户默认先ready后审核；发布必须通过服务端资格校验，auto_publish遵守同一规则，有阻塞则保持ready并显示needs_review。归属unknown不等于未审核，已确认的通用资料仍可发布。
 
 `search_text`可加入可信标题/产品/表头以改善召回，原文不改写。Embedding、generation与rerank输入复用同一模板构造函数；缺少有效模板标识的索引明确拒绝，不按另一种处理方式猜测文本。
+
+### 3.2 规则导入与选择式审核
+
+`fact_rules.py`复用冻结产品目录，按标题、列表、句内明确主体与表格产品轴处理。TXT可检测Markdown标记及编号标题；text_mode=plain关闭标题探测。列表按源事实拆分，条件引导段保留；只有每个子句都有明确主体才自动按分号/句界拆分多产品段。多产品列拆为带产品标题、行名和值的独立证据，原始spans保留来源，不重复附带其他产品值。
+
+事实拥有独立source_unit_id、parser_unit_key及parent_unit_id。适用范围与审核状态独立：`applicability=resolved/unknown/ambiguous`；`review_state=pending/rule_confirmed/human_confirmed/deferred/excluded`。fact_kind区分statement/specification/comparison/bundle/general。通用资料可unknown且已确认；套件使用独立bundle实体，组件不继承其规格或价格。无型号产品可按稳定product_entity_id过滤，不需要虚构型号；身份、型号与软件版本同时提供时须命中同一个主体。比较事实需明确确认，保留比较原文而不抽成单品属性。原文明示Both/均等共同范围且具有共同属性/约束的结论可由用户确认多个主体；分别赋值或混合规格不允许借此确认。
+
+明确的审核映射、唯一结构产品、可验证的句内产品属性可以rule_confirmed；多产品或套件身份不明转待办。型号匹配保留字母数字边界，A100不匹配A1000；模糊猜测不构成归属。所用规则为scope-rules-1，不调用LLM、不自动训练。KB可保存版本化processing_templates，配置精确通用章节标题、领域属性词及文本模式；处理任务冻结模板内容和修订，更新模板/目录不改变旧版本。模板不执行自定义代码。
+
+ready事务创建review_plan及review_facts，保存完整的不可变初始事实和可编辑草稿。显式创建接口复用该计划；无需再次解析，202返回当前计划。审核UI显示原文、位置、产品/数值、疑点、最多5个候选及操作，按待办或全部事实分页。用户选择目录产品、通用资料、拆分范围、比较/套件身份及必要条件，常规操作无需JSON、源ID或自由填写。新产品信息可预填；目录新增/批量导入及模板写入沿用KB admin，审核与应用为KB write。
+
+决定按plan revision进行乐观锁校验，一批最多100项且事务原子提交；追加review_decisions记录认证主体/Key、选择、时间与修订。撤回追加新决定；拆分覆盖所有非空原文，不能编辑值或丢掉中间限定。排除只移除新版本检索事实，保留原件和审计；排除必要条件仍阻塞主事实。拆分已有依赖的事实须先通过当前结构/高级配置保存完整关系，不能用拆分清除依赖警告。
+
+apply锁定计划并校验全部事实，冻结manifest摘要，复用PG幂等重处理任务。内部快照仅引用不可变manifest及hash，不把数千事实挤进100条scope_bindings；客户端不能注入manifest。Worker校验hash、同KB/文档/版本，复制已审核事实到新ID空间并重映射关系端点。无需为每次点击启动Embedding，草稿不改变已发布正文。已应用计划不能继续改写；重复apply返回同一Job。结构升级应重新解析，不能把旧候选ID静默套在新范围。
+
+发布在同一PG事务检查所有非排除事实：必须已确认、无归属冲突、无缺失必要依赖，未知主体须为已确认通用角色；至少一个事实可检索。直接API、UI、auto_publish与restore均遵守门槛。直接API/审核写入复验Key与ACL，自动发布复验任务主体当前写权限。新ready版本在显式publish前不切换原发布指针。
+
+门户支持本页确认及跨页筛选集合。跨页操作先在PG冻结fact_ids、digest和revision，每次应用最多100项并原子保存进度；操作类型固定，重复请求续接进度。中途其他决定改变revision时停止并保留已完成批次，不能扩大到后来进入筛选的事实。每计划最多100个冻结集合。候选不足时可搜索最多1000项的有界目录、切换全部事实、采用高级章节映射或替换原件；未实现任意自然语言推理或远距指代。原件解析在Worker独立进程中受180秒默认时限约束，超时终止子进程并明确失败。
 
 ## 4. V2请求链路
 
@@ -90,7 +108,7 @@ PG驱动为同步psycopg：V2将一个完整读批次放入有执行上下文的
 
 ## 6. generation与升级
 
-generation维护锁阻止内容写入，查询继续。重建读取PG已存事实，记录build_source_profiles及其聚合标识，不重新解析原件。新投影带V2词法/局部归属字段、scope_text/table_labels/identifier_terms、`lexical_revision=scope-lexical-v2.2`及输入模板revision。验证完成后同一PG事务切换物理index、模型配置及revision。新字段由PG已冻结的结构与别名生成，不从查询或任意metadata猜归属。
+generation维护锁阻止内容写入，查询继续。重建读取PG已存事实，记录build_source_profiles及其聚合标识，不重新解析原件。新投影带V2词法/局部归属字段、applicable_entity_ids/fact_kind、scope_text/table_labels/identifier_terms、`lexical_revision=scope-lexical-v2.3`及输入模板revision。验证完成后同一PG事务切换物理index、模型配置及revision。新字段由PG已冻结的结构与别名生成，不从查询或任意metadata猜归属。
 
 解析/归属升级先重处理、人工检查并publish；Embedding/投影升级再generation。旧投影缺少V2字段时，V2返回INDEX_UPGRADE_REQUIRED而不假装已使用新路径。旧配置rollback也重建当前PG事实，不将旧index直接当成当前内容。
 

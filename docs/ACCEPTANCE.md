@@ -1,6 +1,6 @@
 # 验收与评测方法
 
-更新：2026-10-25。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
+更新：2026-10-26。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
 
 ## 1. V2完整验证
 
@@ -94,7 +94,7 @@ chunk_ids是一个单元的OR等价ID列表；事实、必要条件分别列为A
 
 ### 4.3 用户Monkey月饼语料复验
 
-`scripts/validate-monkey-corpus.py`固定用户提供的原始TXT hash与evidence-v2.3处理修订；原始文件不随仓库分发。脚本在专用本地PG中新建随机schema、在本地OS中新建随机前缀索引，启动真实API/Worker，结束后删除自己的schema/索引并停止子进程。数据库与OS必须使用loopback地址，不得指向业务实例；输出目录必须尚不存在。
+`scripts/validate-monkey-corpus.py`固定用户TXT的SHA256，运行当前test_choice_review与test_choice_transports。原件不入库分发。专用本地PG/OS必须为loopback，测试创建/删除独立schema/index；输出目录必须不存在。运行需dev、api依赖；实际DOCX解析另需ingestion依赖及CPU Torch。缺少依赖产生skip，脚本将skip判为未完整通过。
 
 ```sh
 CUEKB_TEST_DATABASE_URL=postgresql+psycopg://cuekb@127.0.0.1:5432/cuekb_test \
@@ -104,13 +104,11 @@ CUEKB_TEST_DATABASE_URL=postgresql+psycopg://cuekb@127.0.0.1:5432/cuekb_test \
   --output /tmp/cuekb-monkey-validation
 ```
 
-脚本先录制未映射结果，再按人工逐段标注重处理，保留品牌公共资料的unknown身份。覆盖必要的过敏原/配送/虚构联系方式条件、发布、下载原件与位置一致性、跨产品过滤、关系出处、generation重建与切换、restore、预算、撤权及OS投影尚未删除时的最终可见性。25个有答案场景分为exact原文短语、hybrid、adaptive、本地测试重排与Embedding故障后的真实BM25降级；exact与其他路径使用不同表达，不能把它们当成同query算法对照。
+覆盖A100/A200/套件隔离、型号边界、编号TXT与多产品表格列、真实DOCX、审核原子性/修订/ACL、草稿与应用幂等、跨页集合/部分进度/修订冲突、Setext及数值列表、拆分覆盖/撤回、排除必要条件、模板快照及目录批量回滚、解析进程时限。真实PG+OS+HTTP查询验证exact/hybrid/adaptive及Embedding故障后的BM25路径，检查主事实和全部context_parts。模型使用本机8维固定向量夹具，只验证真实协议/过滤，不作语义质量结论。
 
-Embedding与Reranker均为仅在本地运行的确定性协议fixture，向量为256维带符号词hash；它们只验证协议、真实BM25/k-NN和完整处理流程，不验证神经语义模型、跨语言召回或重排质量。无答案、中文查询英文材料和误用exact的探针单独保存。正例gold标注必要证据与少量等价单元，未穷举全部相关段落；因此不能把precision_returned当作业务相关性精度。测试deadline为5000ms，单请求闭环，不作生产900ms或10并发达标结论。
+月饼用例基于内容检查，不依赖旧ordinal 47：单品100g/42元/45天与混合礼盒分开，鲜肉产品过滤不得带入蛋黄规格。为聚焦该回归，未被规则确认的其他材料被明确排除于新派生版本，原始草稿保留；这不表示整份语料已通过业务精度验收。完整语料仍需人工标注主体、限定与相关性，加入多个产品家族并隔离开发/验收文档。自动确认覆盖率与误归属率分别报告，不以Recall高替代污染检查。
 
-独立业务断言检查双产品源单元是否将蛋黄100g/42元规格带入鲜肉产品filter；发现时在summary.business_findings、failed_checks记录并退出非零。gold覆盖与块标签一致性不能替代事实级归属验收，修复状态见任务板。
-
-输出summary.json、checks.json、review.json、frozen-cases.jsonl、quality.jsonl及responses.jsonl；后者包含用户语料原文，只保存在受控测试目录，不自动提交。场景、标注与重跑方法在脚本维护，当前实测结果在任务板维护。这里只覆盖原始TXT，DOCX/PDF/OCR及真实模型按各自验收另行执行。
+输出pytest.log、results.xml、summary.json，包含原件hash/处理修订/范围/通过与skip计数。测试日志可能包含片段，保留在受控目录，不自动提交。新脚本替代旧修订按段落ordinal映射的验证方式；历史665管线通过及业务失败记录用Git追溯，不视为当前质量结论。真实模型、跨语言、复杂PDF/OCR及生产并发性能仍按独立验收执行。
 
 ## 5. 端到端独立验收
 
@@ -128,6 +126,6 @@ CueKB验收只证明本次返回的原文证据。voice-service-agent必须独�
 4. 必要依赖缺失显示unresolved提示；正常not_found空结果与请求错误分别表达，充分性保持unassessed。
 5. 在V2的ranked/adaptive间切换；ranked不携带动态专用输入，原文与必要上下文保持可见。最后关闭测试标签页和隔离服务。
 
-归属审核回归见tests/test_scope_review.py、tests/test_scope_review_postgres.py和门户Node用例。真实浏览器需覆盖：初始全文unknown、单产品全文确认、多产品章节/表格行分别绑定、必要关系来源、重处理新版本、发布警告取消与确认。验证新版本ready期间原发布指针不变，发布后新事实/来源生效，恢复后再次重处理仍能定位当前源单元。
+归属审核回归见tests/test_scope_review.py、tests/test_scope_review_postgres.py和门户Node用例。真实浏览器需覆盖：待办候选、产品/通用资料/必要关系选择、多产品事实/表格列隔离、跨页冻结集合与进度、重处理新版本、服务端发布阻塞及正常发布。验证新版本ready期间原发布指针不变，发布后新事实/来源生效，恢复后再次重处理仍能定位当前源单元。
 
 安全与失败场景包括：缺少/未匹配/冲突的归属原因；未知条件通过可信直接关系补入而不改变产品身份；普通unknown近邻、跨产品/版本、伪造来源、删除后依赖均排除；重复同名章节不猜测、数字章节号不截断、缺失引用显式unresolved、超过20依赖不报完整。人工未匹配定位/环应使任务确定失败，不因重试变为成功。审核接口验证write权限、版本归属、分页及汇总，不能泄露完整实体快照。

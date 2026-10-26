@@ -187,7 +187,7 @@ class V2RetrievalService:
         return (
             (not filters.document_ids or chunk.document_id in filters.document_ids)
             and (not filters.category or chunk.metadata.get("category") == filters.category)
-            and scope_matches(chunk, filters.product_model, filters.software_version)
+            and scope_matches(chunk, filters.product_model, filters.software_version, filters.product_entity_id)
             and (request.selection_mode != "adaptive"
                  or not identifiers(request.selection_query or request.query)
                  or bool(identifiers(request.selection_query or request.query) & chunk_identifiers(chunk)))
@@ -682,6 +682,7 @@ class V2RetrievalService:
             score=state.rerank_scores.get(chunk.id, state.scores[chunk.id]),
             score_type="rerank" if state.rerank_scores else "rrf", stage_scores=stage_scores,
             applicability=chunk.evidence_structure.applicability,
+            fact_kind=chunk.evidence_structure.fact_kind,
             dependency_issues=chunk.evidence_structure.dependency_issues,
             source_spans=chunk.source_spans, context_state=assembly.state,
             context_omissions=assembly.omissions, context_truncated=assembly.truncated,

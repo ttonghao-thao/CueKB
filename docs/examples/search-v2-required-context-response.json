@@ -36,7 +36,7 @@
       "stale_candidate": 0
     },
     "processing_profiles": [
-      "evidence-v2:f1c72b46b213a949d722102e5cd8a4b4fc56579bef5e2d47b4d82518a817f7f1"
+      "evidence-v2:73d47cc4507b2a5caea9bec1bad49dcef05d3a857091da3bb256257a3f58d225"
     ],
     "relation_limit": 0,
     "reranker": {
@@ -49,7 +49,7 @@
       "context_chars": 87,
       "context_parts_bytes": 85,
       "context_parts_chars": 85,
-      "hits_bytes": 4006,
+      "hits_bytes": 4034,
       "source_text_bytes": 52,
       "source_text_chars": 52
     },
@@ -240,10 +240,11 @@
       "dependency_issues": [],
       "document_id": "33333333-3333-4333-8333-333333333333",
       "document_name": "Illustrative manual",
+      "fact_kind": "specification",
       "metadata": {
         "business_version": null
       },
-      "processing_profile": "evidence-v2:f1c72b46b213a949d722102e5cd8a4b4fc56579bef5e2d47b4d82518a817f7f1",
+      "processing_profile": "evidence-v2:73d47cc4507b2a5caea9bec1bad49dcef05d3a857091da3bb256257a3f58d225",
       "rank": 1,
       "relations": [],
       "retrieval_sources": [
@@ -296,7 +297,7 @@
     }
   ],
   "ranking_method": "keyword_rrf",
-  "ranking_version": "sha256:8cbed71167b5275ebe957bba7517783c8a0a9f9489ffcc86fd09c8087bb8cf83",
+  "ranking_version": "sha256:e590f84099526e2bdcd499c80443de2f57824ef155b29714e33f98315ada5d29",
   "request_id": "required-context-example",
   "retrieval_path": "exact",
   "retrieval_status": "ok",

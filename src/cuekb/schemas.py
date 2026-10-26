@@ -86,6 +86,7 @@ class SearchFilters(BaseModel):
 
     document_ids: list[UUID] = Field(default_factory=list)
     product_model: str | None = None
+    product_entity_id: UUID | None = None
     software_version: str | None = None
     category: str | None = None
 
@@ -153,6 +154,8 @@ RelationType = Literal[
 class EntityWrite(BaseModel):
     name: str = Field(min_length=1, max_length=200, pattern=r"\S")
     kind: str = Field(default="term", min_length=1, max_length=100)
+    product_model: str | None = Field(default=None, min_length=1, max_length=200)
+    software_version: str | None = Field(default=None, min_length=1, max_length=200)
     aliases: list[str] = Field(default_factory=list, max_length=50)
     mention_chunk_ids: list[UUID] = Field(default_factory=list, max_length=100)
 
@@ -303,6 +306,7 @@ class V2SearchHit(BaseModel):
     score_type: Literal["rrf", "rerank"]
     stage_scores: dict[str, FiniteFloat] = Field(default_factory=dict)
     applicability: Applicability = Field(default_factory=Applicability)
+    fact_kind: Literal["statement", "specification", "comparison", "bundle", "general"] = "statement"
     dependency_issues: list[DependencyIssue] = Field(default_factory=list, max_length=5)
     source_spans: list[SourceSpan] = Field(default_factory=list, max_length=64)
     processing_profile: str
@@ -512,6 +516,8 @@ class ReprocessRequest(BaseModel):
     document_default: CuratedScopeInput | None = None
     dependency_bindings: list[SectionDependencyInput] = Field(default_factory=list, max_length=100)
     auto_publish: bool = False
+    text_mode: Literal["auto", "plain"] = "auto"
+    processing_template_id: UUID | None = None
 
 
 class RestoreRequest(BaseModel):
@@ -527,6 +533,8 @@ class V2DocumentMetadata(BaseModel):
     scope: dict[str, Any] = Field(default_factory=dict)
     document_id: UUID | None = None
     auto_publish: bool = False
+    text_mode: Literal["auto", "plain"] = "auto"
+    processing_template_id: UUID | None = None
 
     scope_bindings: list[ScopeBindingInput] = Field(default_factory=list, max_length=100)
     document_default: CuratedScopeInput | None = None
@@ -594,6 +602,137 @@ class ProcessingReview(BaseModel):
     offset: int = Field(ge=0)
     limit: int = Field(ge=1, le=100)
     items: list[ProcessingReviewItem] = Field(max_length=100)
+    publish_eligible: bool = False
+    blocking_facts: int = Field(default=0, ge=0)
+    review_plan_id: UUID | None = None
+
+
+class ReviewPlanCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ReviewChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entity_id: UUID
+    display_name: str
+    product_model: str | None = None
+    software_version: str | None = None
+    kind: str = "product"
+
+
+class ReviewFact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    source_chunk_id: UUID
+    source_text: str
+    title_path: list[str]
+    anchor: SourceAnchor
+    applicability: Applicability
+    fact_kind: str
+    review_state: str
+    reason: str
+    candidates: list[ReviewChoice] = Field(max_length=5)
+    dependencies: list[UUID] = Field(default_factory=list, max_length=20)
+    dependency_candidates: list[UUID] = Field(default_factory=list, max_length=5)
+    dependency_choices: list[dict[str, Any]] = Field(default_factory=list, max_length=5)
+    dependency_issues: list[str] = Field(default_factory=list, max_length=5)
+    # Character ranges refer to this exact source_text; values are never editable.
+    split_suggestions: list[tuple[int, int]] = Field(default_factory=list, max_length=50)
+
+
+class ReviewPlanInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    document_id: UUID
+    version_id: UUID
+    kb_id: UUID
+    revision: int
+    status: Literal["draft", "applied"]
+    total: int
+    counts: dict[str, int]
+    blocking: int
+    publish_eligible: bool
+    rule_revision: str
+    applied_job_id: UUID | None = None
+    reason_counts: dict[str, int] = Field(default_factory=dict)
+    sections: list[dict[str, str]] = Field(default_factory=list, max_length=1000)
+    sections_truncated: bool = False
+
+
+class ReviewFactPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int
+    total: int
+    offset: int
+    limit: int
+    items: list[ReviewFact] = Field(max_length=100)
+
+
+class ReviewDecisionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fact_id: UUID
+    action: Literal["accept", "assign", "general", "defer", "exclude", "reset", "split", "dependency", "comparison", "shared"]
+    entity_id: UUID | None = None
+    ranges: list[tuple[int, int]] = Field(default_factory=list, max_length=50)
+    target_fact_id: UUID | None = None
+    role: ContextRole = "condition"
+
+
+class ReviewDecisionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=0)
+    decisions: list[ReviewDecisionInput] = Field(min_length=1, max_length=100)
+
+
+class ReviewApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=0)
+
+
+class ReviewSelectionCreate(ReviewApplyRequest):
+    issues: bool = True
+    reason: str | None = Field(default=None, max_length=200)
+    section_id: UUID | None = None
+    product_model: str | None = Field(default=None, max_length=200)
+
+
+class ReviewSelectionApply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["general", "exclude", "defer", "assign"]
+    entity_id: UUID | None = None
+
+
+class ReviewSelectionInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    plan_id: UUID
+    count: int
+    completed: int
+    revision: int
+    digest: str
+    operation: dict[str, Any] | None = None
+
+
+class EntityImportRow(EntityWrite):
+    id: UUID
+
+
+class EntityImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rows: list[EntityImportRow] = Field(min_length=1, max_length=100)
+
+
+class ProcessingTemplateWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
+    general_headings: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=100)
+    attribute_terms: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default_factory=list, max_length=100)
+    text_mode: Literal["auto", "plain"] = "auto"
+
+
+class ProcessingTemplateInfo(ProcessingTemplateWrite):
+    id: UUID
+    revision: int
 
 
 class EntityInfo(EntityWrite):

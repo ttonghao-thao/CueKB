@@ -1,6 +1,6 @@
 # CueKB 第三方接口规范
 
-更新：2026-10-25。本文描述当前代码契约，不是性能或模型质量承诺。全部CueKB接口使用`/v2`，检索、处理和管理采用同一契约版本。
+更新：2026-10-26。本文描述当前代码契约，不是性能或模型质量承诺。全部CueKB接口使用`/v2`，检索、处理和管理采用同一契约版本。
 
 ## 1. 契约文件与通用约定
 
@@ -57,7 +57,7 @@
 
 auto以服务端标识符正则选择exact或hybrid。V2 exact对单个含字母和数字的标识符使用保留标点、大小写归一化的keyword token等值，其他文本使用分析器短语匹配，跳过Embedding与重排。hybrid使用OpenSearch BM25与Embedding/k-NN、RRF。related加有出处的一跳，scope_limited为true。
 
-adaptive对问题中`A-100`等含字母、数字及分隔符的标识符施加有界token约束；多个标识符按OR处理，PG最终也复验，`A-1000`不能冒充`A-100`。这不是产品自动消歧器，不推断无明确标识符的产品归属。规范名、冻结审核别名、型号、表格标签参与新的V2词法投影；缺少`scope-lexical-v2.2`投影时返回INDEX_UPGRADE_REQUIRED。
+adaptive对问题中`A-100`等含字母、数字及分隔符的标识符施加有界token约束；多个标识符按OR处理，PG最终也复验，`A-1000`不能冒充`A-100`。这不是产品自动消歧器，不推断无明确标识符的产品归属。规范名、冻结审核别名、型号、表格标签参与新的V2词法投影；缺少`scope-lexical-v2.3`投影时返回INDEX_UPGRADE_REQUIRED。
 
 动态选择将已知必要依赖视作证据组，优先补充不同属性/适用范围，保护数值、条件和否定差异，按精确JSON成本跳过过大的组；无新增收益、候选耗尽或到达预算时停止。未提供query_facets时仍可按问题词项和保守多样性选择，不保证任意复合问题全部召回。有明确未观察到的facet且预算允许时，至多一次扩大原始召回窗口，复用原query向量；不自动改写query或递归搜索。
 
@@ -158,7 +158,7 @@ OpenSearch HTTP 200中若timed_out、terminated_early或失败分片非零，该
 
 ## 5. 导入、归属映射、更新与恢复
 
-`POST /v2/documents`：multipart/form-data，字段`file`和字符串`metadata`，KB write，`Idempotency-Key`必填1—128字符，返回202 Job。支持PDF/DOCX/MD/Markdown/TXT；文件缺省最大50MiB。metadata字段：kb_id、name、business_version、scope、document_id、auto_publish，以及scope_bindings/document_default/dependency_bindings。未知字段422。
+`POST /v2/documents`：multipart/form-data，字段`file`和字符串`metadata`，KB write，`Idempotency-Key`必填1—128字符，返回202 Job。支持PDF/DOCX/MD/Markdown/TXT；文件缺省最大50MiB。metadata字段：kb_id、name、business_version、scope、document_id、auto_publish，以及scope_bindings/document_default/dependency_bindings、text_mode（auto/plain）、processing_template_id。未知字段422。
 
 ```json
 {
@@ -211,6 +211,40 @@ Job包含id、kb_id、document_id、version_id、status、stage、progress、err
 审核响应含document_id/kb_id/version_id、status、processing_profile、requires_reprocess，total/resolved/unknown/ambiguous/unresolved_dependencies全版本计数，reason_counts/warnings、可重用的三类审核配置，以及当前页items。item含chunk_id/source_unit_id/title_path、500字符source_preview、归属、context_links、dependency_unresolved和dependency_issues；预览不重复返回归属来源的长spans，原件/搜索仍保留真实来源。分页不改变全版本计数，也不将尚在处理中的0块误报为审核通过。warnings区分processing_not_ready、all_scope_unknown/scope_unknown、scope_conflict、dependency_unresolved、processing_revision_changed。
 
 requires_reprocess=true表示处理结构或定位需刷新。门户先以空映射按当前结构生成新待审核版本，再配置归属/关系；不在原发布版本上直接改事实。当前配置中的源单元会在能一一对应时转换到所审核版本；不静默选择一对多映射中的任意一块。接口不暴露approved_entities等完整服务器快照。
+
+### 5.1 选择式审核接口
+
+ready结果包含review_plan_id、blocking_facts及publish_eligible。unknown不是发布阻塞的充分条件；审核状态和通用角色见[系统设计](SYSTEM_DESIGN.md#32-规则导入与选择式审核)。发布遇到未解决内容返回409 `review_required_before_publish`。auto_publish=true也必须通过门槛，有阻塞时Job仍succeeded、stage=needs_review，版本保持ready。
+
+| 操作 | 路径及主要字段 |
+| --- | --- |
+| 创建/复用分析计划 | POST `/v2/documents/{d}/versions/{v}/review-plans`，body={}，202 ReviewPlanInfo；与ready自动创建的计划复用 |
+| 计划汇总 | GET `/v2/review-plans/{p}`；包含revision、draft/applied、counts、blocking、publish_eligible及applied_job_id |
+| 问题与全部事实 | GET `/v2/review-plans/{p}/issues`或`/facts`；limit=25/最多100，offset≤1000000，可选product_model/reason/section_id过滤；返回revision、total、items |
+| 保存选择 | POST `/v2/review-plans/{p}/decisions`，body={revision,decisions:[...]}；最多100项且fact_id不重复，整批原子写入；过期修订/已冻结409 |
+| 应用 | POST `/v2/review-plans/{p}/apply`，body={revision}，202 Job；冻结manifest并创建新ready版本，重复调用返回同一Job；有阻塞或全排除409 |
+
+跨页批量确认先POST `/v2/review-plans/{p}/selections`，提交{revision,issues,reason,section_id,product_model}冻结当前具体记录，返回{id,count,completed,revision,digest,operation}。GET `/v2/review-selections/{id}`读取进度；POST同路径`/apply`提交{action,entity_id}，支持general/assign/exclude/defer，每次最多处理100项并保存进度。开始后操作不可更换，重复调用续接下一批；其他决定导致修订变化时409，已完成批次保留，需重新预览剩余内容。每计划最多100个冻结集合，不将更新后的筛选结果自动加入原集合。
+
+以上均须KB write；计划不存在/文档已删404，跨KB事实/错误产品/无效拆分422，撤权/Key失效拒绝。memory开发backend不提供该管理链路。创建计划从已存PG事实形成摘要，不重新解析；结构升级仍走原件reprocess。
+
+fact项包含id/source_chunk_id、source_text/title_path/anchor、applicability/fact_kind/review_state/reason、最多5项产品candidates及必要条件dependency_choices（原文摘要、标题、角色）、split_suggestions。提案不等于已发布事实，不返回完整服务器处理快照。
+
+decision包含fact_id及action：assign/accept选择entity_id；general确认通用；comparison确认原文比较主体；shared确认原文明示同一条结论共同适用的主体（分别赋值的混合规格仍拒绝）；exclude/defer/reset分别排除、暂缓、撤回；split给原文字符ranges；dependency选择target_fact_id及role。原文值、规则证明及操作者由服务器维护，客户端不能改写source_text或传入伪造approved字段。拆分不能省略非空原文，也不能通过拆分清除已有依赖。明确主体证据与所选产品冲突、混合单品规格整体赋给一个产品、套件赋给普通单品均拒绝。
+
+示例保存选择：
+
+```json
+{"revision":0,"decisions":[{"fact_id":"55555555-5555-4555-8555-555555555555","action":"assign","entity_id":"66666666-6666-4666-8666-666666666666"}]}
+```
+
+filters.product_entity_id为稳定产品UUID，可用于没有型号的食品或服务产品；与product_model/software_version同时指定时，三个条件必须属于同一已确定主体，提及或套件组件关系不授予身份。
+
+KB目录仍用entities接口，kind=product/model/bundle参与自动产品识别；term不参与。实体增加product_model、software_version。POST `/v2/knowledge-bases/{kb}/entities/import`接收{rows:[{id,name,kind,product_model,aliases,...}]}，KB admin，最多100项，冲突整批回滚；门户提供CSV预览后调用，不发送CSV至解析模型。
+
+GET `/v2/knowledge-bases/{kb}/processing-templates`（read）返回最多100个模板；PUT同路径`/{template_id}`（admin）保存{name,general_headings,attribute_terms,text_mode}并递增revision。每个标题/属性词列表最多100项；模板不接受脚本或任意正则。导入/reprocess指定processing_template_id时服务器冻结内容与修订，跨KB模板422。模板变更不会反向修改旧版本。
+
+V2搜索hit增加fact_kind，表示原文事实类型；不改变evidence_status=unassessed。严格DTO需同步生成契约。
 
 ## 6. 公共管理接口目录
 

@@ -30,11 +30,14 @@ def test_pg_initial_processing_defaults_match_domain_defaults(pg):
 def create_version(repo):
     _, principal_id, _ = repo.create_api_key("writer", "processing")
     kb = repo.create_knowledge_base(KnowledgeBase(name="processing"))
+    repo.grant(kb.id, principal_id, "write")
     job = repo.create_ingestion_job(
         principal_id=principal_id, kb_id=kb.id, name="manual", source_uri="test://manual",
         media_type="text/markdown", filename="manual.md",
         content_sha256=hashlib.sha256(SOURCE).hexdigest(), business_version="1", scope={},
         idempotency_key="initial", request_sha256="a" * 64, document_id=None, auto_publish=True,
+        processing_snapshot={"document_default": {"subjects": [
+            {"display_name": "Product A", "product_model": "A"}]}},
     )
     claimed = repo.claim_job("fixture", 300, 3)
     chunks = materialize_chunks(repo, SimpleNamespace(read=lambda _: SOURCE), claimed, template="evidence-v2")
@@ -80,7 +83,7 @@ def test_real_snapshot_alias_and_curated_model_survive_processing_and_persistenc
         idempotency_key="scope-merge", request_sha256="d" * 64)
     claimed = pg.claim_job("fixture", 300, 3)
     entity = claimed["processing_snapshot"]["approved_entities"][0]
-    assert "product_model" not in entity
+    assert entity["product_model"] is None  # no model was declared in the catalog
     chunks = materialize_chunks(pg, SimpleNamespace(read=lambda _: SOURCE), claimed, template="evidence-v2")
     pg.save_ready(replacement.id, "fixture", chunks)
     pg.publish(replacement.document_id, replacement.version_id, "default")

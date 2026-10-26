@@ -18,21 +18,25 @@ from cuekb.config import get_settings
 from cuekb.domain.models import Chunk
 from cuekb.services.generations import rebuild_once
 from cuekb.services.evidence import bind_block_dependencies, build_search_text
-from cuekb.services.parsing import ParseError, parse_document
+from cuekb.services.parsing import ParseError, parse_document, parse_with_deadline
 from cuekb.services.structure import bind_section_dependencies
 
 logger = logging.getLogger(__name__)
 
 
-def materialize_chunks(repository, storage, job, *, template):
-    if job.get("derivation_kind") == "restore":
+def materialize_chunks(repository, storage, job, *, template, parse_timeout=None):
+    if job.get("processing_snapshot", {}).get("review_manifest_id"):
+        chunks = repository.review_materialize(job)
+    elif job.get("derivation_kind") == "restore":
         chunks = repository.restore_chunks(job)
     else:
         content = storage.read(job["source_uri"])
-        blocks = parse_document(
+        parser = parse_document if parse_timeout is None else parse_with_deadline
+        blocks = parser(
             content, job["original_filename"], job["media_type"],
             processing_profile=job["processing_profile"],
             processing_snapshot=job["processing_snapshot"], version_id=job["version_id"],
+            **({"timeout_seconds": parse_timeout} if parse_timeout is not None else {}),
         )
         chunks = [Chunk(
             id=uuid5(job["version_id"], str(index)), kb_id=job["kb_id"],
@@ -56,6 +60,19 @@ def materialize_chunks(repository, storage, job, *, template):
                             "context_self_link", "context_reference_cycle"}:
                 raise ParseError(str(exc)) from None
             raise
+        # A frozen necessary-condition binding is itself a review of that
+        # structural role; it never assigns the target a product identity.
+        by_id = {c.id: c for c in chunks}
+        from cuekb.services.evidence import trusted_dependency
+        for main in chunks:
+            for link in main.evidence_structure.context_links:
+                target = by_id[link.chunk_id]
+                s = target.evidence_structure
+                if (link.required and link.role in {"attribution", "table_header", "condition", "exception"}
+                        and s.applicability.status == "unknown" and not s.applicability.subjects
+                        and trusted_dependency(main, target, link)):
+                    s.fact_kind, s.review_state = "general", "rule_confirmed"
+                    s.review_reason, s.review_provenance = "audited_required_condition", link.provenance.provenance_id
     for chunk in chunks:
         chunk.document_name = job["name"]
         chunk.search_text = build_search_text(chunk, job["name"], template=template)
@@ -219,7 +236,8 @@ def _run_ingestion_once() -> bool:
         if model_search.client.indices.exists(index=model_search.index_name):
             model_search.validate_v2_projection()
         template = "evidence-v2"
-        chunks = materialize_chunks(current.repository, current.storage, job, template=template)
+        chunks = materialize_chunks(current.repository, current.storage, job, template=template,
+            parse_timeout=settings.worker_parse_timeout_seconds)
         logger.info("ingestion_stage_finished", extra={"job_id": str(job["id"]), "stage": "parse", "duration_ms": (time.perf_counter() - stage_started) * 1000, "chunk_count": len(chunks)})
         stage_started = time.perf_counter()
         vectors = []

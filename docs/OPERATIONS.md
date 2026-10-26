@@ -1,6 +1,6 @@
 # 部署与操作手册
 
-更新：2026-10-25。下列是全新部署的运行步骤，不是本轮已部署的证据。真实环境执行记录在[任务板](../TASK_BOARD.md)。
+更新：2026-10-26。下列是全新部署的运行步骤，不是本轮已部署的证据。真实环境执行记录在[任务板](../TASK_BOARD.md)。
 
 ## 1. 环境与配置
 
@@ -38,7 +38,7 @@ chmod 600 .env.production
 
 全新部署必须使用新的空PG数据卷。已有数据目录不会重新执行初始化文件，不属于本次部署输入；需要与旧实例隔离时可为新部署设置独立`COMPOSE_PROJECT_NAME`并处理宿主端口冲突。部署脚本不清理旧容器或数据卷，也不修改已有库结构。保留仓库中的`db/schema.sql`，缺文件时Compose挂载应直接失败；仅重建应用镜像不能改变已有数据库结构。
 
-在门户配置Embedding后，Worker为新文档创建带`lexical_revision=scope-lexical-v2.2`的V2搜索投影。更换Embedding、维度、输入模板或词法投影时，由系统管理员通过`POST /v2/index-generations`创建重建任务，省略`chunking_version`，等待ready后activate。维护锁期间内容写入409；已兼容的查询继续，缺少新词法revision的V2查询明确INDEX_UPGRADE_REQUIRED，不临时把旧字段当作新字段。该流程只重建搜索投影，不改变数据库结构。
+在门户配置Embedding后，Worker为新文档创建带`lexical_revision=scope-lexical-v2.3`的V2搜索投影。更换Embedding、维度、输入模板或词法投影时，由系统管理员通过`POST /v2/index-generations`创建重建任务，省略`chunking_version`，等待ready后activate。维护锁期间内容写入409；已兼容的查询继续，缺少新词法revision的V2查询明确INDEX_UPGRADE_REQUIRED，不临时把旧字段当作新字段。该流程只重建搜索投影，不改变数据库结构。
 
 需要新的解析/归属时，对文档单独执行V2 reprocess，检查新版本再publish；generation不会自动重切块。想恢复旧事实则用restore生成全新块ID、等待ready后发布。generation rollback只重建当前事实的旧模型投影。
 
@@ -49,7 +49,7 @@ chmod 600 .env.production
 3. 更新时传document_id；发布前旧published仍可见。未成功入索引的任务不能切发布指针。
 4. 下载原件用授权接口，不直接暴露存储目录。删除首先使PG不可见，OS通过outbox清理；原件与备份的物理保留另按运行方策略处理。
 5. reprocess/restore的幂等重试保持原payload/key；未知结果先查询Job。不要反复生成新key创建重复任务。
-6. 当前处理修订为evidence-v2.3，新增产品原因诊断、行级表格源单元及有来源的必要关系。已发布事实不会自动改写；审核提示requires_reprocess时先按当前结构重解析，再配置新源单元并审核。API/Worker与门户须一起更新；第三方严格DTO先同步当前契约。数据库仍以完整schema全新初始化，不增加结构升级链。
+6. 当前处理修订为evidence-v2.4，增加CPU规则、事实级拆分、选择式审核与发布门槛。已发布事实不会自动改写；审核提示requires_reprocess时先按当前结构重解析，再配置新源单元并审核。API/Worker与门户须一起更新；第三方严格DTO先同步当前契约。数据库仍以完整schema全新初始化，不增加结构升级链。
 
 ## 5. 备份与恢复
 
@@ -78,7 +78,7 @@ adaptive可以在未配置校准时运行，diagnostics.selection.calibration_st
 校准输入为JSONL，每行一个人工标注评分；下面仅展示格式，实际值应从冻结运行复制，不能直接用于生产：
 
 ```json
-{"sample_id":"query-001-hit-001","family":"technical-power","split":"calibration","channel":"vector","score":0.81,"relevant":true,"binding":{"embedding_model":"copy-actual-model","reranker_model":null,"config_revision":1,"active_generation":"copy-actual-generation","lexical_revision":"scope-lexical-v2.2","retrieval_path":"hybrid"}}
+{"sample_id":"query-001-hit-001","family":"technical-power","split":"calibration","channel":"vector","score":0.81,"relevant":true,"binding":{"embedding_model":"copy-actual-model","reranker_model":null,"config_revision":1,"active_generation":"copy-actual-generation","lexical_revision":"scope-lexical-v2.3","retrieval_path":"hybrid"}}
 ```
 
 channel为vector、rerank或lexical；lexical是0—1的字面覆盖比例，其他分数采用实际服务的“越大越相关”方向。所有记录须同一binding；模型名、可空reranker名、revision和generation从授权的模型管理配置核对，空字符串和null须与实际一致。sample_id与channel组合唯一。calibration与test按family隔离，不能让同一产品/问题家族同时参与拟合和测试。
@@ -95,3 +95,13 @@ channel为vector、rerank或lexical；lexical是0—1的字面覆盖比例，其
 生产Compose只读挂载deploy/relevance到API的/etc/cuekb/relevance；确保容器UID 10001能读取文件，在.env.production设置`CUEKB_V2_RELEVANCE_PROFILE_PATH=/etc/cuekb/relevance/profile.json`后重新创建API服务。本地运行可设置绝对路径。校准JSON已加入gitignore，不含原文、query或凭据，但仍按运行配置保管。初次部署留空即可，不提供默认通用阈值。
 
 请求绑定精确匹配时状态applied；rerank阈值优先，否则向量/字面覆盖已校准信号按OR接受，无适用信号的候选保持未评估。模型、索引、配置或路径不匹配时状态binding_mismatch，门控不应用，继续有界检索且充分性仍unassessed；监控此状态，不把它当成低相关性已过滤。损坏/超限文件报配置错误，不悄悄当成未配置。换generation或模型后重新录制/校准/验收，不只手工改绑定掩盖变化。
+
+## 8. 规则审核版本的部署
+
+本轮包含API/Worker、门户与db/schema.sql变化，需要重建API/Worker镜像；仅拉取代码或重启旧镜像不会应用更新。数据库仍只支持完整schema全新初始化；不要把新应用直接连接旧结构，也不要删除生产卷重建。保留原环境、原件与备份，在独立新库初始化、核对目录/权限并重新导入审核，业务验收后切换。旧环境保留用于回退，数据迁移方式须单独核实。
+
+解析和归属改变须reprocess原件、审核新版本再publish，generation只重建已有PG事实。旧OpenSearch投影触发INDEX_UPGRADE_REQUIRED时，在门户管理模型配置/generation，用匹配模型与实际维度创建重建任务，等待ready并切换；保留PG和原件，不手改_meta。/v2/ready现在返回明确503而非未捕获500；API容器仍能提供管理入口，检查Worker及generation任务进度。
+
+auto_publish不再绕过审核。有阻塞时Job可succeeded且stage=needs_review；这表示待确认，不是模型或解析失败。只有已确认的通用unknown才允许发布，不应把全篇强制绑定某产品来清零unknown。解析超时可检查原件/CPU负载并调整有界worker_parse_timeout_seconds，不能无限重试。
+
+PDF/OCR的Docling处理可能需要预先可用的解析/OCR模型资源；CPU运行不等于完全没有模型文件。应在受控部署环境预置并验证缓存/下载网络。模型资源不可用时先解决缓存或下载网络；TXT/DOCX通过不能替代PDF端到端验收。

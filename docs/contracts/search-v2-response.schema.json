@@ -998,6 +998,18 @@
           "default": null,
           "title": "Document Name"
         },
+        "fact_kind": {
+          "default": "statement",
+          "enum": [
+            "statement",
+            "specification",
+            "comparison",
+            "bundle",
+            "general"
+          ],
+          "title": "Fact Kind",
+          "type": "string"
+        },
         "metadata": {
           "additionalProperties": true,
           "title": "Metadata",

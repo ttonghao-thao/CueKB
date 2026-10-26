@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     search_deadline_ms: int = Field(default=900, ge=100, le=10000)
     model_timeout_ms: int = Field(default=400, ge=20, le=5000)
     worker_model_timeout_ms: int = Field(default=120000, ge=1000, le=600000)
+    worker_parse_timeout_seconds: int = Field(default=180, ge=5, le=1800)
     rerank_min_remaining_ms: int = Field(default=180, ge=10, le=5000)
     rerank_enabled: bool = True
     relation_candidates: int = Field(default=30, ge=1, le=100)

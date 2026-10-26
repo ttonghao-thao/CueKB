@@ -34,6 +34,13 @@ def processing_review(repo, document_id, version_id, limit=25, offset=0):
             JOIN document_versions v ON v.id=c.version_id WHERE c.version_id=:v AND c.document_id=:d
             ORDER BY c.ordinal,c.id LIMIT :limit OFFSET :offset"""),
             {"v": version_id, "d": document_id, "limit": limit, "offset": offset}).mappings().all()
+        all_rows = conn.execute(text("""SELECT c.*,v.processing_profile FROM chunks c
+            JOIN document_versions v ON v.id=c.version_id WHERE c.version_id=:v ORDER BY c.ordinal LIMIT 10001"""),
+            {"v": version_id}).mappings().all()
+        from cuekb.services.review_rules import blockers
+        blocking = len(blockers([repo._chunk(row) for row in all_rows]))
+        plan_id = conn.execute(text("SELECT id FROM review_plans WHERE version_id=:v ORDER BY created_at DESC LIMIT 1"),
+            {"v": version_id}).scalar()
         snapshot = deepcopy(version["processing_snapshot"])
         # Unit-based selectors must refer to the reviewed version on the next
         # reprocess, rather than an earlier version's immutable identity space.
@@ -103,4 +110,5 @@ def processing_review(repo, document_id, version_id, limit=25, offset=0):
         requires_reprocess=requires_reprocess,
         reason_counts={row["reason"]: row["count"] for row in reasons}, warnings=warnings,
         scope_bindings=bindings, document_default=default, dependency_bindings=dependencies,
-        offset=offset, limit=limit, items=items)
+        offset=offset, limit=limit, items=items, review_plan_id=plan_id,
+        blocking_facts=blocking, publish_eligible=bool(all_rows) and len(all_rows)<=10000 and not blocking)

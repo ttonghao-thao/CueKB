@@ -33,10 +33,11 @@ def _subject_keys(scope: Applicability) -> frozenset[tuple[str, str | None, str 
 
 
 def scope_matches(
-    chunk: Chunk, product_model: str | None = None, software_version: str | None = None
+    chunk: Chunk, product_model: str | None = None, software_version: str | None = None,
+    product_entity_id=None,
 ) -> bool:
     """V2 exact local applicability filter; document metadata is not a fallback."""
-    if product_model is None and software_version is None:
+    if product_model is None and software_version is None and product_entity_id is None:
         return True
     scope = chunk.evidence_structure.applicability
     if scope.status != "resolved":
@@ -45,6 +46,7 @@ def scope_matches(
     return any(
         (product_model is None or subject.product_model == product_model)
         and (software_version is None or subject.software_version == software_version)
+        and (product_entity_id is None or str(subject.entity_id) == str(product_entity_id))
         for subject in scope.subjects
     )
 
@@ -209,15 +211,18 @@ def resolve_applicability(
         declarations.append(_declaration(binding, source_kind="curated"))
 
     aliases: list[ApplicableSubject] = []
-    for entity in snapshot.get("approved_entities", []):
+    from cuekb.services.fact_rules import catalog, matches
+    labels = [*title_path, *(span.text.strip() for span in source_spans if span.label == "table_row_label")]
+    nearest = next((label for label in reversed(labels) if matches(label, catalog(snapshot))), None)
+    matched_entities = {str(e.get("entity_id", e.get("display_name"))) for e, _ in matches(nearest or "", catalog(snapshot))}
+    for entity in catalog(snapshot):
         if not isinstance(entity, Mapping):
             raise ValueError("invalid_approved_entity")
         name = entity.get("display_name", entity.get("name"))
         if not name:
             raise ValueError("approved_entity_missing_display_name")
         names = {str(name).casefold(), *(str(a).casefold() for a in entity.get("aliases", []))}
-        labels = [*title_path, *(span.text.strip() for span in source_spans if span.label == "table_row_label")]
-        matched = [heading for heading in labels if heading.casefold() in names]
+        matched = [nearest] if nearest and str(entity.get("entity_id", name)) in matched_entities else []
         if matched:
             spans = [span for span in source_spans
                      if span.label in {"heading", "table_row_label"} and span.text.strip() in matched]

@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-PROCESSING_REVISION = "evidence-v2.3"
+PROCESSING_REVISION = "evidence-v2.4"
 
 
 def default_processing_snapshot() -> dict[str, Any]:
@@ -189,6 +189,12 @@ class EvidenceStructure(StructureModel):
     source_unit_id: str | None = Field(default=None, max_length=200)
     origin_source_unit_id: str | None = Field(default=None, max_length=200)
     parser_unit_key: str | None = Field(default=None, max_length=1024)
+    parent_unit_id: str | None = Field(default=None, max_length=200)
+    review_parent_id: UUID | None = None
+    fact_kind: Literal["statement", "specification", "comparison", "bundle", "general"] = "statement"
+    review_state: Literal["pending", "rule_confirmed", "human_confirmed", "deferred", "excluded"] = "pending"
+    review_reason: str | None = Field(default=None, max_length=200)
+    review_provenance: str | None = Field(default=None, max_length=500)
     applicability: Applicability = Field(default_factory=Applicability)
     context_links: list[ContextLink] = Field(default_factory=list, max_length=20)
     structure_revision: str = Field(default=PROCESSING_REVISION, min_length=1, max_length=100)

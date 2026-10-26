@@ -45,7 +45,7 @@ function showView(name) {
   $$(".view").forEach((item) => item.classList.toggle("active", item.id === `view-${name}`));
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === name));
   if (name === "documents") loadDocuments();
-  if (name === "upload") { ensureProcessingEditor("upload"); loadProcessingEntities("upload"); }
+  if (name === "upload") { ensureProcessingEditor("upload"); loadProcessingEntities("upload"); if (typeof loadRuleTemplates === "function") loadRuleTemplates("upload"); }
   if (name === "models" && state.isSystemAdmin) { loadModelConfig(); loadGenerations(); }
   if (name === "knowledge") loadKnowledge();
   if (name === "knowledge-bases") renderKnowledgeBaseManagement();
@@ -304,7 +304,11 @@ async function publishVersion(documentId, versionId) {
   try {
     const review = await api(`/documents/${documentId}/versions/${versionId}/review?limit=1`);
     if (!review.total) return toast("该版本尚无处理结果，请等待处理完成", "error");
-    if (review.warnings.length && !confirm(`该版本有 ${review.unknown} 个归属未确定、${review.ambiguous} 个归属冲突、${review.unresolved_dependencies} 个依赖未完整的块。确认核验后仍发布？`)) return;
+    if (!review.publish_eligible) {
+      toast(`有 ${review.blocking_facts} 项内容需要确认，请完成审核后发布`, "error");
+      await openProcessingReview(documentId, versionId);
+      return;
+    }
     await api(`/documents/${documentId}/publish`, { method: "POST", body: JSON.stringify({ version_id: versionId, scope_key: "default" }) });
     toast("版本已发布");
     $("#document-dialog").close();
@@ -350,7 +354,6 @@ async function uploadFiles(event) {
   let processing;
   try { processing = processingInputs("upload"); }
   catch (error) { return toast(error.message, "error"); }
-  if ($("#auto-publish").checked && !confirm("自动发布将跳过处理后的归属与必要章节审核。确认继续？")) return;
   const button = $("#upload-button"); button.disabled = true;
   const existingId = $("#existing-document-id").value.trim();
   if (existingId && state.files.length > 1) { button.disabled = false; return toast("为现有文档添加版本时一次只能上传一个文件", "error"); }
@@ -391,7 +394,9 @@ function scopeLabel(scope) {
 function ensureProcessingEditor(prefix) {
   if (state.processingEditors.has(prefix)) return;
   $(`#${prefix}-processing`).innerHTML = `<h3>产品与章节配置</h3>
-    <p class="muted">选择已审核实体或填写明确的产品名；未确认时保留空白。本配置应用于本次所有文件；文档标题和查询中的产品名不会自动成为归属。</p>
+    <div class="field-grid"><label><span>可复用规则模板</span><select id="${prefix}-rule-template"><option value="">通用规则</option></select></label><label><span>文本结构解析</span><select id="${prefix}-text-mode"><option value="auto">自动检测标题/列表</option><option value="plain">按纯文本</option></select></label></div>
+    <p class="muted">默认按产品目录与原文结构分析，有疑点时提供候选选择。单产品全文映射和章节配置可按需展开。</p>
+    <details><summary>可选：人工产品映射与高级章节配置</summary>
     <div class="field-grid"><label><span>产品实体</span><select id="${prefix}-entity"><option value="">未选择 / 手工声明</option></select></label>
     <label><span>手工声明的产品名</span><input id="${prefix}-product-name" maxlength="200"></label>
     <label><span>产品型号（可选）</span><input id="${prefix}-model" maxlength="200"></label>
@@ -409,7 +414,7 @@ function ensureProcessingEditor(prefix) {
       <label><span>审核说明</span><input id="${prefix}-dependency-note" maxlength="500"></label></div>
       <label><span>完整原文引用（可选，用于修正未匹配的引用，如 See section "Conditions"）</span><input id="${prefix}-dependency-reference" maxlength="500"></label>
       <button id="${prefix}-add-dependency" class="secondary" type="button">确认并添加必要关系</button>
-      <label><span>必要关系 JSON（首次导入可用 source/target.title_path 定位）</span><textarea id="${prefix}-dependency-bindings" rows="5">[]</textarea></label></details>`;
+      <label><span>必要关系 JSON（首次导入可用 source/target.title_path 定位）</span><textarea id="${prefix}-dependency-bindings" rows="5">[]</textarea></label></details></details>`;
   $(`#${prefix}-add-scope`).addEventListener("click", () => {
     try {
       const path = $(`#${prefix}-section-path`).value.split("\n").map(x => x.trim()).filter(Boolean);
@@ -456,6 +461,8 @@ function processingInputs(prefix) {
   const scope = editorJson(prefix, "scope-bindings", []), dependencies = editorJson(prefix, "dependency-bindings", []);
   if (!Array.isArray(scope) || !Array.isArray(dependencies)) throw new Error("章节映射与必要关系必须为列表");
   return {scope_bindings: scope, dependency_bindings: dependencies,
+    text_mode: $(`#${prefix}-text-mode`)?.value || "auto",
+    processing_template_id: $(`#${prefix}-rule-template`)?.value || null,
     document_default: $(`#${prefix}-whole`).checked ? {subjects: [editorProduct(prefix)]} : editorJson(prefix, "document-default", null)};
 }
 function resetProcessingEditor(prefix) {
@@ -492,7 +499,7 @@ async function loadProcessingEntities(prefix, kbId = state.currentKb?.id) {
     $(`#${prefix}-entity`).value = rows.some(row => row.id === selected) ? selected : "";
   } catch (error) { if (state.processingLoads.get(prefix) === token) handleError(error, "读取产品实体失败，可使用手工声明"); }
 }
-async function openProcessingReview(documentId, versionId, offset = 0) {
+async function openLegacyProcessingReview(documentId, versionId, offset = 0) {
   const request = ++state.reviewRequest;
   $("#review-form").inert = true; $("#review-items").inert = true;
   $("#review-publish").disabled = true;
@@ -502,6 +509,7 @@ async function openProcessingReview(documentId, versionId, offset = 0) {
     const fresh = state.review?.version_id !== versionId;
     state.review = data;
     ensureProcessingEditor("review");
+    if (typeof loadRuleTemplates === "function") await loadRuleTemplates("review");
     if (fresh) {
       await loadProcessingEntities("review", data.kb_id);
       if (request !== state.reviewRequest) return;

@@ -26,6 +26,9 @@ from cuekb.schemas import (
     DocumentSummary,
     EntityWrite,
     EntityInfo,
+    EntityImportRequest,
+    ProcessingTemplateWrite,
+    ProcessingTemplateInfo,
     RelationInfo,
     GenerationInfo,
     GenerationQueued,
@@ -40,7 +43,8 @@ from cuekb.schemas import (
     RelationWrite,
 )
 from cuekb.services.generations import validate_generation
-from cuekb.api.errors import ErrorResponse
+from cuekb.api.errors import ErrorResponse, ServiceError
+from sqlalchemy import text
 
 router = APIRouter(prefix="/v2", responses={
     code: {"model": ErrorResponse} for code in (400, 401, 403, 404, 409, 413, 415, 422, 500, 503, 504)
@@ -55,8 +59,19 @@ def health() -> HealthResponse:
 @router.get("/ready", tags=["system"])
 def ready() -> dict:
     if get_settings().backend == "production":
-        repository().engine.connect().close()
-        search_backend().client.cluster.health()
+        try:
+            repository().engine.connect().close()
+            state = search_backend().client.cluster.health()
+            if state.get("status") == "red" or state.get("timed_out"):
+                raise ServiceError("search_not_ready", "SEARCH_NOT_READY")
+        except ServiceError:
+            raise
+        except (ValueError, RuntimeError) as exc:
+            if str(exc) in {"index_upgrade_required", "opensearch_embedding_model_mismatch", "opensearch_embedding_dimension_mismatch"}:
+                raise ServiceError("index_upgrade_required", "INDEX_UPGRADE_REQUIRED") from None
+            raise ServiceError("dependencies_not_ready", "DEPENDENCIES_NOT_READY") from None
+        except Exception:
+            raise ServiceError("dependencies_not_ready", "DEPENDENCIES_NOT_READY") from None
     return {"status": "ready"}
 
 
@@ -267,7 +282,7 @@ def publish(
     try:
         kb = repo.get_document_kb(document_id)
         repo.require_role(principal, [kb], "write")
-        repo.publish(document_id, request.version_id, request.scope_key)
+        repo.publish(document_id, request.version_id, request.scope_key, principal=principal)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ConflictError as exc:
@@ -404,6 +419,58 @@ def put_entity(
         raise HTTPException(422, str(exc)) from exc
     except IntegrityError as exc:
         raise HTTPException(409, "entity_conflict") from exc
+
+
+@router.post("/knowledge-bases/{kb_id}/entities/import", status_code=204, tags=["knowledge"])
+def import_entities(kb_id: UUID, body: EntityImportRequest, principal: Principal | None = Depends(current_principal)):
+    from copy import copy
+    repo = _knowledge_repository(principal, kb_id, "admin")
+    if len({r.id for r in body.rows}) != len(body.rows):
+        raise HTTPException(422, "duplicate_entity_identity")
+    try:
+        with repo._write() as conn:
+            scoped = copy(repo)
+            scoped._write_connection = scoped._snapshot_connection = conn
+            scoped.require_role(principal, [kb_id], "admin")
+            for row in body.rows:
+                scoped.put_entity(kb_id, row.id, EntityWrite(**row.model_dump(exclude={"id"})))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(409, "entity_import_conflict_no_rows_saved") from exc
+
+
+@router.get("/knowledge-bases/{kb_id}/processing-templates", response_model=list[ProcessingTemplateInfo], tags=["review-v2"])
+def processing_templates(kb_id: UUID, principal: Principal | None = Depends(current_principal)):
+    repo = _knowledge_repository(principal, kb_id, "read")
+    with repo.read_snapshot() as scoped:
+        scoped.require_role(principal, [kb_id], "read")
+        with scoped._read() as conn:
+            return [dict(id=r["id"], revision=r["revision"], **r["configuration"]) for r in
+                conn.execute(text("SELECT * FROM processing_templates WHERE kb_id=:kb ORDER BY name LIMIT 100"), {"kb": kb_id}).mappings()]
+
+
+@router.put("/knowledge-bases/{kb_id}/processing-templates/{template_id}", status_code=204, tags=["review-v2"])
+def put_processing_template(kb_id: UUID, template_id: UUID, body: ProcessingTemplateWrite,
+    principal: Principal | None = Depends(current_principal)):
+    from copy import copy
+    repo = _knowledge_repository(principal, kb_id, "admin")
+    try:
+        with repo._write() as conn:
+            scoped = copy(repo); scoped._snapshot_connection = conn
+            conn.execute(text("SELECT id FROM knowledge_bases WHERE id=:kb FOR NO KEY UPDATE"), {"kb": kb_id})
+            scoped.require_role(principal, [kb_id], "admin")
+            existing = conn.execute(text("SELECT kb_id FROM processing_templates WHERE id=:id FOR UPDATE"), {"id": template_id}).scalar()
+            if existing is not None and existing != kb_id:
+                raise HTTPException(422, "template_scope_mismatch")
+            count = conn.execute(text("SELECT count(*) FROM processing_templates WHERE kb_id=:kb"), {"kb": kb_id}).scalar()
+            if count >= 100 and existing is None:
+                raise HTTPException(422, "processing_template_limit")
+            conn.execute(text("""INSERT INTO processing_templates(id,kb_id,name,configuration) VALUES (:id,:kb,:name,CAST(:data AS jsonb))
+                ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,configuration=EXCLUDED.configuration,revision=processing_templates.revision+1"""),
+                {"id": template_id, "kb": kb_id, "name": body.name, "data": body.model_dump_json()})
+    except IntegrityError as exc:
+        raise HTTPException(409, "processing_template_name_conflict") from exc
 
 
 @router.get("/knowledge-bases/{kb_id}/relations", response_model=list[RelationInfo], tags=["knowledge"])

@@ -58,6 +58,10 @@ class GenerationOperations:
 
     @contextmanager
     def _write(self: Any):
+        existing = getattr(self, "_write_connection", None)
+        if existing is not None:
+            yield existing
+            return
         with self._connection() as conn, conn.begin():
             owned = _owned.get()
             if (

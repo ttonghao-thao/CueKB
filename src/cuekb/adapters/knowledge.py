@@ -196,9 +196,12 @@ class KnowledgeOperations:
             if existing is not None and existing != kb_id:
                 raise ValueError("entity_scope_mismatch")
             conn.execute(
-                text("""INSERT INTO entities(id,kb_id,name,kind) VALUES (:id,:kb,:name,:kind)
-              ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,kind=EXCLUDED.kind"""),
-                {"id": entity_id, "kb": kb_id, "name": request.name, "kind": request.kind},
+                text("""INSERT INTO entities(id,kb_id,name,kind,product_model,software_version)
+                  VALUES (:id,:kb,:name,:kind,:model,:version)
+              ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,kind=EXCLUDED.kind,
+                  product_model=EXCLUDED.product_model,software_version=EXCLUDED.software_version"""),
+                {"id": entity_id, "kb": kb_id, "name": request.name, "kind": request.kind,
+                 "model": request.product_model, "version": request.software_version},
             )
             conn.execute(text("DELETE FROM entity_aliases WHERE entity_id=:id"), {"id": entity_id})
             conn.execute(text("DELETE FROM mentions WHERE entity_id=:id"), {"id": entity_id})
@@ -380,7 +383,7 @@ class KnowledgeOperations:
                 from cuekb.services.evidence import scope_matches
 
                 allowed = {c.id for c in self.load_chunks([r["chunk_id"] for r in result], request.kb_ids)
-                           if scope_matches(c, request.filters.product_model, request.filters.software_version)}
+                           if scope_matches(c, request.filters.product_model, request.filters.software_version, request.filters.product_entity_id)}
                 result = [r for r in result if r["chunk_id"] in allowed]
             return result
 
@@ -440,7 +443,7 @@ class KnowledgeOperations:
 
             chunks = {c.id: c for c in self.load_chunks([r["chunk_id"] for r in result], request.kb_ids)}
             return [r for r in result if r["chunk_id"] in chunks and (
-                scope_matches(chunks[r["chunk_id"]], request.filters.product_model, request.filters.software_version)
+                scope_matches(chunks[r["chunk_id"]], request.filters.product_model, request.filters.software_version, request.filters.product_entity_id)
                 if hasattr(request, "max_evidence_bytes") else all(
                     value is None or chunks[r["chunk_id"]].metadata.get(field) == value
                     for field, value in (("product_model", request.filters.product_model),

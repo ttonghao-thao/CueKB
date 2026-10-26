@@ -91,6 +91,19 @@
           "title": "Document Ids",
           "type": "array"
         },
+        "product_entity_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Product Entity Id"
+        },
         "product_model": {
           "anyOf": [
             {

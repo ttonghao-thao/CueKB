@@ -23,6 +23,7 @@ class ParsedBlock:
     # Parser-local aliases used only to relocate administrator bindings from a
     # source version. The new chunk always stores its new version-bound unit ID.
     source_unit_aliases: tuple[str, ...] = ()
+    fragment_offset: int = 0
 
 
 class ParseError(RuntimeError):
@@ -30,6 +31,47 @@ class ParseError(RuntimeError):
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+
+
+def _parse_child(connection, args, kwargs):
+    try:
+        connection.send(("ok", parse_document(*args, **kwargs)))
+    except ParseError as exc:
+        connection.send(("error", exc.code, exc.retryable))
+    except Exception:
+        connection.send(("error", "document_parse_failed", False))
+    finally:
+        connection.close()
+
+
+def parse_with_deadline(*args, timeout_seconds, **kwargs):
+    """A process boundary makes CPU/OCR cancellation effective, not just advisory."""
+    import multiprocessing
+    context = multiprocessing.get_context("spawn")
+    receive, send = context.Pipe(duplex=False)
+    process = context.Process(target=_parse_child, args=(send, args, kwargs), daemon=True)
+    process.start()
+    send.close()
+    try:
+        if not receive.poll(timeout_seconds):
+            raise ParseError("document_parse_timeout")
+        try:
+            result = receive.recv()
+        except EOFError:
+            raise ParseError("document_parser_stopped") from None
+        if result[0] != "ok":
+            raise ParseError(result[1], retryable=result[2])
+        return result[1]
+    finally:
+        receive.close()
+        process.join(timeout=0.1)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=1)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=1)
+        process.close()
 
 
 def parse_document(
@@ -50,11 +92,24 @@ def parse_document(
     ):
         raise ParseError("unsupported_frozen_processing_revision")
     suffix = Path(filename).suffix.lower()
+    from cuekb.services.fact_rules import refine_blocks
     if suffix in {".txt", ".md", ".markdown"} or media_type in {"text/plain", "text/markdown"}:
+        detected = content.decode("utf-8", errors="replace")
+        text_mode = (processing_snapshot or {}).get("text_mode", "auto")
+        markdown = text_mode != "plain" and (suffix in {".md", ".markdown"} or media_type == "text/markdown"
+            or len(re.findall(r"(?m)^ {0,3}#{1,6}\s+\S", detected)) >= 2
+            or bool(re.search(r"(?m)^#{1,6}\s+.+\n\s*\n", detected))
+            or bool(re.search(r"(?m)^[^\n|]{1,160}\n(?:={3,}|-{3,})\s*$", detected)))
         blocks = _parse_text_v2(
-            content, markdown=suffix in {".md", ".markdown"} or media_type == "text/markdown",
+            content, markdown=markdown,
             snapshot=processing_snapshot, version_id=version_id,
         )
+        try:
+            blocks = refine_blocks(blocks, processing_snapshot, version_id)
+        except ValueError as exc:
+            raise ParseError(str(exc)) from None
+        if len(blocks) > 10000:
+            raise ParseError("document_fact_limit_exceeded")
         _validate_scope_bindings(blocks, processing_snapshot)
         return blocks
     if suffix not in {".pdf", ".docx"}:
@@ -117,6 +172,9 @@ def parse_document(
         temporary.unlink(missing_ok=True)
     if not blocks:
         raise ParseError("empty_content")
+    blocks = refine_blocks(blocks, processing_snapshot, version_id)
+    if len(blocks) > 10000:
+        raise ParseError("document_fact_limit_exceeded")
     _validate_scope_bindings(blocks, processing_snapshot)
     return blocks
 
@@ -172,8 +230,41 @@ def _parse_text_v2(
         pending.clear()
 
     text_lines = text.splitlines(keepends=True)
+    skip_underline = False
     for line_index, line in enumerate(text_lines):
+        if skip_underline:
+            offset += len(line)
+            skip_underline = False
+            continue
+        if (markdown and not fenced and line.strip() and len(line.strip()) <= 160
+                and not line.lstrip().startswith(("```", "~~~"))
+                and line_index + 1 < len(text_lines) and "|" not in line
+                and re.fullmatch(r"\s*(?:={3,}|-{3,})\s*", text_lines[line_index+1])):
+            flush()
+            depth = 1 if "=" in text_lines[line_index+1] else 2
+            title = line.strip()
+            headings = headings[:depth-1] + [title]
+            start = offset + len(line) - len(line.lstrip())
+            heading_spans = heading_spans[:depth-1] + [SourceSpan(label="heading", text=title,
+                anchor=SourceAnchor(heading_path=headings.copy(), start_offset=start, end_offset=start+len(title)))]
+            skip_underline = True
+            offset += len(line)
+            continue
         heading = re.match(r"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line) if markdown and not fenced else None
+        if not heading and not fenced and (snapshot or {}).get("text_mode") != "plain":
+            numbered = re.match(r"^((?:[IVX]{1,6}|[A-Z]|\d{1,2}(?:\.\d{1,2})*)[.、)]|第[一二三四五六七八九十\d]+章)\s+(.{2,160})\s*$", line)
+            if numbered and not re.search(r"[。；;!?！？]|(?:RMB\s*\d|\d\s*(?:V\b|kg\b|g\b|元|天|小时))|[:：]\s*\d", numbered[2], re.I):
+                # Normalize the match to the same depth/title interface. Roman
+                # major sections outrank decimal/letter subsections.
+                depth = 1 if re.match(r"[IVX]|第", numbered[1]) else 2 + numbered[1].count(".") - 1
+                title = line.strip()
+                flush()
+                headings = headings[:depth - 1] + [title]
+                heading_spans = heading_spans[:depth - 1] + [SourceSpan(label="heading", text=title,
+                    anchor=SourceAnchor(heading_path=headings.copy(), start_offset=offset,
+                                        end_offset=offset + len(title)))]
+                offset += len(line)
+                continue
         if heading:
             flush()
             depth = len(heading[1])
@@ -257,7 +348,7 @@ def _split_block_v2(
             parser_unit_key=identity,
             version_id=version_id,
         )
-    kind = "list" if re.match(r"\s*(?:[-*+]\s|\d+[.)]\s)", value) else "text"
+    kind = "list" if re.match(r"\s*(?:[·•*+\-]\s|\d+[.)]\s)", value) else "text"
     ranges = _safe_ranges(value, max_chars)
     result = []
     for start, end, partial in ranges:
@@ -269,7 +360,8 @@ def _split_block_v2(
         if original_spans:
             spans.extend(original_spans)
         else:
-            spans.append(SourceSpan(label=kind, text=piece, anchor=child, span_id=f"text:{start}"))
+            spans.append(SourceSpan(label="code" if re.match(r"\s*(?:```|~~~)", value) else kind,
+                                    text=piece, anchor=child, span_id=f"text:{start}"))
         unresolved = partial or len(spans) > 64
         spans = spans[:64]
         result.append(ParsedBlock(
@@ -277,6 +369,7 @@ def _split_block_v2(
             structure_for(block_kind=kind, unit_id=unit_id, title_path=headings,
                           source_spans=spans, snapshot=snapshot, unresolved=unresolved,
                           source_unit_aliases=aliases, parser_unit_key=identity), aliases,
+            start if original_spans else 0,
         ))
     return result
 

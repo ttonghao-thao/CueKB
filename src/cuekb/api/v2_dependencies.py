@@ -126,6 +126,6 @@ async def retrieval_service_v2(request: Request) -> AsyncIterator[V2RetrievalSer
                 "embedding_model": config["embedding_model"],
                 "reranker_model": config.get("reranker_model"),
                 "embedding_input_revision": "evidence-v2",
-                "lexical_revision": "scope-lexical-v2.2",
+                "lexical_revision": "scope-lexical-v2.3",
             },
         )

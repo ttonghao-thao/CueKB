@@ -11,6 +11,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from cuekb.adapters.generations import GenerationOperations
 from cuekb.adapters.knowledge import KnowledgeOperations
+from cuekb.adapters.reviews import ReviewOperations
 from cuekb.domain.models import (
     Chunk,
     Job,
@@ -28,7 +29,7 @@ class ConflictError(RuntimeError):
     pass
 
 
-class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
+class PostgreSQLRepository(KnowledgeOperations, GenerationOperations, ReviewOperations):
     def __init__(self, database_url: str, pepper: str, model_config_key: str) -> None:
         # Short checkout intervals let a request recheck its absolute deadline;
         # server statement/lock timeouts are applied before each read statement.
@@ -378,6 +379,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
         processing_snapshot: dict | None = None,
         derivation_kind: str = "ingest",
         source_version_id: UUID | None = None,
+        review_plan_id: UUID | None = None,
     ) -> Job:
         with self._write() as conn:
             conn.execute(
@@ -414,6 +416,16 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                     conn, kb_id, processing_profile, processing_snapshot,
                     origin_version_id=source_version_id,
                 )
+                if review_plan_id is not None:
+                    manifest = conn.execute(text("""SELECT manifest_sha256 FROM review_plans
+                        WHERE id=:p AND document_id=:d AND version_id=:v AND status='applied'"""),
+                        dict(p=review_plan_id, d=document_id, v=source_version_id)).scalar()
+                    if not manifest:
+                        raise ValueError("invalid_review_manifest")
+                    snapshot["review_manifest_id"] = str(review_plan_id)
+                    snapshot["review_manifest_sha256"] = manifest
+                    profile = "evidence-v2:" + hashlib.sha256(json.dumps(snapshot, ensure_ascii=False,
+                        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             doc_id = document_id or uuid4()
             if document_id is None:
                 conn.execute(
@@ -495,7 +507,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
         if requested != "evidence-v2":
             raise ValueError("unsupported_processing_profile")
         supplied = supplied or {}
-        if set(supplied) - {"scope_bindings", "document_default", "dependency_bindings"}:
+        if set(supplied) - {"scope_bindings", "document_default", "dependency_bindings", "text_mode", "processing_template_id"}:
             raise ValueError("unsupported_processing_snapshot_input")
         bindings = supplied.get("scope_bindings", [])
         if not isinstance(bindings, list) or len(bindings) > 200:
@@ -540,6 +552,17 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             "dependency_bindings": [],
             "approved_entities": [],
         }
+        if supplied.get("processing_template_id"):
+            template = conn.execute(text("SELECT * FROM processing_templates WHERE id=:id AND kb_id=:kb FOR SHARE"),
+                {"id": supplied["processing_template_id"], "kb": kb_id}).mappings().first()
+            if not template:
+                raise ValueError("processing_template_not_in_knowledge_base")
+            snapshot["rule_template"] = {"id": str(template["id"]), "revision": template["revision"], **template["configuration"]}
+            snapshot["text_mode"] = template["configuration"].get("text_mode", "auto")
+        if supplied.get("text_mode", "auto") not in {"auto", "plain"}:
+            raise ValueError("invalid_text_mode")
+        if supplied.get("text_mode", "auto") != "auto":
+            snapshot["text_mode"] = supplied["text_mode"]
         if any(not (b.get("title_path") or b.get("source_unit_id")) for b in snapshot["scope_bindings"]):
             raise ValueError("scope_binding_selector_required")
         from cuekb.schemas import SectionDependencyInput
@@ -578,7 +601,7 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                 raise ValueError("document_default_must_cover_document")
             snapshot["document_default"] = default
         entities = conn.execute(
-            text("""SELECT e.id,e.name,e.kind,
+            text("""SELECT e.id,e.name,e.kind,e.product_model,e.software_version,
                 ARRAY(SELECT alias FROM entity_aliases a WHERE a.entity_id=e.id ORDER BY alias) aliases
                 FROM entities e WHERE kb_id=:kb ORDER BY e.id LIMIT 1001"""),
             {"kb": kb_id},
@@ -586,7 +609,8 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
         if len(entities) > 1000 or any(len(e["aliases"]) > 100 for e in entities):
             raise ValueError("processing_entity_snapshot_limit")
         snapshot["approved_entities"] = [
-            {"entity_id": str(e["id"]), "display_name": e["name"], "aliases": e["aliases"]}
+            {"entity_id": str(e["id"]), "display_name": e["name"], "aliases": e["aliases"],
+             "kind": e["kind"], "product_model": e["product_model"], "software_version": e["software_version"]}
             for e in entities
         ]
         names = {str(e["id"]): e["name"] for e in entities}
@@ -810,6 +834,23 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                     {"v": job["version_id"]},
                 ).scalar()
             )
+            self._ensure_review_plan(conn, job["document_id"], job["version_id"], chunks)
+            from cuekb.services.review_rules import blockers
+            if blockers(chunks):
+                auto_publish = False
+                conn.execute(text("UPDATE ingestion_jobs SET stage='needs_review' WHERE id=:id"), {"id": job_id})
+            if auto_publish:
+                from copy import copy
+                from cuekb.domain.models import Principal
+                scoped = copy(self); scoped._snapshot_connection = conn
+                actor = conn.execute(text("SELECT id,name,is_system_admin FROM principals WHERE id=:id"),
+                    {"id": job["principal_id"]}).mappings().one()
+                conn.execute(text("SELECT id FROM knowledge_bases WHERE id=:kb FOR SHARE"), {"kb": job["kb_id"]})
+                try:
+                    scoped.require_role(Principal(**actor), [job["kb_id"]], "write")
+                except PermissionError:
+                    auto_publish = False
+                    conn.execute(text("UPDATE ingestion_jobs SET stage='needs_review' WHERE id=:id"), {"id": job_id})
             if auto_publish:
                 self._publish_locked(conn, job["document_id"], job["version_id"], "default")
             return auto_publish
@@ -854,8 +895,17 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
                     {"id": job_id},
                 )
 
-    def publish(self, document_id: UUID, version_id: UUID, scope_key: str) -> None:
+    def publish(self, document_id: UUID, version_id: UUID, scope_key: str, principal=None) -> None:
         with self._write() as conn:
+            if principal is not None:
+                from copy import copy
+                scoped = copy(self)
+                scoped._snapshot_connection = conn
+                kb = scoped.get_document_kb(document_id)
+                conn.execute(text("SELECT id FROM documents WHERE id=:d AND deleted_at IS NULL FOR UPDATE"), {"d": document_id})
+                conn.execute(text("SELECT id FROM knowledge_bases WHERE id=:kb FOR SHARE"), {"kb": kb})
+                scoped.require_role(principal, [kb], "write")
+                self._review_key(conn, principal)
             self._publish_locked(conn, document_id, version_id, scope_key)
 
     @staticmethod
@@ -874,6 +924,13 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations):
             raise KeyError("document_version_not_found")
         if row[1] not in {"ready", "published"}:
             raise ConflictError("version_not_ready")
+        from cuekb.services.review_rules import blockers
+        chunks = [PostgreSQLRepository._chunk(r) for r in conn.execute(text("""SELECT c.*,v.processing_profile FROM chunks c
+            JOIN document_versions v ON v.id=c.version_id WHERE c.version_id=:v ORDER BY c.ordinal LIMIT 10001"""),
+            {"v": version_id}).mappings()]
+        if (not chunks or len(chunks) > 10000 or blockers(chunks)
+                or all(c.evidence_structure.review_state == "excluded" for c in chunks)):
+            raise ConflictError("review_required_before_publish")
         previous = conn.execute(
             text(
                 "SELECT active_version_id FROM document_publications WHERE document_id=:d AND scope_key=:s FOR UPDATE"

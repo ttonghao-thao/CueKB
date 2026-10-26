@@ -2,6 +2,7 @@
   "filters": {
     "category": null,
     "document_ids": [],
+    "product_entity_id": null,
     "product_model": null,
     "software_version": null
   },

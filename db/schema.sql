@@ -59,9 +59,9 @@ CREATE TABLE document_versions (
   media_type text,
   original_filename text,
   auto_publish boolean NOT NULL DEFAULT false,
-  processing_profile text NOT NULL DEFAULT 'evidence-v2:b4cf1a93f980c37510e305566b53d2b5d819ccca2856abf259152db0c78e4433'
+  processing_profile text NOT NULL DEFAULT 'evidence-v2:25cf8010db8e18837f93d3252d50dd9fb5a735b93b6f533b34a6ee02b84b28b5'
     CHECK(processing_profile ~ '^evidence-v2:[0-9a-f]{64}$'),
-  processing_snapshot jsonb NOT NULL DEFAULT '{"approved_entities":[],"chunker_revision":"evidence-v2.3","dependency_bindings":[],"max_chunk_chars":1200,"parser_revision":"evidence-v2.3","profile_revision":"evidence-v2","scope_bindings":[],"structure_revision":"evidence-v2.3"}'::jsonb
+  processing_snapshot jsonb NOT NULL DEFAULT '{"approved_entities":[],"chunker_revision":"evidence-v2.4","dependency_bindings":[],"max_chunk_chars":1200,"parser_revision":"evidence-v2.4","profile_revision":"evidence-v2","scope_bindings":[],"structure_revision":"evidence-v2.4"}'::jsonb
     CONSTRAINT document_versions_snapshot_object CHECK(jsonb_typeof(processing_snapshot)='object'),
   derivation_kind text NOT NULL DEFAULT 'ingest'
     CHECK(derivation_kind IN ('ingest','reprocess','restore')),
@@ -176,7 +176,9 @@ CREATE TABLE entities (
   kb_id uuid NOT NULL REFERENCES knowledge_bases(id),
   name text NOT NULL CHECK(length(name) BETWEEN 1 AND 200),
   kind text NOT NULL,
-  UNIQUE(kb_id,name,kind),
+  product_model text CHECK(length(product_model) BETWEEN 1 AND 200),
+  software_version text CHECK(length(software_version) BETWEEN 1 AND 200),
+  UNIQUE NULLS NOT DISTINCT(kb_id,name,kind,product_model,software_version),
   UNIQUE(id,kb_id)
 );
 CREATE TABLE entity_aliases (
@@ -238,5 +240,62 @@ CREATE TABLE index_generations (
 );
 CREATE UNIQUE INDEX one_active_generation ON index_generations ((status)) WHERE status='active';
 CREATE UNIQUE INDEX one_pending_generation ON index_generations ((true)) WHERE status IN ('queued','building','ready');
+
+CREATE TABLE processing_templates (
+  id uuid PRIMARY KEY,
+  kb_id uuid NOT NULL REFERENCES knowledge_bases(id),
+  revision integer NOT NULL DEFAULT 1 CHECK(revision>0),
+  name text NOT NULL,
+  configuration jsonb NOT NULL CHECK(jsonb_typeof(configuration)='object'),
+  UNIQUE(kb_id,name)
+);
+
+CREATE TABLE review_plans (
+  id uuid PRIMARY KEY,
+  document_id uuid NOT NULL REFERENCES documents(id),
+  version_id uuid NOT NULL,
+  kb_id uuid NOT NULL REFERENCES knowledge_bases(id),
+  rule_revision text NOT NULL,
+  revision integer NOT NULL DEFAULT 0 CHECK(revision>=0),
+  status text NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','applied')),
+  catalog jsonb NOT NULL CHECK(jsonb_typeof(catalog)='array'),
+  applied_job_id uuid REFERENCES ingestion_jobs(id),
+  manifest_sha256 char(64),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY(version_id,document_id) REFERENCES document_versions(id,document_id),
+  UNIQUE(version_id,rule_revision)
+);
+CREATE TABLE review_facts (
+  id uuid PRIMARY KEY,
+  plan_id uuid NOT NULL REFERENCES review_plans(id),
+  source_chunk_id uuid NOT NULL REFERENCES chunks(id),
+  ordinal integer NOT NULL CHECK(ordinal>=0),
+  original jsonb NOT NULL CHECK(jsonb_typeof(original)='object'),
+  current jsonb NOT NULL CHECK(jsonb_typeof(current)='object'),
+  UNIQUE(plan_id,ordinal)
+);
+CREATE INDEX review_facts_plan_idx ON review_facts(plan_id,ordinal);
+CREATE TABLE review_decisions (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  plan_id uuid NOT NULL REFERENCES review_plans(id),
+  fact_id uuid NOT NULL REFERENCES review_facts(id),
+  revision integer NOT NULL CHECK(revision>0),
+  principal_id uuid NOT NULL REFERENCES principals(id),
+  api_key_id uuid REFERENCES api_keys(id),
+  decision jsonb NOT NULL CHECK(jsonb_typeof(decision)='object'),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE review_selections (
+  id uuid PRIMARY KEY,
+  plan_id uuid NOT NULL REFERENCES review_plans(id),
+  fact_ids jsonb NOT NULL CHECK(jsonb_typeof(fact_ids)='array' AND jsonb_array_length(fact_ids) BETWEEN 1 AND 10000),
+  digest char(64) NOT NULL,
+  revision integer NOT NULL CHECK(revision>=0),
+  completed integer NOT NULL DEFAULT 0 CHECK(completed>=0),
+  operation jsonb,
+  principal_id uuid NOT NULL REFERENCES principals(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
 COMMIT;

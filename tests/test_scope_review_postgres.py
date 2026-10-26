@@ -52,7 +52,9 @@ def test_review_warns_before_publication_and_reprocessing_freezes_checked_relati
     assert review.warnings == ["all_scope_unknown"] and len(review.items) == 1
     assert not pg.load_chunks([c.id for c in chunks], [kb.id])
     assert len(processing_review(pg, first.document_id, first.version_id, limit=1, offset=1).items) == 1
-    pg.publish(first.document_id, first.version_id, "default")
+    from cuekb.adapters.postgres import ConflictError
+    with pytest.raises(ConflictError, match="review_required"):
+        pg.publish(first.document_id, first.version_id, "default")
     snapshot = {"scope_bindings": [{"source_unit_id": chunks[0].evidence_structure.source_unit_id,
                 "subjects": [{"display_name": "Product A", "product_model": "A"}]}],
         "dependency_bindings": [{"source": {"source_unit_id": chunks[0].evidence_structure.source_unit_id},
@@ -68,7 +70,7 @@ def test_review_warns_before_publication_and_reprocessing_freezes_checked_relati
     assert reviewed.scope_bindings[0].source_unit_id == new[0].evidence_structure.source_unit_id
     assert reviewed.dependency_bindings[0].target.source_unit_id == new[1].evidence_structure.source_unit_id
     assert not pg.load_chunks([c.id for c in new], [kb.id])
-    assert pg.load_chunks([chunks[0].id], [kb.id])[0].evidence_structure.applicability.status == "unknown"
+    assert not pg.load_chunks([chunks[0].id], [kb.id])
     pg.publish(first.document_id, replacement.version_id, "default")
     published = pg.load_chunks([c.id for c in new], [kb.id])
     main, target = sorted(published, key=lambda c: c.ordinal)

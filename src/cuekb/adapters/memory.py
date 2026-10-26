@@ -262,6 +262,6 @@ def _matches(chunk: Chunk, filters: dict) -> bool:
     return (
         (not document_ids or chunk.document_id in set(document_ids))
         and (not filters.get("category") or chunk.metadata.get("category") == filters["category"])
-        and scope_matches(chunk, filters.get("product_model"), filters.get("software_version"))
+        and scope_matches(chunk, filters.get("product_model"), filters.get("software_version"), filters.get("product_entity_id"))
         and (not query_ids or bool(query_ids & chunk_identifiers(chunk)))
     )

@@ -1,6 +1,6 @@
 # 外部模型接入
 
-更新：2026-10-25。CueKB只调用Embedding和可选Reranker，不调用生成式答案模型。管理员通过`GET/PUT /v2/model-configuration`或门户配置，字段Schema以[OpenAPI](contracts/openapi.json)为准。
+更新：2026-10-26。CueKB只调用Embedding和可选Reranker，不调用生成式答案模型。管理员通过`GET/PUT /v2/model-configuration`或门户配置，字段Schema以[OpenAPI](contracts/openapi.json)为准。
 
 ## 1. Embedding协议
 

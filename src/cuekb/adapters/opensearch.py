@@ -53,7 +53,9 @@ class OpenSearchBackend:
                         "table_labels": {"type": "text", "analyzer": "cjk"},
                         "identifier_terms": {"type": "keyword"},
                         "block_kind": {"type": "keyword"},
+                        "fact_kind": {"type": "keyword"},
                         "applicable_product_models": {"type": "keyword"},
+                        "applicable_entity_ids": {"type": "keyword"},
                         "applicable_software_versions": {"type": "keyword"},
                         "product_model": {"type": "keyword"},
                         "software_version": {"type": "keyword"},
@@ -134,9 +136,11 @@ class OpenSearchBackend:
                                                   if span.label in {"table_header", "table_row_label"}),
                         "identifier_terms": sorted(chunk_identifiers(chunk)),
                         "block_kind": getattr(structure, "block_kind", "text"),
+                        "fact_kind": structure.fact_kind,
                         "applicable_product_models": sorted(
                             {s.product_model for s in subjects if s.product_model}
                         ),
+                        "applicable_entity_ids": sorted({str(s.entity_id) for s in subjects if s.entity_id}),
                         "applicable_software_versions": sorted(
                             {s.software_version for s in subjects if s.software_version}
                         ),
@@ -337,12 +341,12 @@ class OpenSearchBackend:
             result.append(
                 {"terms": {"document_id": [str(value) for value in filters["document_ids"]]}}
             )
-        for key in ("product_model", "software_version", "category"):
+        for key in ("product_model", "software_version", "category", "product_entity_id"):
             if filters.get(key):
                 field = (
-                    {"product_model": "applicable_product_models", "software_version": "applicable_software_versions"}.get(key, key)
+                    {"product_model": "applicable_product_models", "software_version": "applicable_software_versions", "product_entity_id": "applicable_entity_ids"}.get(key, key)
                 )
-                result.append({"term": {field: filters[key]}})
+                result.append({"term": {field: str(filters[key]) if key == "product_entity_id" else filters[key]}})
         result.append({"bool": {"must_not": [{"term": {"block_kind": "heading"}}]}})
         if filters.get("_query_identifiers"):
             result.append({"terms": {"identifier_terms": filters["_query_identifiers"]}})

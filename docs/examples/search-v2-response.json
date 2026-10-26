@@ -49,7 +49,7 @@
       "context_chars": 40,
       "context_parts_bytes": 40,
       "context_parts_chars": 40,
-      "hits_bytes": 2175,
+      "hits_bytes": 2199,
       "source_text_bytes": 40,
       "source_text_chars": 40
     },
@@ -154,6 +154,7 @@
       "dependency_issues": [],
       "document_id": "33333333-3333-4333-8333-333333333333",
       "document_name": "Illustrative manual",
+      "fact_kind": "statement",
       "metadata": {},
       "processing_profile": "evidence-v2:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "rank": 1,
@@ -191,7 +192,7 @@
     }
   ],
   "ranking_method": "keyword_rrf",
-  "ranking_version": "sha256:8cbed71167b5275ebe957bba7517783c8a0a9f9489ffcc86fd09c8087bb8cf83",
+  "ranking_version": "sha256:e590f84099526e2bdcd499c80443de2f57824ef155b29714e33f98315ada5d29",
   "request_id": "contract-example",
   "retrieval_path": "exact",
   "retrieval_status": "ok",

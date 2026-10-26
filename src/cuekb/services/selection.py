@@ -22,7 +22,7 @@ SELECTION_REVISION = "evidence-set-v1"
 # Internal rule revision participates in ranking_version without changing the
 # closed diagnostics contract for an implementation fix.
 SELECTION_RULES_REVISION = "unicode-signs-v1"
-LEXICAL_REVISION = "scope-lexical-v2.2"
+LEXICAL_REVISION = "scope-lexical-v2.3"
 WORD = re.compile(r"[^\W_\u3400-\u9fff]+(?:[._:/+\-][^\W_\u3400-\u9fff]+)*|[\u3400-\u9fff]", re.UNICODE)
 # Documents commonly use the mathematical minus and small/full-width signs.
 # Dropping those signs would make negative limits redundant with positive ones.
@@ -73,7 +73,7 @@ class ProfileBinding(BaseModel):
     reranker_model: str | None
     config_revision: int | None
     active_generation: str | None
-    lexical_revision: Literal["scope-lexical-v2.2"] = LEXICAL_REVISION
+    lexical_revision: Literal["scope-lexical-v2.3"] = LEXICAL_REVISION
     retrieval_path: Literal["hybrid", "exact", "related"] = "hybrid"
 
 

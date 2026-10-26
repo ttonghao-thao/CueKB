@@ -283,6 +283,7 @@ def test_pg_worker_writes_sections_and_fences_stale_ready_generation(pg):
 
     _key, p, _ = pg.create_api_key("writer", "worker-test")
     kb = pg.create_knowledge_base(KnowledgeBase(name="manuals"))
+    pg.grant(kb.id, p, "write")
     job = pg.create_ingestion_job(
         principal_id=p,
         kb_id=kb.id,
@@ -312,7 +313,7 @@ def test_pg_worker_writes_sections_and_fences_stale_ready_generation(pg):
             processing_profile=claimed["processing_profile"],
             title_path=path,
             anchor=SourceAnchor(heading_path=path),
-            evidence_structure=EvidenceStructure(applicability=Applicability(
+            evidence_structure=EvidenceStructure(review_state="rule_confirmed", applicability=Applicability(
                 status="resolved", subjects=[ApplicableSubject(display_name="Device")]
             )),
         )
