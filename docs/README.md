@@ -10,6 +10,7 @@
 | curl/Python、证据消费、上传发布和客户端升级 | [接入说明](INTEGRATION_GUIDE.md) |
 | 归属、充分性、负载、超时与系统限制 | [系统约束](SYSTEM_CONSTRAINTS.md) |
 | 当前架构、设计与六项优化映射 | [系统设计](SYSTEM_DESIGN.md) |
+| 企业知识库、问题级证据包与VoiceChat性能重构（待审核，未实现） | [重构设计](ENTERPRISE_RAG_REDESIGN.md) |
 | 全新部署、备份、索引与排错 | [操作手册](OPERATIONS.md) |
 | Embedding和可选Reranker协议 | [模型接入](MODEL_INTEGRATION.md) |
 | V2完整测试、质量、更新一致性和10并发测量方法 | [验收方法](ACCEPTANCE.md) |
