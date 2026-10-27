@@ -398,7 +398,7 @@ function ensureProcessingEditor(prefix) {
     <p class="muted">默认按产品目录与原文结构分析，有疑点时提供候选选择。单产品全文映射和章节配置可按需展开。</p>
     <details><summary>可选：人工产品映射与高级章节配置</summary>
     <div class="field-grid"><label><span>产品实体</span><select id="${prefix}-entity"><option value="">未选择 / 手工声明</option></select></label>
-    <label><span>手工声明的产品名</span><input id="${prefix}-product-name" maxlength="200"></label>
+    <label><span>手工声明的产品名（不会创建目录产品）</span><input id="${prefix}-product-name" maxlength="200"></label>
     <label><span>产品型号（可选）</span><input id="${prefix}-model" maxlength="200"></label>
     <label><span>软件版本（可选）</span><input id="${prefix}-software" maxlength="200"></label></div>
     <label class="check-row"><input id="${prefix}-whole" type="checkbox"><span>已确认所选产品适用于全文（多产品文档请使用章节映射）</span></label>

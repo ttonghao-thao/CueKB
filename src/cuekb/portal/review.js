@@ -43,14 +43,30 @@ async function choiceLoadEntities(kb) {
   return all.filter(e => ["product", "model", "bundle"].includes(e.kind));
 }
 
+function choiceSyncCatalog(entities) {
+  choiceState.entities = entities;
+  const field = $("#choice-batch-product"), selected = field.value;
+  field.innerHTML = '<option value="">请选择</option>' + entities.map(e => `<option value="${escapeHtml(e.id)}">${escapeHtml(reviewEntityLabel(e))}</option>`).join("");
+  if (entities.some(e => e.id === selected)) field.value = selected;
+}
+
+function choiceErrorMessage(error) {
+  const code = error.message.split(" · trace")[0];
+  const messages = {
+    bundle_requires_bundle_identity: "选中记录中含套件或组合装，不能统一绑定到单品。请将单品与组合装分开审核，并为组合装选择对应类型的目录产品。",
+    product_fact_cannot_be_general: "选中记录中含产品规格或套件内容，不能全部确认为通用资料。请缩小范围并分别确认产品。",
+    mixed_fact_requires_split: "选中记录中含多个产品的混合事实，请先拆分或确认比较关系。"
+  };
+  return messages[code] ? `${messages[code]}（${error.message}）` : error.message;
+}
+
 async function openProcessingReview(documentId, versionId) {
   const request = ++choiceState.request;
   try {
     const plan = await api(`/documents/${documentId}/versions/${versionId}/review-plans`, {method: "POST", body: "{}"});
     const entities = await choiceLoadEntities(plan.kb_id);
     if (request !== choiceState.request) return;
-    choiceState.plan = plan; choiceState.entities = entities; choiceState.offset = 0;
-    $("#choice-batch-product").innerHTML = '<option value="">请选择</option>' + entities.map(e => `<option value="${escapeHtml(e.id)}">${escapeHtml(reviewEntityLabel(e))}</option>`).join("");
+    choiceState.plan = plan; choiceSyncCatalog(entities); choiceState.offset = 0;
     $("#choice-filter").value = "issues";
     $("#choice-reason-filter").innerHTML = '<option value="">全部原因</option>' + Object.entries(plan.reason_counts).map(([key,count]) => `<option value="${escapeHtml(key)}">${escapeHtml(choiceReasons[key] || key)} (${count})</option>`).join("");
     $("#choice-section-filter").innerHTML = '<option value="">全部章节</option>' + plan.sections.map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.title)}</option>`).join("");
@@ -183,7 +199,7 @@ $("#choice-new-product").addEventListener("submit", async event => {
   try {
     const id = newId(), data = {name: $("#choice-new-name").value.trim(), kind: $("#choice-new-kind").value, product_model: $("#choice-new-model").value.trim() || null, aliases: [], mention_chunk_ids: []};
     await api(`${requireKnowledgeAdmin()}/entities/${id}`, {method: "PUT", body: JSON.stringify(data)});
-    choiceState.entities = await choiceLoadEntities(choiceState.plan.kb_id); await refreshChoiceReview();
+    choiceSyncCatalog(await choiceLoadEntities(choiceState.plan.kb_id)); await refreshChoiceReview();
     toast("产品已加入目录，请在对应原文选择并确认");
   } catch (error) { $("#choice-error").textContent = error.message; }
 });
@@ -221,7 +237,7 @@ $("#choice-csv-import").addEventListener("click", async () => {
   try {
     await api(`${requireKnowledgeAdmin()}/entities/import`, {method: "POST", body: JSON.stringify({rows: choiceState.csv})});
     choiceState.csv=[]; $("#choice-csv-import").disabled=true;
-    choiceState.entities=await choiceLoadEntities(choiceState.plan.kb_id); await refreshChoiceReview(); toast("目录已导入");
+    choiceSyncCatalog(await choiceLoadEntities(choiceState.plan.kb_id)); await refreshChoiceReview(); toast("目录已导入");
   } catch(error) {$("#choice-error").textContent=error.message;}
 });
 
@@ -248,6 +264,9 @@ $("#choice-batch-apply").addEventListener("click",async () => {
       if (frozen.completed===frozen.count) {sessionStorage.removeItem(key);frozen=null;}
     }
     if (!frozen) {
+      if ($("#choice-batch-action").value === "assign" && !$("#choice-batch-product").value) {
+        return toast(choiceState.entities.length ? "请选择跨页操作的目标产品" : "当前知识库没有可选产品，请先展开‘目录中缺少产品时新建’保存产品", "error");
+      }
       frozen=await api(`/review-plans/${plan.id}/selections`,{method:"POST",body:JSON.stringify({revision:plan.revision,
         issues:$("#choice-filter").value==="issues",reason:$("#choice-reason-filter").value || null,
         section_id:$("#choice-section-filter").value || null})});
@@ -269,7 +288,10 @@ $("#choice-batch-apply").addEventListener("click",async () => {
     if (frozen.completed===frozen.count) sessionStorage.removeItem(key);
     await refreshChoiceReview();
   } catch(error) {
-    $("#choice-error").textContent=`跨页操作已停止，已完成批次保留。${error.message}`;
-    if (error.status===409) {sessionStorage.removeItem(key);await refreshChoiceReview();}
+    if (error.status===409 || error.status===422) {
+      sessionStorage.removeItem(key);
+      await refreshChoiceReview();
+    }
+    $("#choice-error").textContent=`跨页操作已停止，已完成批次保留。${choiceErrorMessage(error)}${error.status===422 ? "请调整筛选范围和操作后重新预览；不会继续执行原失败操作。" : ""}`;
   } finally {choiceState.busy=false;$("#choice-items").inert=false;}
 });
