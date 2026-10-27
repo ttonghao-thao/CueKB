@@ -16,8 +16,8 @@ def test_domain_and_empty_database_defaults_freeze_identical_v2_inputs():
     encoded = json.dumps(version.processing_snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     assert version.processing_profile == "evidence-v2:" + hashlib.sha256(encoded.encode()).hexdigest()
     schema = Path("db/schema.sql").read_text()
-    assert f"processing_profile text NOT NULL DEFAULT '{version.processing_profile}'" in schema
-    assert f"processing_snapshot jsonb NOT NULL DEFAULT '{encoded}'::jsonb" in schema
+    assert f"ALTER COLUMN processing_profile SET DEFAULT '{version.processing_profile}'" in schema
+    assert f"ALTER COLUMN processing_snapshot SET DEFAULT '{encoded}'::jsonb" in schema
     assert parse_document(b"Current fact.", "fact.txt", "text/plain",
                           processing_profile=version.processing_profile,
                           processing_snapshot=version.processing_snapshot)[0].text == "Current fact."

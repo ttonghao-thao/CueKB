@@ -62,6 +62,10 @@ def ready() -> dict:
         try:
             repository().engine.connect().close()
             state = search_backend().client.cluster.health()
+            from cuekb.migrations import check_connection
+            with repository().engine.connect() as connection:
+                try: check_connection(connection)
+                except RuntimeError: raise ServiceError("run_cuekb_db_upgrade_before_start", "SCHEMA_UPGRADE_REQUIRED") from None
             if state.get("status") == "red" or state.get("timed_out"):
                 raise ServiceError("search_not_ready", "SEARCH_NOT_READY")
         except ServiceError:

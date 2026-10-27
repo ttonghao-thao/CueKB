@@ -305,3 +305,13 @@ detail为字符串或校验错误列表（仅loc/msg/type，不回显input/ctx�
 | 500 | INTERNAL_ERROR；无驱动/模型密钥或完整请求回显 |
 
 客户端超时、网络断连与HTTP504不同。读请求可以由调用方按业务预算有界退避重试；不得重复无限重试、扩大授权范围或把错误转换成空成功。写请求只用同一幂等键重试；未知处理结果先查询原Job。
+
+## 8. S1文档核心接口
+
+上传额外支持`content_kind=auto/general/product`（默认auto）。general是调用者显式声明整份文档为非产品资料，明确产品/套件冲突仍需处理；不放宽ACL。`source_metadata`为闭合对象：language默认und，source_owner、valid_from/valid_to、authority_policy_ref可选；日期须含时区且结束晚于起点。策略引用是来源声明，不自动赋予可信等级。reprocess支持同名字段，省略/null时继承源版本；原件重解析不覆盖旧发布指针。
+
+`GET /v2/documents/{document_id}/versions/{version_id}/structure?offset=0&limit=100`返回规范源树分页。已发布版本需KB read；未发布/历史非当前版本需write。文档删除、版本与文档不匹配返回404；无授权或撤Key拒绝，memory backend返回409。每页最多100节点，节点正文预览最多10000字符、各source_span文本预览最多500字符，相关边最多2000条，超出有对应text_truncated/edges_truncated标识；完整原文保留在源树及原件，不因预览裁剪被修改。
+
+顶层字段包含document_id/version_id、revision、status、source_hash、source_version_id、digest、issues、metadata、scope_counts、total/offset/limit、nodes及edges。节点包含id/parent_id/kind/ordinal/text/title_path/source_spans/parse_quality/parser_key/attributes、必要闭包dependencies。边包含id/source_id/target_id/type/required/provenance。必要闭包state为complete/limited，列出已核验node_ids及超限/循环原因；结构边不自动升级为必要条件。
+
+status=complete表示已识别规范结构已保存，仍不认证OCR/语义充分性；limited明确报告结构/依赖问题；legacy_unavailable表示旧版本没有规范树，返回reparse_original_required，不能把旧chunks冒充完整源树。跨请求分页需固定version_id，节点ordinal按父先子后，重复同名章节ID不同。图digest标识源树、来源和处理映射，权限不冻结在摘要中。新接口不改变/v2/search的响应字段或unassessed语义。

@@ -29,7 +29,10 @@ class ConflictError(RuntimeError):
     pass
 
 
-class PostgreSQLRepository(KnowledgeOperations, GenerationOperations, ReviewOperations):
+from cuekb.adapters.document_graphs import DocumentGraphOperations
+
+
+class PostgreSQLRepository(DocumentGraphOperations, KnowledgeOperations, GenerationOperations, ReviewOperations):
     def __init__(self, database_url: str, pepper: str, model_config_key: str) -> None:
         # Short checkout intervals let a request recheck its absolute deadline;
         # server statement/lock timeouts are applied before each read statement.
@@ -507,8 +510,13 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations, ReviewOper
         if requested != "evidence-v2":
             raise ValueError("unsupported_processing_profile")
         supplied = supplied or {}
-        if set(supplied) - {"scope_bindings", "document_default", "dependency_bindings", "text_mode", "processing_template_id"}:
+        if set(supplied) - {"scope_bindings", "document_default", "dependency_bindings", "text_mode", "processing_template_id", "content_kind", "source_metadata"}:
             raise ValueError("unsupported_processing_snapshot_input")
+        supplied = dict(supplied)
+        if origin_version_id is not None:
+            previous = conn.execute(text("SELECT processing_snapshot FROM document_versions WHERE id=:v"), {"v":origin_version_id}).scalar() or {}
+            for key in ("content_kind", "source_metadata"):
+                if key not in supplied and key in previous: supplied[key] = previous[key]
         bindings = supplied.get("scope_bindings", [])
         if not isinstance(bindings, list) or len(bindings) > 200:
             raise ValueError("scope_bindings_limit")
@@ -548,10 +556,18 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations, ReviewOper
             "chunker_revision": PROCESSING_REVISION,
             "structure_revision": PROCESSING_REVISION,
             "max_chunk_chars": 1200,
+            "window_token_budget": 320,
+            "window_tokenizer": "unicode-lexical-v1",
             "scope_bindings": [declaration(b) for b in bindings],
             "dependency_bindings": [],
             "approved_entities": [],
         }
+        from cuekb.schemas import SourceMetadata
+        kind = supplied.get("content_kind", "auto")
+        if kind not in {"auto","general","product"}: raise ValueError("invalid_content_kind")
+        if kind != "auto": snapshot["content_kind"] = kind
+        if supplied.get("source_metadata"):
+            snapshot["source_metadata"] = SourceMetadata.model_validate(supplied["source_metadata"]).model_dump(mode="json",exclude_none=True)
         if supplied.get("processing_template_id"):
             template = conn.execute(text("SELECT * FROM processing_templates WHERE id=:id AND kb_id=:kb FOR SHARE"),
                 {"id": supplied["processing_template_id"], "kb": kb_id}).mappings().first()
@@ -814,6 +830,9 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations, ReviewOper
                         "spans": json.dumps([s.model_dump(mode="json") for s in chunk.source_spans]),
                     },
                 )
+            graph = getattr(chunks, "document_graph", None)
+            if graph is not None:
+                self._save_document_graph(conn, graph, chunks)
             conn.execute(
                 text("UPDATE knowledge_bases SET content_revision=content_revision+1 WHERE id=:kb"),
                 {"kb": job["kb_id"]},
@@ -931,6 +950,11 @@ class PostgreSQLRepository(KnowledgeOperations, GenerationOperations, ReviewOper
         if (not chunks or len(chunks) > 10000 or blockers(chunks)
                 or all(c.evidence_structure.review_state == "excluded" for c in chunks)):
             raise ConflictError("review_required_before_publish")
+        conn.execute(text("""INSERT INTO publication_snapshots(document_id,version_id,graph_digest,processing_profile,content_revision)
+            SELECT v.document_id,v.id,g.digest,v.processing_profile,k.content_revision FROM document_versions v
+            JOIN documents d ON d.id=v.document_id JOIN knowledge_bases k ON k.id=d.kb_id
+            LEFT JOIN document_graphs g ON g.version_id=v.id WHERE v.id=:v
+            ON CONFLICT(document_id,version_id) DO NOTHING"""), {"v":version_id})
         previous = conn.execute(
             text(
                 "SELECT active_version_id FROM document_publications WHERE document_id=:d AND scope_key=:s FOR UPDATE"

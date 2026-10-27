@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-PROCESSING_REVISION = "evidence-v2.4"
+PROCESSING_REVISION = "evidence-v2.5"
 
 
 def default_processing_snapshot() -> dict[str, Any]:
@@ -21,6 +21,8 @@ def default_processing_snapshot() -> dict[str, Any]:
         "chunker_revision": PROCESSING_REVISION,
         "structure_revision": PROCESSING_REVISION,
         "max_chunk_chars": 1200,
+        "window_token_budget": 320,
+        "window_tokenizer": "unicode-lexical-v1",
         "scope_bindings": [],
         "dependency_bindings": [],
         "approved_entities": [],

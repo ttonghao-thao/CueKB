@@ -15,6 +15,7 @@ from cuekb.adapters.opensearch import OpenSearchBackend
 from cuekb.adapters.postgres import PostgreSQLRepository
 from cuekb.adapters.storage import LocalFileStorage
 from cuekb.config import get_settings
+from cuekb.domain.document_graph import MaterializedChunks, bind_retrieval_units
 from cuekb.domain.models import Chunk
 from cuekb.services.generations import rebuild_once
 from cuekb.services.evidence import bind_block_dependencies, build_search_text
@@ -25,10 +26,11 @@ logger = logging.getLogger(__name__)
 
 
 def materialize_chunks(repository, storage, job, *, template, parse_timeout=None):
-    if job.get("processing_snapshot", {}).get("review_manifest_id"):
-        chunks = repository.review_materialize(job)
-    elif job.get("derivation_kind") == "restore":
+    blocks = None
+    if job.get("derivation_kind") == "restore":
         chunks = repository.restore_chunks(job)
+    elif job.get("processing_snapshot", {}).get("review_manifest_id"):
+        chunks = repository.review_materialize(job)
     else:
         content = storage.read(job["source_uri"])
         parser = parse_document if parse_timeout is None else parse_with_deadline
@@ -60,6 +62,10 @@ def materialize_chunks(repository, storage, job, *, template, parse_timeout=None
                             "context_self_link", "context_reference_cycle"}:
                 raise ParseError(str(exc)) from None
             raise
+        if getattr(blocks, "document_graph", None) is not None:
+            from cuekb.domain.document_graph import bind_footnote_dependencies
+            preliminary = bind_retrieval_units(blocks.document_graph, chunks)
+            bind_footnote_dependencies(chunks, preliminary)
         # A frozen necessary-condition binding is itself a review of that
         # structural role; it never assigns the target a product identity.
         by_id = {c.id: c for c in chunks}
@@ -73,6 +79,22 @@ def materialize_chunks(repository, storage, job, *, template, parse_timeout=None
                         and trusted_dependency(main, target, link)):
                     s.fact_kind, s.review_state = "general", "rule_confirmed"
                     s.review_reason, s.review_provenance = "audited_required_condition", link.provenance.provenance_id
+    if job.get("processing_snapshot", {}).get("content_kind") == "general":
+        from cuekb.services.fact_rules import catalog, matches
+        entities = catalog(job["processing_snapshot"])
+        for chunk in chunks:
+            structure = chunk.evidence_structure
+            if (structure.review_state in {"pending","rule_confirmed"} and not structure.applicability.subjects
+                    and structure.fact_kind != "bundle" and not matches(chunk.source_text, entities)):
+                structure.fact_kind, structure.review_state = "general", "rule_confirmed"
+                structure.review_reason, structure.review_provenance = "declared_non_product_document", "document:content_kind:general"
+    graph = getattr(blocks, "document_graph", None)
+    if graph is not None:
+        graph.source_version_id = job.get("source_version_id")
+        graph = bind_retrieval_units(graph, chunks)
+    elif job.get("source_version_id") and hasattr(repository, "derived_document_graph"):
+        graph = repository.derived_document_graph(job, chunks)
+    chunks = MaterializedChunks(chunks, graph=graph)
     for chunk in chunks:
         chunk.document_name = job["name"]
         chunk.search_text = build_search_text(chunk, job["name"], template=template)
@@ -310,6 +332,9 @@ def main() -> None:
     settings = get_settings()
     if settings.backend != "production":
         raise RuntimeError("worker requires CUEKB_BACKEND=production")
+    from cuekb.migrations import check_connection
+    with runtime().repository.engine.connect() as connection:
+        check_connection(connection)
     while True:
         if not run_once():
             time.sleep(settings.worker_poll_seconds)

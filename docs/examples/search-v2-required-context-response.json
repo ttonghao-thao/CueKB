@@ -36,7 +36,7 @@
       "stale_candidate": 0
     },
     "processing_profiles": [
-      "evidence-v2:73d47cc4507b2a5caea9bec1bad49dcef05d3a857091da3bb256257a3f58d225"
+      "evidence-v2:071ac19800b143868587070aacdf92ee6fd4d62d6a6606e76301e05ef7a179f7"
     ],
     "relation_limit": 0,
     "reranker": {
@@ -244,7 +244,7 @@
       "metadata": {
         "business_version": null
       },
-      "processing_profile": "evidence-v2:73d47cc4507b2a5caea9bec1bad49dcef05d3a857091da3bb256257a3f58d225",
+      "processing_profile": "evidence-v2:071ac19800b143868587070aacdf92ee6fd4d62d6a6606e76301e05ef7a179f7",
       "rank": 1,
       "relations": [],
       "retrieval_sources": [

@@ -19,6 +19,7 @@ from cuekb.api.v2_dependencies import retrieval_service_v2
 from cuekb.api.routes import _queue
 from cuekb.config import get_settings
 from cuekb.domain.models import Job, Principal
+from cuekb.domain.document_graph import DocumentStructurePage
 from cuekb.schemas import ProcessingReview, ReprocessRequest, RestoreRequest, V2DocumentDetail, V2DocumentMetadata, V2DocumentVersionInfo, V2SearchRequest, V2SearchResponse
 from cuekb.schemas import ReviewPlanCreate, ReviewPlanInfo, ReviewFactPage, ReviewDecisionsRequest, ReviewApplyRequest
 from cuekb.schemas import ReviewSelectionCreate, ReviewSelectionApply, ReviewSelectionInfo
@@ -49,7 +50,7 @@ async def ingest_file(
     return await run_in_threadpool(
         _queue, parsed, b"".join(parts), file.filename or "document",
         file.content_type or "application/octet-stream", idempotency_key, principal,
-        processing_snapshot={"text_mode": parsed.text_mode, "processing_template_id": str(parsed.processing_template_id) if parsed.processing_template_id else None,
+        processing_snapshot={"content_kind": parsed.content_kind, "source_metadata": parsed.source_metadata.model_dump(mode="json"), "text_mode": parsed.text_mode, "processing_template_id": str(parsed.processing_template_id) if parsed.processing_template_id else None,
                              "scope_bindings": [b.model_dump(mode="json") for b in parsed.scope_bindings],
                              "dependency_bindings": [b.model_dump(mode="json") for b in parsed.dependency_bindings],
                              "document_default": parsed.document_default.model_dump(mode="json") if parsed.document_default else None},
@@ -155,7 +156,7 @@ def reprocess(
     canonical = body.model_dump(mode="json")
     identity = {"operation": "reprocess", "document_id": str(document_id), "body": canonical}
     request_sha = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    snapshot = {key: canonical[key] for key in ("scope_bindings", "document_default", "dependency_bindings", "text_mode", "processing_template_id") if canonical.get(key) is not None}
+    snapshot = {key: canonical[key] for key in ("scope_bindings", "document_default", "dependency_bindings", "text_mode", "processing_template_id", "content_kind", "source_metadata") if canonical.get(key) is not None}
     try:
         return repo.create_reprocess_job(
             principal_id=principal.id, document_id=document_id,
@@ -261,3 +262,16 @@ def get_review_selection(selection_id:UUID,principal:Principal|None=Depends(curr
 @router.post("/review-selections/{selection_id}/apply",response_model=ReviewSelectionInfo,tags=["review-v2"])
 def apply_review_selection(selection_id:UUID,body:ReviewSelectionApply,principal:Principal|None=Depends(current_principal)):
     return _review_call(lambda:_review_repository().review_selection(selection_id,principal,body))
+
+
+@router.get("/documents/{document_id}/versions/{version_id}/structure", response_model=DocumentStructurePage, tags=["processing-v2"])
+def document_structure(document_id: UUID, version_id: UUID,
+    offset: int = Query(default=0, ge=0, le=30000), limit: int = Query(default=100,ge=1,le=100),
+    principal: Principal | None = Depends(current_principal)):
+    repo=repository()
+    if not isinstance(repo,PostgreSQLRepository):
+        raise HTTPException(409,"document_structure_requires_postgresql")
+    try:
+        return repo.document_graph_page(document_id,version_id,principal,offset=offset,limit=limit)
+    except KeyError:
+        raise HTTPException(404,"document_version_not_found") from None

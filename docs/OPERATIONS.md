@@ -1,6 +1,6 @@
 # 部署与操作手册
 
-更新：2026-10-26。下列是全新部署的运行步骤，不是本轮已部署的证据。真实环境执行记录在[任务板](../TASK_BOARD.md)。
+更新：2026-10-27。下列是部署与保留数据升级的运行步骤，不是本轮已部署的证据。真实环境执行记录在[任务板](../TASK_BOARD.md)。
 
 ## 1. 环境与配置
 
@@ -34,9 +34,9 @@ chmod 600 .env.production
 
 ## 3. 空库初始化与搜索投影
 
-`db/schema.sql`是完整结构的唯一来源，包含内容、权限、模型配置、关系、generation和V2证据字段及约束。Compose将它只读挂载到PostgreSQL官方初始化目录；数据库首次使用空数据目录时自动执行，无需手工数据库指令。该文件作为一个事务执行，初始化失败须先排查日志，不能将缺表数据库作为正常实例使用。
+包内`cuekb/migrations/0001_baseline.sql`及后续顺序迁移是schema定义来源；`db/schema.sql`由`scripts/export-db-schema.py`导出。二者共用同一checksum迁移链，不独立编辑。Compose将它只读挂载到PostgreSQL官方初始化目录；数据库首次使用空数据目录时自动执行，无需手工数据库指令。该文件作为一个事务执行，初始化失败须先排查日志，不能将缺表数据库作为正常实例使用。
 
-全新部署必须使用新的空PG数据卷。已有数据目录不会重新执行初始化文件，不属于本次部署输入；需要与旧实例隔离时可为新部署设置独立`COMPOSE_PROJECT_NAME`并处理宿主端口冲突。部署脚本不清理旧容器或数据卷，也不修改已有库结构。保留仓库中的`db/schema.sql`，缺文件时Compose挂载应直接失败；仅重建应用镜像不能改变已有数据库结构。
+空数据目录首次自动执行导出的init SQL。已有数据目录不会重执行init SQL，采用第8节显式升级，不能删卷。`deploy-production.sh`仍只启动与检查，不自动升级；应用ready在缺schema/摘要失配时返回503 SCHEMA_UPGRADE_REQUIRED。API存活接口/管理端口可用于诊断，不把ready失败等同于进程退出。
 
 在门户配置Embedding后，Worker为新文档创建带`lexical_revision=scope-lexical-v2.3`的V2搜索投影。更换Embedding、维度、输入模板或词法投影时，由系统管理员通过`POST /v2/index-generations`创建重建任务，省略`chunking_version`，等待ready后activate。维护锁期间内容写入409；已兼容的查询继续，缺少新词法revision的V2查询明确INDEX_UPGRADE_REQUIRED，不临时把旧字段当作新字段。该流程只重建搜索投影，不改变数据库结构。
 
@@ -49,7 +49,7 @@ chmod 600 .env.production
 3. 更新时传document_id；发布前旧published仍可见。未成功入索引的任务不能切发布指针。
 4. 下载原件用授权接口，不直接暴露存储目录。删除首先使PG不可见，OS通过outbox清理；原件与备份的物理保留另按运行方策略处理。
 5. reprocess/restore的幂等重试保持原payload/key；未知结果先查询Job。不要反复生成新key创建重复任务。
-6. 当前处理修订为evidence-v2.4，增加CPU规则、事实级拆分、选择式审核与发布门槛。已发布事实不会自动改写；审核提示requires_reprocess时先按当前结构重解析，再配置新源单元并审核。API/Worker与门户须一起更新；第三方严格DTO先同步当前契约。数据库仍以完整schema全新初始化，不增加结构升级链。
+6. 当前处理修订为evidence-v2.5，新增规范源树与词法预算分窗。旧发布事实不自动改写；结构缺失的版本可在审核子页“按当前结构重新解析原件”，审核新版本后发布。数据库升级与原件重处理是两步，generation不替代它们。
 
 ## 5. 备份与恢复
 
@@ -96,12 +96,43 @@ channel为vector、rerank或lexical；lexical是0—1的字面覆盖比例，其
 
 请求绑定精确匹配时状态applied；rerank阈值优先，否则向量/字面覆盖已校准信号按OR接受，无适用信号的候选保持未评估。模型、索引、配置或路径不匹配时状态binding_mismatch，门控不应用，继续有界检索且充分性仍unassessed；监控此状态，不把它当成低相关性已过滤。损坏/超限文件报配置错误，不悄悄当成未配置。换generation或模型后重新录制/校准/验收，不只手工改绑定掩盖变化。
 
-## 8. 规则审核版本的部署
+## 8. S1保留数据升级、验证与回退
 
-本轮包含API/Worker、门户与db/schema.sql变化，需要重建API/Worker镜像；仅拉取代码或重启旧镜像不会应用更新。数据库仍只支持完整schema全新初始化；不要把新应用直接连接旧结构，也不要删除生产卷重建。保留原环境、原件与备份，在独立新库初始化、核对目录/权限并重新导入审核，业务验收后切换。旧环境保留用于回退，数据迁移方式须单独核实。
+适用当前完整evidence-v2.4基线（部署提交fb4804c/aa57cd5系列）；更早/残缺结构及未知迁移checksum会拒绝，不自动猜测历史版本。需要重建API和Worker镜像。旧发布指针、ACL、实体、审核草稿及原件均保留；无需为升级重建OpenSearch generation。
 
-解析和归属改变须reprocess原件、审核新版本再publish，generation只重建已有PG事实。旧OpenSearch投影触发INDEX_UPGRADE_REQUIRED时，在门户管理模型配置/generation，用匹配模型与实际维度创建重建任务，等待ready并切换；保留PG和原件，不手改_meta。/v2/ready现在返回明确503而非未捕获500；API容器仍能提供管理入口，检查Worker及generation任务进度。
+先暂停业务上传并等待已有导入任务结束；升级器会拒绝存在queued/running任务的数据库。以下在**宿主机CueKB仓库目录**执行，使用默认镜像标签；自定义CUEKB_API_IMAGE/CUEKB_WORKER_IMAGE时构建为.env.production中的对应标签。不要输出或回传.env内容。
 
-auto_publish不再绕过审核。有阻塞时Job可succeeded且stage=needs_review；这表示待确认，不是模型或解析失败。只有已确认的通用unknown才允许发布，不应把全篇强制绑定某产品来清零unknown。解析超时可检查原件/CPU负载并调整有界worker_parse_timeout_seconds，不能无限重试。
+```bash
+set -e
+git pull --ff-only origin main
+s1_api_container=$(docker compose --env-file .env.production ps -q api)
+s1_worker_container=$(docker compose --env-file .env.production ps -q worker)
+docker image tag "$(docker inspect --format '{{.Image}}' "$s1_api_container")" cuekb-api:before-s1
+docker image tag "$(docker inspect --format '{{.Image}}' "$s1_worker_container")" cuekb-worker:before-s1
+docker build --target api -t cuekb-api:latest .
+docker build --target worker -t cuekb-worker:latest .
+docker compose --env-file .env.production stop api worker
+umask 077
+s1_backup_dir="backups/s1-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$s1_backup_dir"
+docker compose --env-file .env.production exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$s1_backup_dir/before-s1.dump"
+docker compose --env-file .env.production run --rm --no-deps api cuekb-db upgrade
+docker compose --env-file .env.production run --rm --no-deps api cuekb-db check
+./scripts/deploy-production.sh .env.production
+```
 
-PDF/OCR的Docling处理可能需要预先可用的解析/OCR模型资源；CPU运行不等于完全没有模型文件。应在受控部署环境预置并验证缓存/下载网络。模型资源不可用时先解决缓存或下载网络；TXT/DOCX通过不能替代PDF端到端验收。
+备份命令或upgrade/check任一步失败即停止执行后续命令，不要强行启动新Worker或删卷。upgrade成功输出revision=0002及0001/0002校验摘要；单事务失败会回滚DDL和登记。提示schema_upgrade_requires_drained_ingestion_jobs时，使用下方旧镜像回退命令恢复处理，等任务完成后再次维护；提示unsupported_legacy_schema/schema_checksum_mismatch时回传错误码及运行提交，由开发者核对，不能手改ledger。
+
+重新打开门户标签页载入新脚本。打开旧版本时可能显示legacy_unavailable：数据库升级不会伪造旧版本源树；需要树时选择重解析，旧发布版继续服务，完成审核后显式发布新版本。首次发布之前保留旧指针。新上传通用制度可选“通用制度 / 流程 / 非产品资料”，产品手册保持自动或产品模式。
+
+**应用回退保留扩展schema，不执行DROP或向旧表覆盖恢复。** S1启用后先停止新增导入并让新Worker完成queued/running任务，再执行：
+
+```bash
+docker compose --env-file .env.production exec -T api cuekb-db rollback-check
+docker compose --env-file .env.production stop api worker
+CUEKB_API_IMAGE=cuekb-api:before-s1 CUEKB_WORKER_IMAGE=cuekb-worker:before-s1 docker compose --env-file .env.production up -d --no-build --no-deps --force-recreate api worker
+```
+
+rollback-check必须成功且pending_jobs=0；旧Worker不能处理新修订的待执行任务。升级失败且新API尚未启动时，直接用旧镜像启动命令恢复即可，schema仍为事务前状态。回退应用后保留新扩展表、原件和备份；恢复历史业务事实依然通过restore产生新版本，不靠恢复旧ACL。整库备份恢复只用于灾难演练/隔离库，不在正常应用回退时覆盖生产新数据。
+
+PDF/OCR仍需部署环境中可用的Docling解析/OCR资源；CPU运行不等于无需模型文件。预置缓存并验证下载网络；TXT/DOCX通过不替代PDF验证。现场执行与回传统一见[验收7.5](ACCEPTANCE.md#75-s1文档核心与门户本批部署验收)，提供容器内采集命令。

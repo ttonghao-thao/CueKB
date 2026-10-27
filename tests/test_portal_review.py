@@ -1,4 +1,5 @@
 """Exercise catalog and failed batch interactions in the actual portal script."""
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,7 +11,7 @@ def test_catalog_refresh_and_failed_batch_can_change_operation():
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is required for portal interaction verification")
-    script = r'''
+    script = r"""
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const elements = new Map(), storage = new Map(), calls = [];
 function $(id) {
@@ -57,6 +58,77 @@ vm.runInContext(fs.readFileSync('src/cuekb/portal/review.js','utf8'), context);
   const actions = calls.filter(([url]) => url.endsWith('/apply')).map(([,options]) => JSON.parse(options.body).action);
   assert.deepEqual(actions, ['assign','defer']);
 })().catch(error => {console.error(error);process.exitCode=1;});
-'''
-    subprocess.run([node, "-e", script], cwd=Path(__file__).resolve().parents[1],
-                   capture_output=True, text=True, check=True)
+"""
+    subprocess.run(
+        [node, "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def test_deleted_job_cannot_be_resurrected_by_delayed_poll():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node required")
+    script = r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const text=fs.readFileSync('src/cuekb/portal/app.js','utf8');
+const jobs=new Map([['job',{document_id:'doc',filename:'source'}]]),timers=new Map([['job',123]]);
+let finish,cleared=false,renders=0;
+const context=vm.createContext({state:{jobs,jobTimers:timers,deletedDocuments:new Set()},
+ $:id=>id==='#document-dialog'?{close(){}}:{value:'doc'},
+ api:async(path,opts)=>opts?.method==='DELETE'?null:await new Promise(resolve=>finish=resolve),
+ confirm:()=>true,toast(){},clearTimeout:id=>{assert.equal(id,123);cleared=true;},
+ renderJobs:()=>renders++,loadDocuments:async()=>{},handleError:e=>{throw e;}});
+vm.runInContext(text.slice(text.indexOf('async function deleteDocument('),text.indexOf('async function downloadSource(')),context);
+vm.runInContext(text.slice(text.indexOf('async function pollJob('),text.indexOf('const scopeReasonText')),context);
+(async()=>{
+ const polling=vm.runInContext("pollJob('job')",context);
+ await vm.runInContext("deleteDocument({id:'doc',name:'source'})",context);
+ assert.equal(jobs.size,0);assert.equal(timers.size,0);assert.ok(cleared);
+ finish({document_id:'doc',status:'running',progress:50});await polling;
+ assert.equal(jobs.size,0);assert.equal(renders,1);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+    subprocess.run(
+        [node, "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+
+
+def test_multiselect_submits_only_checked_ids_and_keeps_selection_on_rejection():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node required")
+    script = r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const fields=new Map(),sent=[];let fail=false;
+const $=id=>{if(!fields.has(id))fields.set(id,{value:'',textContent:'',addEventListener(n,fn){this[n]=fn;}});return fields.get(id);};
+const context=vm.createContext({$, $$:()=>[],confirm:()=>true,toast(){},
+ api:async(path,options)=>{sent.push(JSON.parse(options.body));if(fail)throw Object.assign(new Error('bundle_requires_bundle_identity'),{status:422});return {id:'plan',revision:2,status:'draft'};}});
+vm.runInContext(fs.readFileSync('src/cuekb/portal/review.js','utf8'),context);
+(async()=>{
+ await vm.runInContext(`(async()=>{choiceState.plan={id:'plan',revision:1,status:'draft'};
+ choiceState.selected=new Set(['page1-checked','page2-checked']);refreshChoiceReview=async()=>{};
+ $('#choice-selected-action').value='defer';await $('#choice-selected-apply').click();})()`,context);
+ assert.deepEqual(sent[0].decisions.map(d=>d.fact_id),['page1-checked','page2-checked']);
+ assert.equal(vm.runInContext('choiceState.selected.size',context),0);
+ fail=true;
+ await vm.runInContext(`(async()=>{choiceState.selected.add('rejected');await $('#choice-selected-apply').click();})()`,context);
+ assert.equal(vm.runInContext('choiceState.selected.has("rejected")',context),true);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+    subprocess.run(
+        [node, "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )

@@ -507,7 +507,26 @@ class SectionDependencyInput(BaseModel):
         return self
 
 
+class SourceMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: str = Field(default="und", min_length=2, max_length=35)
+    source_owner: str | None = Field(default=None, max_length=200)
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    authority_policy_ref: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def valid_interval(self):
+        for value in (self.valid_from, self.valid_to):
+            if value is not None and value.tzinfo is None: raise ValueError("source_time_requires_timezone")
+        if self.valid_from and self.valid_to and self.valid_to <= self.valid_from:
+            raise ValueError("invalid_source_validity_interval")
+        return self
+
+
 class ReprocessRequest(BaseModel):
+    content_kind: Literal["auto", "general", "product"] | None = None
+    source_metadata: SourceMetadata | None = None
     model_config = ConfigDict(extra="forbid")
 
     source_version_id: UUID | None = None
@@ -525,6 +544,8 @@ class RestoreRequest(BaseModel):
 
 
 class V2DocumentMetadata(BaseModel):
+    content_kind: Literal["auto", "general", "product"] = "auto"
+    source_metadata: SourceMetadata = Field(default_factory=SourceMetadata)
     model_config = ConfigDict(extra="forbid")
 
     kb_id: UUID
@@ -582,6 +603,7 @@ class ProcessingReviewItem(BaseModel):
 
 
 class ProcessingReview(BaseModel):
+    content_kind: Literal["auto", "general", "product"] = "auto"
     model_config = ConfigDict(extra="forbid")
     document_id: UUID
     kb_id: UUID

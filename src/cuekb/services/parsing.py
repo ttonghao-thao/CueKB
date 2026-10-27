@@ -4,7 +4,12 @@ import re
 import hashlib
 import json
 import uuid
+from bisect import bisect_right
 from dataclasses import dataclass, field
+from contextvars import ContextVar
+from cuekb.domain.document_graph import GraphBuilder, ParsedBlocks
+
+_graph_builder = ContextVar("document_graph_builder", default=None)
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -74,7 +79,24 @@ def parse_with_deadline(*args, timeout_seconds, **kwargs):
         process.close()
 
 
-def parse_document(
+def parse_document(content, filename, media_type, **kwargs):
+    snapshot = kwargs.get("processing_snapshot") or {}
+    builder = GraphBuilder(kwargs.get("version_id"), hashlib.sha256(content).hexdigest(),
+        {"filename": filename, "media_type": media_type, "content_kind": snapshot.get("content_kind", "auto"),
+         **snapshot.get("source_metadata", {})})
+    token = _graph_builder.set(builder)
+    try:
+        blocks = _parse_document(content, filename, media_type, **kwargs)
+        return ParsedBlocks(blocks, graph=builder.finish())
+    except ValueError as exc:
+        if str(exc).startswith("document_tree_"):
+            raise ParseError(str(exc)) from None
+        raise
+    finally:
+        _graph_builder.reset(token)
+
+
+def _parse_document(
     content: bytes, filename: str, media_type: str | None, *,
     processing_profile: str = "evidence-v2",
     processing_snapshot: dict[str, Any] | None = None,
@@ -138,10 +160,12 @@ def parse_document(
         for item_index, (item, level) in enumerate(result.document.iterate_items(traverse_pictures=True)):
             label = getattr(getattr(item, "label", None), "value", "")
             if isinstance(item, TextItem) and label in {"title", "section_header"}:
+                level = getattr(item, "level", level) or 1
                 headings = headings[: max(level - 1, 0)] + [item.text.strip()]
                 heading_spans = heading_spans[: max(level - 1, 0)] + _item_spans(
                     item, item.text.strip(), headings, "heading"
                 )[:1]
+                if _graph_builder.get(): _graph_builder.get().section(headings, heading_spans[-1])
                 continue
             if isinstance(item, TextItem):
                 value = item.text.strip()
@@ -247,6 +271,7 @@ def _parse_text_v2(
             start = offset + len(line) - len(line.lstrip())
             heading_spans = heading_spans[:depth-1] + [SourceSpan(label="heading", text=title,
                 anchor=SourceAnchor(heading_path=headings.copy(), start_offset=start, end_offset=start+len(title)))]
+            if _graph_builder.get(): _graph_builder.get().section(headings, heading_spans[-1])
             skip_underline = True
             offset += len(line)
             continue
@@ -263,6 +288,7 @@ def _parse_text_v2(
                 heading_spans = heading_spans[:depth - 1] + [SourceSpan(label="heading", text=title,
                     anchor=SourceAnchor(heading_path=headings.copy(), start_offset=offset,
                                         end_offset=offset + len(title)))]
+                if _graph_builder.get(): _graph_builder.get().section(headings, heading_spans[-1])
                 offset += len(line)
                 continue
         if heading:
@@ -277,6 +303,7 @@ def _parse_text_v2(
                     end_offset=title_start + len(heading[2]),
                 ),
             )]
+            if _graph_builder.get(): _graph_builder.get().section(headings, heading_spans[-1])
         elif not line.strip() and not fenced:
             next_line = next((entry for entry in text_lines[line_index + 1:] if entry.strip()), "")
             if pending and "".join(pending).rstrip().endswith((":", "：")) and re.match(
@@ -307,16 +334,20 @@ def _offset_anchor(anchor: SourceAnchor, start: int, length: int) -> SourceAncho
     })
 
 
-def _safe_ranges(value: str, max_chars: int) -> list[tuple[int, int, bool]]:
+def _safe_ranges(value: str, max_chars: int, token_budget: int = 320) -> list[tuple[int, int, bool]]:
     """Prefer whole sentences/list lines; any unavoidable split is explicitly partial."""
     boundaries = [0]
-    boundaries.extend(match.end() for match in re.finditer(r"(?<=[.!?。！？])\s+|\n", value))
+    boundaries.extend(match.end() for match in re.finditer(r"(?<=[。！？])|(?<=[.!?])\s+|\n", value))
     boundaries.append(len(value))
     ranges: list[tuple[int, int, bool]] = []
     start = 0
+    token_ends = [m.end() for m in re.finditer(r"[\u3400-\u9fff]|[A-Za-z]+|\d+|[^\s]",value)]
     while start < len(value):
-        choices = [b for b in boundaries if start < b <= start + max_chars]
-        end = max(choices) if choices else min(start + max_chars, len(value))
+        first = bisect_right(token_ends, start)
+        token_end = token_ends[first+token_budget-1] if first+token_budget <= len(token_ends) else len(value)
+        maximum = min(start+max_chars, token_end)
+        choices = [b for b in boundaries if start < b <= maximum]
+        end = max(choices) if choices else maximum
         partial = not choices and end < len(value)
         if partial:
             space = value.rfind(" ", start + max_chars // 2, end)
@@ -335,6 +366,9 @@ def _split_block_v2(
     version_id: UUID | None, identity: str, original_spans: list[SourceSpan] | None = None,
     max_chars: int = 1200,
 ) -> list[ParsedBlock]:
+    builder = _graph_builder.get()
+    if builder:
+        builder.capture(value, headings, anchor, identity, original_spans)
     unit_id = source_unit_id(identity, version_id)
     origin_version = snapshot.get("origin_version_id") if snapshot else None
     mapped = (snapshot or {}).get("origin_unit_aliases", {}).get(identity)
@@ -349,7 +383,7 @@ def _split_block_v2(
             version_id=version_id,
         )
     kind = "list" if re.match(r"\s*(?:[·•*+\-]\s|\d+[.)]\s)", value) else "text"
-    ranges = _safe_ranges(value, max_chars)
+    ranges = _safe_ranges(value, max_chars, (snapshot or {}).get("window_token_budget", 320))
     result = []
     for start, end, partial in ranges:
         piece = value[start:end]

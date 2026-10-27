@@ -43,7 +43,7 @@ applicability仅在可信映射或审核别名与结构匹配时resolved；未�
 
 ### 3.1 归属审核与必要章节
 
-evidence-v2.4将产品判定与结构依赖分开。Worker按真实章节边界生成section，重复同名章节保留独立身份；表格逐行使用独立source_unit_id，续块共享该行的源单元。内部parser_unit_key及冻结的origin_unit_aliases用于重处理定位，restore同时重映射关系两端的来源ID，不能把旧块ID当作新事实。
+evidence-v2.5将产品判定与结构依赖分开。Worker按真实章节边界生成section，重复同名章节保留独立身份；表格逐行使用独立source_unit_id，续块共享该行的源单元。内部parser_unit_key及冻结的origin_unit_aliases用于重处理定位，restore同时重映射关系两端的来源ID，不能把旧块ID当作新事实。
 
 自动必要关系只识别原文中显式的中英文章节引用及能确定类型的适用范围/条件/例外标题，含数字章节号。独立条件标题、位置相邻或正文提及产品都不会自动产生依赖。缺失/重名引用、数量溢出、循环或明确归属冲突保留未解决诊断；不递归读取全文。其他语种、隐含语义及任意远距指代由审核配置补齐，不宣称自动理解。
 
@@ -112,7 +112,7 @@ generation维护锁阻止内容写入，查询继续。重建读取PG已存事�
 
 解析/归属升级先重处理、人工检查并publish；Embedding/投影升级再generation。旧投影缺少V2字段时，V2返回INDEX_UPGRADE_REQUIRED而不假装已使用新路径。旧配置rollback也重建当前PG事实，不将旧index直接当成当前内容。
 
-完整数据库结构由`db/schema.sql`定义，包含处理快照、派生血缘、结构spans、同文档source_version FK、防重复部分索引、实体/关系、模型配置和generation。PostgreSQL首次在空数据目录启动时自动加载，整个建库文件在一个事务内执行；TCP健康后API/Worker才能启动。该流程不处理既有数据库，操作说明见[操作手册](OPERATIONS.md)。
+规范schema来自包内0001基线及0002文档核心SQL迁移，`db/schema.sql`由同链导出。schema_revisions保存迁移checksum；空库与升级到达相同结构。升级在单事务和advisory lock内执行，失败整批回滚；旧完整基线可核验后登记。ready对未升级/摘要不匹配返回503 SCHEMA_UPGRADE_REQUIRED。应用回退保留扩展表和数据，不执行破坏性降级。操作见[操作手册](OPERATIONS.md)。
 
 ## 7. 六项准确性优化与验证边界
 
@@ -134,3 +134,15 @@ generation维护锁阻止内容写入，查询继续。重建读取PG已存事�
 `src/cuekb/experiments/associations/`是独立C-lite离线工具，不接入当前API/Worker检索链路。它复用领域对象与RRF，使用显式冻结manifest、JSONL语料和候选录制，比较同KB一跳导航及规则事实方案；不读生产配置、不调用外部模型、不写PG/OS。
 
 命令、实验结构和gold口径统一见[实验说明](../experiments/associations/README.md)。PG持久化和线上接入没有隐含启用，不能把离线合成示例当成线上召回或模型质量验证。
+
+## 9. S1规范源文档核心
+
+`domain/document_graph.py`定义DocumentGraph、DocumentNode、EvidenceEdge、ScopeAssertion及RetrievalUnit。TXT/Markdown、Docling DOCX/PDF在切片前捕获完整源段、章节、列表、表格行列/表头、代码与显式脚注；同名章节保留物理身份，Docling使用标题自身level。原始源节点与检索切片独立，后者通过parser_key/source_spans映射源节点；无法唯一定位时显式unresolved，不选择最近节点冒充出处。
+
+PG持久化document_graphs/document_nodes/evidence_edges/retrieval_units/retrieval_unit_nodes/scope_assertions；节点父子、边端点和检索映射均有版本约束。必要闭包最多3层、16个节点，循环/超限标limited；结构/顺序边本身不是必要关系。显式脚注缺定义会阻塞相关片段发布。complete只表示已识别结构的完整性，不认证OCR、隐含关系或回答充分性。Docling表格序列化位置标coarse，不伪造PDF单元格精确坐标。
+
+处理修订evidence-v2.5冻结unicode-lexical-v1分窗预算320及1200字符上限；按句子/列表边界切分，强制续片仍带依赖。该CPU词法预算不是实际Embedding/Nano tokenizer计数；模型精确负载与问题级支持判定属于后续S3/S4。完整长段保留在源树，不随窗口被截去。
+
+上传content_kind=general声明非产品文档，未存在明确产品/套件冲突的正文可规则确认，不要求逐片段绑定产品；范围断言保存product not_applicable，搜索原有applicability仍unknown以兼容严格V2客户端。source_metadata保存语言、负责人、生效区间及来源策略引用；声明不自动提高权威或授予访问权限。
+
+Worker在save_ready的同一事务保存事实、树、范围和单元映射；发布记录publication_snapshots中的图摘要与处理修订。审核派生/恢复保持完整源树，重映射节点/边/切片ID并保存source_version_id，排除事实不再生成检索单元。旧扁平版本返回legacy_unavailable，必须从保留原件重新解析，不能由现有块拼出声称完整的源树。新树不触发旧版本自动发布。跨文档业务推断、通用隐含条件识别和问题级证据交付仍按S2/S3演进。

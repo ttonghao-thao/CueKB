@@ -105,7 +105,7 @@ def processing_review(repo, document_id, version_id, limit=25, offset=0):
     if counts["unresolved_dependencies"]:
         warnings.append("dependency_unresolved")
     return ProcessingReview(document_id=document_id, version_id=version_id,
-        kb_id=version["kb_id"],
+        kb_id=version["kb_id"], content_kind=snapshot.get("content_kind", "auto"),
         processing_profile=version["processing_profile"], status=version["status"], **counts,
         requires_reprocess=requires_reprocess,
         reason_counts={row["reason"]: row["count"] for row in reasons}, warnings=warnings,

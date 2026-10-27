@@ -2,7 +2,7 @@ const state = {
   apiKey: sessionStorage.getItem("cuekb_api_key") || "",
   knowledgeBases: [], currentKb: null, documents: [], files: [], jobs: new Map(), isSystemAdmin: false, rerankerKeySet: false,
   processingEditors: new Set(), processingEntities: new Map(), review: null, reviewSubmission: null,
-  processingLoads: new Map(), reviewRequest: 0,
+  processingLoads: new Map(), reviewRequest: 0, view: "documents", deletedDocuments: new Set(), jobTimers: new Map(),
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -42,6 +42,8 @@ function toast(message, type = "ok") {
 }
 
 function showView(name) {
+  if (typeof beforePortalViewChange === "function") beforePortalViewChange(name);
+  state.view = name;
   $$(".view").forEach((item) => item.classList.toggle("active", item.id === `view-${name}`));
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === name));
   if (name === "documents") loadDocuments();
@@ -73,6 +75,7 @@ async function connect(apiKey) {
     $("#key-dialog").close();
     $("#key-error").textContent = "";
     await selectKnowledgeBase(state.currentKb?.id);
+    if (typeof resumeReviewRoute === "function") await resumeReviewRoute();
     $("#knowledge-list").textContent = "";
     $("#generation-list").textContent = "";
     if (!state.currentKb) showView("knowledge-bases");
@@ -187,6 +190,7 @@ async function refreshKnowledgeBases() {
 async function selectKnowledgeBase(id) {
   const previousId = state.currentKb?.id;
   state.currentKb = state.knowledgeBases.find((kb) => kb.id === id) || null;
+  if (previousId !== state.currentKb?.id && typeof resetReviewNavigation === "function") resetReviewNavigation();
   if (previousId !== state.currentKb?.id && state.processingEditors.has("upload")) {
     resetProcessingEditor("upload");
     if (state.currentKb && $("#view-upload").classList.contains("active")) loadProcessingEntities("upload", id);
@@ -277,6 +281,7 @@ function renderDocuments() {
 async function openDocument(id) {
   try {
     const doc = await api(`/documents/${id}`);
+    state.lastDocument = id;
     const canWrite = ["write", "admin"].includes(state.currentKb.role);
     const canDelete = state.currentKb.role === "admin";
     $("#document-detail").innerHTML = `<p class="eyebrow">文档详情</p><h2>${escapeHtml(doc.name)}</h2><p class="muted">文档 ID：${doc.id}</p>
@@ -312,7 +317,7 @@ async function publishVersion(documentId, versionId) {
     await api(`/documents/${documentId}/publish`, { method: "POST", body: JSON.stringify({ version_id: versionId, scope_key: "default" }) });
     toast("版本已发布");
     $("#document-dialog").close();
-    $("#review-dialog").close();
+    if (state.view.startsWith("review")) returnFromReview();
     await loadDocuments();
   } catch (error) { handleError(error, "发布失败"); }
 }
@@ -321,6 +326,14 @@ async function deleteDocument(doc) {
   if (!confirm(`确定删除“${doc.name}”吗？删除后将立即停止检索。`)) return;
   try {
     await api(`/documents/${doc.id}`, { method: "DELETE" });
+    state.deletedDocuments.add(doc.id);
+    for (const [id, job] of state.jobs) {
+      if (job.document_id === doc.id) {
+        clearTimeout(state.jobTimers.get(id)); state.jobTimers.delete(id); state.jobs.delete(id);
+      }
+    }
+    if ($("#existing-document-id").value === doc.id) $("#existing-document-id").value = "";
+    renderJobs();
     toast("文档已删除");
     $("#document-dialog").close();
     await loadDocuments();
@@ -370,16 +383,23 @@ async function uploadFiles(event) {
 }
 
 function renderJobs() {
-  $("#upload-jobs").innerHTML = [...state.jobs.values()].reverse().map((job) => `<div class="job-card"><div class="job-main"><strong>${escapeHtml(job.filename)}</strong><span class="muted">${escapeHtml(statusText[job.status] || job.stage)}${job.error_message ? ` · ${escapeHtml(job.error_message)}` : ""}</span><div class="progress"><span style="width:${job.progress}%"></span></div></div><span>${job.progress}%</span>${job.status === "succeeded" ? `<button class="secondary" data-review-job="${job.id}">审核处理结果</button>` : ""}</div>`).join("");
+  $("#upload-jobs").innerHTML = [...state.jobs.values()].filter(job => !job.kb_id || job.kb_id === state.currentKb?.id).reverse().map((job) => `<div class="job-card"><div class="job-main"><strong>${escapeHtml(job.filename)}</strong><span class="muted">${escapeHtml(statusText[job.status] || job.stage)}${job.error_message ? ` · ${escapeHtml(job.error_message)}` : ""}</span><div class="progress"><span style="width:${job.progress}%"></span></div></div><span>${job.progress}%</span>${job.status === "succeeded" ? `<button class="secondary" data-review-job="${job.id}">审核处理结果</button>` : ""}</div>`).join("");
   $$("[data-review-job]").forEach(button => button.addEventListener("click", () => { const job = state.jobs.get(button.dataset.reviewJob); openProcessingReview(job.document_id, job.version_id); }));
 }
 
 async function pollJob(id) {
+  if (!state.jobs.has(id)) return;
   try {
-    const job = await api(`/jobs/${id}`); job.filename = state.jobs.get(id)?.filename || job.document_id; state.jobs.set(id, job); renderJobs();
-    if (["queued", "running"].includes(job.status)) setTimeout(() => pollJob(id), 1500);
+    const job = await api(`/jobs/${id}`);
+    if (!state.jobs.has(id) || state.deletedDocuments.has(job.document_id)) return;
+    job.filename = state.jobs.get(id)?.filename || job.document_id; state.jobs.set(id, job); renderJobs();
+    if (["queued", "running"].includes(job.status)) state.jobTimers.set(id, setTimeout(() => pollJob(id), 1500));
     else { toast(job.status === "succeeded" ? `${job.filename} 导入成功` : `${job.filename} 导入失败`, job.status === "succeeded" ? "ok" : "error"); loadDocuments(); }
-  } catch (error) { handleError(error, "查询导入进度失败"); }
+  } catch (error) {
+    if (!state.jobs.has(id)) return;
+    if (error.status === 404) {state.jobs.delete(id); renderJobs(); return;}
+    handleError(error, "查询导入进度失败");
+  }
 }
 
 const scopeReasonText = {
@@ -393,7 +413,8 @@ function scopeLabel(scope) {
 }
 function ensureProcessingEditor(prefix) {
   if (state.processingEditors.has(prefix)) return;
-  $(`#${prefix}-processing`).innerHTML = `<h3>产品与章节配置</h3>
+  $(`#${prefix}-processing`).innerHTML = `<h3>文档与章节配置</h3>
+    <label><span>文档内容类型</span><select id="${prefix}-content-kind"><option value="auto">自动分析（产品归属待确认）</option><option value="general">通用制度 / 流程 / 非产品资料</option><option value="product">产品资料（区分单品与组合装）</option></select></label>
     <div class="field-grid"><label><span>可复用规则模板</span><select id="${prefix}-rule-template"><option value="">通用规则</option></select></label><label><span>文本结构解析</span><select id="${prefix}-text-mode"><option value="auto">自动检测标题/列表</option><option value="plain">按纯文本</option></select></label></div>
     <p class="muted">默认按产品目录与原文结构分析，有疑点时提供候选选择。单产品全文映射和章节配置可按需展开。</p>
     <details><summary>可选：人工产品映射与高级章节配置</summary>
@@ -461,6 +482,7 @@ function processingInputs(prefix) {
   const scope = editorJson(prefix, "scope-bindings", []), dependencies = editorJson(prefix, "dependency-bindings", []);
   if (!Array.isArray(scope) || !Array.isArray(dependencies)) throw new Error("章节映射与必要关系必须为列表");
   return {scope_bindings: scope, dependency_bindings: dependencies,
+    content_kind: $(`#${prefix}-content-kind`).value,
     text_mode: $(`#${prefix}-text-mode`)?.value || "auto",
     processing_template_id: $(`#${prefix}-rule-template`)?.value || null,
     document_default: $(`#${prefix}-whole`).checked ? {subjects: [editorProduct(prefix)]} : editorJson(prefix, "document-default", null)};
@@ -469,6 +491,7 @@ function resetProcessingEditor(prefix) {
   state.processingEntities.delete(prefix); state.processingLoads.delete(prefix);
   $(`#${prefix}-entity`).innerHTML = '<option value="">未选择 / 手工声明</option>';
   $(`#${prefix}-whole`).checked = false;
+  $(`#${prefix}-content-kind`).value = "auto";
   for (const field of ["product-name", "model", "software", "section-path", "dependency-source", "dependency-target", "dependency-note", "dependency-reference"]) $(`#${prefix}-${field}`).value = "";
   for (const field of ["scope-bindings", "dependency-bindings"]) $(`#${prefix}-${field}`).value = "[]";
   $(`#${prefix}-document-default`).value = "null";
@@ -512,6 +535,7 @@ async function openLegacyProcessingReview(documentId, versionId, offset = 0) {
     if (typeof loadRuleTemplates === "function") await loadRuleTemplates("review");
     if (fresh) {
       await loadProcessingEntities("review", data.kb_id);
+      $("#review-content-kind").value = data.content_kind || "auto";
       if (request !== state.reviewRequest) return;
       $("#review-whole").checked = false;
       $("#review-scope-bindings").value = JSON.stringify(data.scope_bindings, null, 2);
@@ -535,7 +559,7 @@ async function openLegacyProcessingReview(documentId, versionId, offset = 0) {
     $("#review-publish").disabled = data.status !== "ready";
     $("#review-submit").disabled = data.requires_reprocess;
     $("#review-reparse").hidden = !data.requires_reprocess;
-    if (!$("#review-dialog").open) $("#review-dialog").showModal();
+    enterReviewPage("review-advanced", documentId, versionId);
   } catch (error) { if (request === state.reviewRequest) handleError(error, "读取归属与章节审核失败"); }
   finally { if (request === state.reviewRequest) { $("#review-form").inert = false; $("#review-items").inert = false; } }
 }
@@ -553,7 +577,7 @@ async function submitProcessingReview(event, reparse = false) {
     const job = await api(`/documents/${docId}/reprocess`, {method: "POST", headers: {"Idempotency-Key": state.reviewSubmission.key}, body: JSON.stringify(body)});
     state.reviewSubmission = null;
     state.jobs.set(job.id, {...job, filename: "归属与章节重处理"}); renderJobs(); pollJob(job.id);
-    $("#review-dialog").close(); $("#document-dialog").close(); showView("upload");
+    leaveReviewForUpload(); $("#document-dialog").close();
     toast("已创建新的待审核版本，处理完成后请检查并发布");
   } catch (error) { handleError(error, "提交重处理失败"); }
   finally { if (button) button.disabled = false; }
@@ -616,7 +640,7 @@ $("#reranker-base-url").addEventListener("input", () => {
 });
 $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
 
-if (state.apiKey) connect(state.apiKey); else $("#key-dialog").showModal();
+// Connection starts in bootstrap.js after review/navigation modules have loaded.
 
 
 // getRandomValues works on the explicitly supported HTTP :8085 origin.
@@ -688,8 +712,8 @@ $("#create-generation").addEventListener("click",async event => {
 });
 
 $("#review-form").addEventListener("submit", submitProcessingReview);
-$("#review-previous").addEventListener("click", () => { const r = state.review; if (r) openProcessingReview(r.document_id, r.version_id, Math.max(0, r.offset - r.limit)); });
-$("#review-next").addEventListener("click", () => { const r = state.review; if (r) openProcessingReview(r.document_id, r.version_id, r.offset + r.limit); });
+$("#review-previous").addEventListener("click", () => { const r = state.review; if (r) openLegacyProcessingReview(r.document_id, r.version_id, Math.max(0, r.offset - r.limit)); });
+$("#review-next").addEventListener("click", () => { const r = state.review; if (r) openLegacyProcessingReview(r.document_id, r.version_id, r.offset + r.limit); });
 $("#review-publish").addEventListener("click", () => { const r = state.review; if (r) publishVersion(r.document_id, r.version_id); });
 $("#review-reparse").addEventListener("click", event => {
   if (confirm("将按当前处理结构创建新版本，原有映射留在原版本中，新版本需要重新审核归属与必要关系。确认继续？")) submitProcessingReview(event, true);

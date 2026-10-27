@@ -191,3 +191,30 @@ docker compose --env-file .env.production ps api
 | 正确分组 | 对真实业务内容按适用产品分别确认；套件选真实bundle | 无非法套件绑定；品牌历史可通用，单品规格不混入其他产品；回传阻塞数变化及无法处理片段 |
 
 管理员可用浏览器Network保留失败/重试的路径、状态码、请求action及trace，不回传Authorization头、Cookie或.env。开发者结合这些结果判断：目录刷新两处一致、422后可以改变操作、错误产品绑定继续拒绝三项都成立才算本批现场通过。本地Node执行的是实际脚本加模拟DOM/API，不替代真实浏览器/数据库验证。
+
+### 7.5 S1文档核心与门户本批部署验收
+
+本批交付：核对S0契约及采集入口，交付S1代码及三项门户操作；S0尚缺的真实语音时序基线仍需按调用方验证手册回传。涉及schema与API/Worker，按[操作手册第8节](OPERATIONS.md#8-s1保留数据升级验证与回退)保留数据升级，两种应用镜像都须重建。先保存运行镜像并备份，执行upgrade/check，再启动；没有旧schema的自动破坏性转换，不删卷，不需要为本批更换Embedding或重建generation。
+
+**容器内格式/发布验证**：在门户选择一个可写的测试知识库，复制完整UUID（避免与业务知识混杂）。下列宿主命令通过API容器执行真实上传、Worker解析、结构检查及发布，默认覆盖TXT/Markdown/DOCX/PDF；会留下名为S1 validation的合成文档便于查看。将命令中的UUID替换为该测试KB UUID；--bootstrap使用API容器已有系统管理Key，不打印凭据。
+
+```bash
+docker compose --env-file .env.production exec -T api cuekb-db check
+docker compose --env-file .env.production exec -T api cuekb-validate-s1 --bootstrap --kb-id TEST_KB_UUID --output /tmp/cuekb-s1-report.json
+docker compose --env-file .env.production cp api:/tmp/cuekb-s1-report.json ./cuekb-s1-report.json
+docker compose --env-file .env.production images api worker
+```
+
+验证入口最后输出报告路径、passed/failed，全部格式通过退出0，否则退出1。失败也生成报告，仍执行cp回传；不要把未运行、失败或改为只测TXT解释为全部格式通过。每格式等待有界（默认600秒，可通过--wait-seconds缩短/延长到最多1800），不触发HTTP自动重试；实际任务仍受Worker超时/重试限制。报告含原件hash、文档/版本/任务ID、工作阶段与错误码、树revision/status/节点类型、范围阻塞、发布结果、数据库revision/checksum（若可采集），不含Key或业务原文。PDF/OCR资源不可用时回传报告，由开发者诊断；不是用户自行更换模型或绕过失败。容器重建会丢失/tmp报告，请先复制到宿主机。
+
+**门户验证**：重新打开门户标签页，完成下表并回传实际结果。使用测试文档与真实目录，不为了通过将套件绑定单品。
+
+| 项目 | 操作 | 通过标准/回传内容 |
+| --- | --- | --- |
+| 删除同步 | 导入测试文档，看到导入状态卡片后，从文档详情删除该文档，回到导入页 | 关联全部版本卡片消失，等待5秒不重现；其他文档卡片保留。回传删除前后卡片数量及是否重现 |
+| 审核子页 | 分别从导入状态、文档详情进入审核，再进高级配置后返回，使用页面返回与浏览器后退 | 审核没有模态遮罩；返回原操作入口；回到审核时页码/筛选/滚动与未变更的勾选保留。回传入口、实际URL及异常 |
+| 勾选批量 | 第一页选1条、第二页选1条，仅对这2条“暂缓处理”；再选择其他记录做正确的产品/通用确认 | 只改变勾选项；成功清空勾选；暂缓仍阻塞发布；未选项计数不变。回传前后计数及操作 |
+| 校验拒绝 | 在测试草稿勾选套件与单品，尝试统一绑定单品，然后调整勾选后重试 | 错误批次整批不写入，保留勾选与中文错误；调整后可提交正确操作，不跳过错误片段冒充成功 |
+| 原件结构 | 检查验证器创建的制度文档；旧版本缺树时点“按当前结构重新解析原件” | 新树保留章节/表格/脚注（输入有时），非产品资料无需逐片段绑定产品；新版本发布前旧发布版仍可查询 |
+
+**需要回传**：cuekb-s1-report.json、两应用运行镜像信息、上述5项结果；出错时附错误原文/trace和相关任务ID即可。不回传.env、Authorization、Cookie或私有整库内容。开发者根据报告分别记录代码/部署/格式/门户通过、失败或证据不足；发布质量与语音SLO仍由后续S2–S6验收，本批不以功能测试宣称Nano时延已达标。
