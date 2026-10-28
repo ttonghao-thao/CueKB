@@ -27,7 +27,10 @@ logger = logging.getLogger(__name__)
 
 def materialize_chunks(repository, storage, job, *, template, parse_timeout=None):
     blocks = None
-    if job.get("derivation_kind") == "restore":
+    in_place = job.get("processing_snapshot", {}).get("review_in_place") == str(job["version_id"])
+    if in_place:
+        chunks = repository.review_materialize(job)
+    elif job.get("derivation_kind") == "restore":
         chunks = repository.restore_chunks(job)
     elif job.get("processing_snapshot", {}).get("review_manifest_id"):
         chunks = repository.review_materialize(job)
@@ -92,7 +95,7 @@ def materialize_chunks(repository, storage, job, *, template, parse_timeout=None
     if graph is not None:
         graph.source_version_id = job.get("source_version_id")
         graph = bind_retrieval_units(graph, chunks)
-    elif job.get("source_version_id") and hasattr(repository, "derived_document_graph"):
+    elif (job.get("source_version_id") or in_place) and hasattr(repository, "derived_document_graph"):
         graph = repository.derived_document_graph(job, chunks)
     chunks = MaterializedChunks(chunks, graph=graph)
     for chunk in chunks:
@@ -279,6 +282,10 @@ def _run_ingestion_once() -> bool:
             raise RuntimeError("active_generation_index_missing")
         model_search.ensure_index()
         stage_started = time.perf_counter()
+        if job["processing_snapshot"].get("review_in_place") == str(job["version_id"]):
+            # The target draft is not published. Remove old/excluded facts before
+            # rebuilding; repeat attempts replace the same bounded version.
+            model_search.delete_versions(job["document_id"], [job["version_id"]])
         model_search.index(chunks, vectors)
         verify_indexed_chunks(model_search, chunks)
         logger.info("ingestion_stage_finished", extra={"job_id": str(job["id"]), "stage": "index", "duration_ms": (time.perf_counter() - stage_started) * 1000})

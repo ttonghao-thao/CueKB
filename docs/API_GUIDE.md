@@ -219,16 +219,20 @@ ready结果包含review_plan_id、blocking_facts及publish_eligible。unknown不
 | 操作 | 路径及主要字段 |
 | --- | --- |
 | 创建/复用分析计划 | POST `/v2/documents/{d}/versions/{v}/review-plans`，body={}，202 ReviewPlanInfo；与ready自动创建的计划复用 |
-| 计划汇总 | GET `/v2/review-plans/{p}`；包含revision、draft/applied、counts、blocking、publish_eligible及applied_job_id |
+| 计划汇总 | GET `/v2/review-plans/{p}`；包含revision、draft/applied、counts、blocking、publish_eligible、applied_job_id、version_status及editable |
 | 问题与全部事实 | GET `/v2/review-plans/{p}/issues`或`/facts`；limit=25/最多100，offset≤1000000，可选product_model/reason/section_id过滤；返回revision、total、items |
 | 保存选择 | POST `/v2/review-plans/{p}/decisions`，body={revision,decisions:[...]}；最多100项且fact_id不重复，整批原子写入；过期修订/已冻结409 |
-| 应用 | POST `/v2/review-plans/{p}/apply`，body={revision}，202 Job；冻结manifest并创建新ready版本，重复调用返回同一Job；有阻塞或全排除409 |
+| 应用 | POST `/v2/review-plans/{p}/apply`，body={revision}，202 Job；冻结manifest并在原未发布version_id准备索引，重复调用返回同一Job；失败后显式调用重试同一Job/版本；有阻塞、全排除或非未发布ready草稿409 |
 
 跨页批量确认先POST `/v2/review-plans/{p}/selections`，提交{revision,issues,reason,section_id,product_model}冻结当前具体记录，返回{id,count,completed,revision,digest,operation}。GET `/v2/review-selections/{id}`读取进度；POST同路径`/apply`提交{action,entity_id}，支持general/assign/exclude/defer，每次最多处理100项并保存进度。开始后操作不可更换，重复调用续接下一批；其他决定导致修订变化时409，已完成批次保留，需重新预览剩余内容。每计划最多100个冻结集合，不将更新后的筛选结果自动加入原集合。
 
+人工共同归属使用`action=shared, entity_ids=[...]`，最多8个不同的当前KB产品/model实体；未提供entity_ids的旧调用仍从明确原文主体取值。单产品用assign/entity_id；comparison可提交entity_ids并须覆盖原文明示比较主体。共同归属保留原文和条件，拒绝明确的分别赋值规格。category包括product_scope/shared_scope/catalog_collision/separate_specifications/comparison/bundle/general/dependency，操作建议不替代服务端校验。
+
+有人工决定未应用时publish返回409 `review_changes_not_applied`；索引任务未完成返回409 `version_not_ready`。已发布历史只读。
+
 以上均须KB write；计划不存在/文档已删404，跨KB事实/错误产品/无效拆分422，撤权/Key失效拒绝。memory开发backend不提供该管理链路。创建计划从已存PG事实形成摘要，不重新解析；结构升级仍走原件reprocess。
 
-fact项包含id/source_chunk_id、source_text/title_path/anchor、applicability/fact_kind/review_state/reason、最多5项产品candidates及必要条件dependency_choices（原文摘要、标题、角色）、split_suggestions。提案不等于已发布事实，不返回完整服务器处理快照。
+fact项包含id/source_chunk_id、source_text/title_path/anchor、applicability/fact_kind/review_state/reason、category/allowed_actions/recommended_action/guidance、最多5项产品candidates及必要条件dependency_choices（原文摘要、标题、角色）、split_suggestions。提案不等于已发布事实，不返回完整服务器处理快照。
 
 decision包含fact_id及action：assign/accept选择entity_id；general确认通用；comparison确认原文比较主体；shared确认原文明示同一条结论共同适用的主体（分别赋值的混合规格仍拒绝）；exclude/defer/reset分别排除、暂缓、撤回；split给原文字符ranges；dependency选择target_fact_id及role。原文值、规则证明及操作者由服务器维护，客户端不能改写source_text或传入伪造approved字段。拆分不能省略非空原文，也不能通过拆分清除已有依赖。明确主体证据与所选产品冲突、混合单品规格整体赋给一个产品、套件赋给普通单品均拒绝。
 
@@ -298,7 +302,7 @@ detail为字符串或校验错误列表（仅loc/msg/type，不回显input/ctx�
 | 401 | INVALID_API_KEY |
 | 403 | ACCESS_DENIED |
 | 404/405 | NOT_FOUND / METHOD_NOT_ALLOWED |
-| 409 | CONFLICT、INDEX_MAINTENANCE_IN_PROGRESS、INDEX_UPGRADE_REQUIRED、SEARCH_CONFIGURATION_CHANGED、RELEVANCE_PROFILE_INVALID；detail区分重复版本、幂等payload冲突、缺Embedding配置或损坏校准文件等 |
+| 409 | CONFLICT、INDEX_MAINTENANCE_IN_PROGRESS、INDEX_UPGRADE_REQUIRED、SEARCH_CONFIGURATION_CHANGED；detail区分重复版本、幂等payload冲突、缺Embedding配置或未完成审核/索引等 |
 | 413/415/422 | FILE_TOO_LARGE / UNSUPPORTED_FILE_TYPE / INVALID_REQUEST |
 | 503 | DATABASE_UNAVAILABLE、SEARCH_BACKEND_UNAVAILABLE、SEARCH_CAPACITY_EXCEEDED、MODEL_CONFIGURATION_BUSY、SEARCH_RESPONSE_LIMIT_EXCEEDED |
 | 504 | SEARCH_DEADLINE_EXCEEDED；不返回未完成最终复验的正文 |

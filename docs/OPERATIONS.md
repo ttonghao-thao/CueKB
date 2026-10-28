@@ -94,9 +94,11 @@ channel为vector、rerank或lexical；lexical是0—1的字面覆盖比例，其
 
 生产Compose只读挂载deploy/relevance到API的/etc/cuekb/relevance；确保容器UID 10001能读取文件，在.env.production设置`CUEKB_V2_RELEVANCE_PROFILE_PATH=/etc/cuekb/relevance/profile.json`后重新创建API服务。本地运行可设置绝对路径。校准JSON已加入gitignore，不含原文、query或凭据，但仍按运行配置保管。初次部署留空即可，不提供默认通用阈值。
 
-请求绑定精确匹配时状态applied；rerank阈值优先，否则向量/字面覆盖已校准信号按OR接受，无适用信号的候选保持未评估。模型、索引、配置或路径不匹配时状态binding_mismatch，门控不应用，继续有界检索且充分性仍unassessed；监控此状态，不把它当成低相关性已过滤。损坏/超限文件报配置错误，不悄悄当成未配置。换generation或模型后重新录制/校准/验收，不只手工改绑定掩盖变化。
+请求绑定精确匹配时状态applied；rerank阈值优先，否则向量/字面覆盖已校准信号按OR接受，无适用信号的候选保持未评估。模型、索引、配置或路径不匹配时状态binding_mismatch，门控不应用，继续有界检索且充分性仍unassessed；监控此状态，不把它当成低相关性已过滤。损坏、不可读或超限文件不再使检索返回409：响应以degraded_reasons=relevance_profile_invalid明确诊断，继续未校准检索且不使用失效阈值；adaptive的calibration_status=not_configured表示没有有效校准，需同时检查degraded_reasons。旧词法revision的有效文件返回binding_mismatch。修复文件或将CUEKB_V2_RELEVANCE_PROFILE_PATH留空后重新创建API，随后核对诊断；不会自动生成替代阈值。换generation或模型后重新录制/校准/验收，不只手工改绑定掩盖变化。
 
 ## 8. S1保留数据升级、验证与回退
+
+本轮新增0003_review_drafts迁移，解除审核源身份对可替换chunks的外键，完整原始JSON与决定保留；schema版本必须为0003，API与Worker必须同时升级。已在旧版本审核派生出的文档版本保留历史，不自动删除或发布旧待办。
 
 适用当前完整evidence-v2.4基线（部署提交fb4804c/aa57cd5系列）；更早/残缺结构及未知迁移checksum会拒绝，不自动猜测历史版本。需要重建API和Worker镜像。旧发布指针、ACL、实体、审核草稿及原件均保留；无需为升级重建OpenSearch generation。
 
@@ -121,7 +123,7 @@ docker compose --env-file .env.production run --rm --no-deps api cuekb-db check
 ./scripts/deploy-production.sh .env.production
 ```
 
-备份命令或upgrade/check任一步失败即停止执行后续命令，不要强行启动新Worker或删卷。upgrade成功输出revision=0002及0001/0002校验摘要；单事务失败会回滚DDL和登记。提示schema_upgrade_requires_drained_ingestion_jobs时，使用下方旧镜像回退命令恢复处理，等任务完成后再次维护；提示unsupported_legacy_schema/schema_checksum_mismatch时回传错误码及运行提交，由开发者核对，不能手改ledger。
+备份命令或upgrade/check任一步失败即停止执行后续命令，不要强行启动新Worker或删卷。upgrade成功输出revision=0003及0001/0002/0003校验摘要；单事务失败会回滚DDL和登记。提示schema_upgrade_requires_drained_ingestion_jobs时，使用下方旧镜像回退命令恢复处理，等任务完成后再次维护；提示unsupported_legacy_schema/schema_checksum_mismatch时回传错误码及运行提交，由开发者核对，不能手改ledger。
 
 重新打开门户标签页载入新脚本。打开旧版本时可能显示legacy_unavailable：数据库升级不会伪造旧版本源树；需要树时选择重解析，旧发布版继续服务，完成审核后显式发布新版本。首次发布之前保留旧指针。新上传通用制度可选“通用制度 / 流程 / 非产品资料”，产品手册保持自动或产品模式。
 

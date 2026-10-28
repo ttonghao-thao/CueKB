@@ -41,6 +41,8 @@ def processing_review(repo, document_id, version_id, limit=25, offset=0):
         blocking = len(blockers([repo._chunk(row) for row in all_rows]))
         plan_id = conn.execute(text("SELECT id FROM review_plans WHERE version_id=:v ORDER BY created_at DESC LIMIT 1"),
             {"v": version_id}).scalar()
+        unapplied = conn.execute(text("SELECT 1 FROM review_plans WHERE version_id=:v AND status='draft' AND revision>0"),
+            {"v": version_id}).scalar()
         snapshot = deepcopy(version["processing_snapshot"])
         # Unit-based selectors must refer to the reviewed version on the next
         # reprocess, rather than an earlier version's immutable identity space.
@@ -111,4 +113,4 @@ def processing_review(repo, document_id, version_id, limit=25, offset=0):
         reason_counts={row["reason"]: row["count"] for row in reasons}, warnings=warnings,
         scope_bindings=bindings, document_default=default, dependency_bindings=dependencies,
         offset=offset, limit=limit, items=items, review_plan_id=plan_id,
-        blocking_facts=blocking, publish_eligible=bool(all_rows) and len(all_rows)<=10000 and not blocking)
+        blocking_facts=blocking, publish_eligible=bool(all_rows) and len(all_rows)<=10000 and not blocking and not unapplied)

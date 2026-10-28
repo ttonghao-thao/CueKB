@@ -17,6 +17,49 @@ from test_retrieval_v2 import fixture
 
 
 @pytest.mark.parametrize("mode", ["ranked", "adaptive"])
+@pytest.mark.parametrize("content", [None, "{broken-json", '{"private":"do-not-echo"}', "x" * 65537])
+def test_invalid_optional_calibration_does_not_block_search(tmp_path, mode, content):
+    _, _, search, model, original, request = fixture(count=1, texts=["Price: 20 USD."])
+    path = tmp_path / "calibration.json"
+    if content is not None:
+        path.write_text(content)
+    service = type(original)(original.repository, search, original.settings.model_copy(update={
+        "v2_relevance_profile_path": str(path)}), model)
+    request.query, request.selection_mode = "price", mode
+    result = service.search_evidence(request)
+    assert result.hits and result.evidence_status == "unassessed"
+    assert "relevance_profile_invalid" in result.degraded_reasons
+    assert "do-not-echo" not in result.model_dump_json() and str(path) not in result.model_dump_json()
+    if mode == "adaptive":
+        assert result.diagnostics.selection.calibration_status == "not_configured"
+        assert result.diagnostics.selection.assessed == 0
+    # Replacing the bad configuration is picked up by the next service instance.
+    stats = CalibrationStats(dataset_sha256="a"*64, positives=2, negatives=2, families=2,
+        target_false_positive_rate=0, observed_false_positive_rate=0, observed_recall=1)
+    profile = RelevanceProfile(binding=runtime_binding({}, model), lexical_min_score=1,
+        calibration={"lexical": stats})
+    path.write_text(profile.model_dump_json())
+    recovered = type(original)(original.repository, search, service.settings, model)
+    assert recovered.relevance_profile_error is None and recovered.relevance_profile is not None
+
+
+def test_older_lexical_calibration_is_binding_mismatch_instead_of_http_conflict(tmp_path):
+    _, _, search, model, original, request = fixture(count=1, texts=["Price: 20 USD."])
+    stats = CalibrationStats(dataset_sha256="a"*64, positives=2, negatives=2, families=2,
+        target_false_positive_rate=0, observed_false_positive_rate=0, observed_recall=1)
+    profile = RelevanceProfile(binding=runtime_binding({}, model).model_copy(update={"lexical_revision": "scope-lexical-v2.2"}),
+        vector_min_score=1000, calibration={"vector": stats})
+    path = tmp_path / "old.json"
+    path.write_text(profile.model_dump_json())
+    service = type(original)(original.repository, search, original.settings.model_copy(update={
+        "v2_relevance_profile_path": str(path)}), model)
+    request.query, request.selection_mode = "price", "adaptive"
+    result = service.search_evidence(request)
+    assert result.hits and result.diagnostics.selection.calibration_status == "binding_mismatch"
+    assert result.diagnostics.selection.assessed == 0
+
+
+@pytest.mark.parametrize("mode", ["ranked", "adaptive"])
 def test_budget_skips_large_candidate_and_returns_next_usable_fact(mode):
     _, chunks, _, _, service, request = fixture(count=2, texts=["x" * 8000, "Input: 12 V."])
     request.top_k, request.max_evidence_bytes, request.selection_mode = 1, 4096, mode

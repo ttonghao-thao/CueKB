@@ -322,7 +322,7 @@ def test_unknown_table_column_is_preserved_for_review():
     assert blocks[0].evidence_structure.review_state=='pending'
 
 
-def test_applied_split_can_be_reviewed_again_and_upload_metadata_is_not_authority(pg):
+def test_applied_split_is_frozen_and_upload_metadata_is_not_authority(pg):
     source=b'First statement; second statement.'
     principal,_,_,job=setup(pg,source,scope={'review_split_parent':str(uuid4())})
     chunk=finish(pg,job,source)[0]
@@ -337,8 +337,9 @@ def test_applied_split_can_be_reviewed_again_and_upload_metadata_is_not_authorit
     new=finish(pg,new_job,source)
     assert len(new)==2 and all(c.evidence_structure.review_parent_id is None for c in new)
     next_plan=pg.create_review_plan(job.document_id,new_job.version_id,principal)
-    next_plan=decide(pg,next_plan,principal,[{'fact_id':str(new[0].id),'action':'defer'}])
-    assert next_plan['blocking']==1
+    assert next_plan['status'] == 'applied' and new_job.version_id == job.version_id
+    with pytest.raises(ConflictError, match='frozen'):
+        decide(pg,next_plan,principal,[{'fact_id':str(new[0].id),'action':'defer'}])
 
 
 def test_explicit_subject_rules_preserve_curated_applicability_conditions():

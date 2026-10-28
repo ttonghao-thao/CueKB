@@ -8,9 +8,9 @@ from sqlalchemy import text
 
 from cuekb.domain.models import Applicability, ApplicableSubject, Chunk, ContextLink, ContextProvenance, SourceSpan
 from cuekb.services.evidence import scope_compatible, source_unit_id, validate_evidence_links
-from cuekb.services.fact_rules import MAX_FACTS, RULE_REVISION, catalog, classify, subject
+from cuekb.services.fact_rules import MAX_FACTS, RULE_REVISION, catalog, classify
 from cuekb.services.review_rules import blockers, present, summarize
-from cuekb.services.review_rules import issue_reason
+from cuekb.services.review_rules import issue_reason, overlapping_identities, separate_values
 from cuekb.services.structure import REFERENCE
 
 
@@ -28,7 +28,7 @@ class ReviewOperations:
         from cuekb.adapters.postgres import ConflictError
         with self._write() as conn:
             plan = self._review_context(conn, plan_id, principal, lock=True)
-            if plan["status"] != "draft" or plan["revision"] != request.revision:
+            if plan["status"] != "draft" or plan["revision"] != request.revision or plan["version_status"] != "ready":
                 raise ConflictError("review_revision_changed_or_frozen")
             chunks = [Chunk.model_validate(r["current"]) for r in self._review_rows(conn, plan_id)]
             blocked = blockers(chunks)
@@ -103,8 +103,11 @@ class ReviewOperations:
         conn.execute(text("SELECT id FROM knowledge_bases WHERE id=:kb FOR SHARE"), {"kb": row["kb_id"]})
         scoped.require_role(principal, [row["kb_id"]], "write")
         self._review_key(conn, principal)
-        return dict(conn.execute(text("SELECT * FROM review_plans WHERE id=:p" +
+        plan = dict(conn.execute(text("SELECT * FROM review_plans WHERE id=:p" +
             (" FOR UPDATE" if lock else " FOR SHARE")), {"p": plan_id}).mappings().one())
+        plan["version_status"] = conn.execute(text("SELECT status::text FROM document_versions WHERE id=:v"),
+            {"v": plan["version_id"]}).scalar_one()
+        return plan
 
     @staticmethod
     def _review_rows(conn, plan_id):
@@ -184,7 +187,7 @@ class ReviewOperations:
         from cuekb.adapters.postgres import ConflictError
         with self._write() as conn:
             plan = self._review_context(conn, plan_id, principal, lock=True)
-            if plan["status"] != "draft" or plan["revision"] != request.revision:
+            if plan["status"] != "draft" or plan["revision"] != request.revision or plan["version_status"] != "ready":
                 raise ConflictError("review_revision_changed_or_frozen")
             if len({d.fact_id for d in request.decisions}) != len(request.decisions):
                 raise ValueError("duplicate_fact_decision")
@@ -260,7 +263,7 @@ class ReviewOperations:
                     # A mixed unit has to be split before a single-product choice.
                     from cuekb.services.fact_rules import matches
                     mentioned = matches(chunk.source_text, plan["catalog"])
-                    if len(mentioned) > 1 and s.fact_kind not in {"bundle", "comparison"}:
+                    if len(mentioned) > 1 and not overlapping_identities(mentioned) and s.fact_kind != "bundle":
                         raise ValueError("mixed_fact_requires_split")
                     if s.fact_kind == "bundle" and entity["kind"] != "bundle":
                         raise ValueError("bundle_requires_bundle_identity")
@@ -274,30 +277,34 @@ class ReviewOperations:
                     mentioned = matches(chunk.source_text, plan["catalog"])
                     if not 2 <= len(mentioned) <= 8 or not COMPARE.search(chunk.source_text):
                         raise ValueError("comparison_requires_explicit_subjects")
+                    if decision.entity_ids and set(decision.entity_ids) != {UUID(str(e["entity_id"])) for e, _ in mentioned}:
+                        raise ValueError("comparison_requires_all_explicit_subjects")
                     s.applicability = Applicability(status="resolved", conditions=s.applicability.conditions,
-                        subjects=[subject(e) for e, _ in mentioned])
+                        subjects=[ApplicableSubject(**{k: v for k, v in e.items() if k in {
+                            "entity_id", "display_name", "product_model", "software_version"}},
+                            source_kind="curated", provenance_id=proof) for e, _ in mentioned])
                     s.fact_kind, s.review_state, s.review_provenance = "comparison", "human_confirmed", proof
                 elif decision.action == "shared":
-                    import re
-                    from cuekb.services.fact_rules import matches, PROPERTY
-                    mentioned=matches(chunk.source_text,plan["catalog"])
-                    if not 2<=len(mentioned)<=8 or s.fact_kind in {"bundle","comparison"}:
+                    from cuekb.services.fact_rules import matches
+                    mentioned = matches(chunk.source_text, plan["catalog"])
+                    ids = decision.entity_ids or [UUID(str(e["entity_id"])) for e, _ in mentioned]
+                    if (not 2 <= len(ids) <= 8 or len(set(ids)) != len(ids)
+                            or s.fact_kind in {"bundle", "comparison"} or separate_values(chunk, mentioned)):
                         raise ValueError("shared_requires_explicit_common_scope")
-                    end=max(b for _,spans in mentioned for _,b in spans)
-                    prefix=chunk.source_text[:end]
-                    for entity,spans in reversed(mentioned):
-                        for a,b in sorted(spans,reverse=True):
-                            prefix=prefix[:a]+' '*(b-a)+prefix[b:]
-                    prefix=re.sub(r'\b(?:both|all|and|models?|products?|devices?)\b|和|及|与|两者|均|都', '',prefix,flags=re.I)
-                    tail=chunk.source_text[end:]
-                    if (prefix.strip(' \t\n,，、:：()（）/+-') or
-                            not re.search(r'\b(?:both|all)\b|均|都|共同',chunk.source_text,re.I) or
-                            re.search(r'\brespectively\b|分别|依次',tail,re.I) or
-                            not (PROPERTY.search(tail) or re.search(r'\b(?:must|shall|required)\b|必须|应当|仅限',tail,re.I))):
-                        raise ValueError("shared_requires_explicit_common_scope")
-                    s.applicability=Applicability(status="resolved",conditions=s.applicability.conditions,
-                        subjects=[subject(e) for e,_ in mentioned])
-                    s.review_state,s.review_provenance="human_confirmed",proof
+                    entities = conn.execute(text("""SELECT e.id entity_id,name display_name,kind,product_model,software_version,
+                        ARRAY(SELECT alias FROM entity_aliases a WHERE a.entity_id=e.id ORDER BY alias) aliases
+                        FROM entities e WHERE id=ANY(:ids) AND kb_id=:kb AND kind IN ('product','model')"""),
+                        {"ids": ids, "kb": plan["kb_id"]}).mappings().all()
+                    if len(entities) != len(ids):
+                        raise ValueError("review_product_not_in_knowledge_base")
+                    if not overlapping_identities(mentioned) and not {
+                            str(e["entity_id"]) for e, _ in mentioned} <= {str(id) for id in ids}:
+                        raise ValueError("shared_requires_all_explicit_subjects")
+                    s.applicability = Applicability(status="resolved", conditions=s.applicability.conditions,
+                        subjects=[ApplicableSubject(**{k: v for k, v in e.items() if k not in {"kind", "aliases"}},
+                            source_kind="curated", provenance_id=proof) for e in entities])
+                    s.retrieval_aliases = sorted({a for e in entities for a in e["aliases"]})[:800]
+                    s.review_state, s.review_provenance, s.review_reason = "human_confirmed", proof, "human_shared_scope"
                 elif decision.action == "dependency":
                     target_row = rows.get(decision.target_fact_id)
                     if not target_row or decision.target_fact_id == chunk.id:
@@ -395,8 +402,17 @@ class ReviewOperations:
             if plan["revision"] != revision:
                 raise ConflictError("review_revision_changed_or_frozen")
             if plan["applied_job_id"]:
-                return self._job(conn.execute(text("SELECT * FROM ingestion_jobs WHERE id=:id"),
-                    {"id": plan["applied_job_id"]}).mappings().one())
+                existing = conn.execute(text("SELECT * FROM ingestion_jobs WHERE id=:id"),
+                    {"id": plan["applied_job_id"]}).mappings().one()
+                if existing["status"] == "failed" and plan["version_status"] == "failed":
+                    conn.execute(text("""UPDATE ingestion_jobs SET status='queued',stage='uploaded',progress=0,
+                        attempt_count=0,error_code=NULL,error_message=NULL,next_attempt_at=now(),updated_at=now()
+                        WHERE id=:id"""), {"id": existing["id"]})
+                    conn.execute(text("UPDATE document_versions SET status='uploaded' WHERE id=:v"),
+                        {"v": existing["version_id"]})
+                    existing = conn.execute(text("SELECT * FROM ingestion_jobs WHERE id=:id"),
+                        {"id": existing["id"]}).mappings().one()
+                return self._job(existing)
             rows = self._review_rows(conn, plan_id)
             summary = summarize(plan, [Chunk.model_validate(r["current"]) for r in rows])
             if not summary["publish_eligible"]:
@@ -404,14 +420,31 @@ class ReviewOperations:
             digest = hashlib.sha256(encoded([r["current"] for r in rows]).encode()).hexdigest()
             conn.execute(text("UPDATE review_plans SET status='applied',manifest_sha256=:sha WHERE id=:id"),
                 {"id": plan_id, "sha": digest})
-            scoped = copy(self)
-            scoped._write_connection = scoped._snapshot_connection = conn
-            source = scoped._source_version_for_derivation(plan["document_id"], plan["version_id"])
-            job = scoped.create_ingestion_job(principal_id=principal.id, kb_id=plan["kb_id"], name=source["name"],
-                source_uri=source["source_uri"], filename=source["original_filename"], media_type=source["media_type"],
-                content_sha256=source["content_sha256"], business_version=source["business_version"], scope=source["scope"],
-                idempotency_key=f"review:{plan_id}", request_sha256=digest, document_id=plan["document_id"],
-                auto_publish=False, derivation_kind="reprocess", source_version_id=plan["version_id"], review_plan_id=plan_id)
+            # Only a never-published ready draft may replace its own projection.
+            # The document lock serializes this with publication and decisions.
+            version = conn.execute(text("SELECT * FROM document_versions WHERE id=:v FOR UPDATE"),
+                {"v": plan["version_id"]}).mappings().one()
+            published = conn.execute(text("SELECT 1 FROM publication_snapshots WHERE version_id=:v"),
+                {"v": plan["version_id"]}).scalar()
+            if version["status"] != "ready" or published:
+                raise ConflictError("review_requires_unpublished_draft")
+            if conn.execute(text("SELECT 1 FROM ingestion_jobs WHERE version_id=:v AND status IN ('queued','running')"),
+                    {"v": plan["version_id"]}).scalar():
+                raise ConflictError("review_processing_in_progress")
+            snapshot = dict(version["processing_snapshot"])
+            snapshot.update(review_manifest_id=str(plan_id), review_manifest_sha256=digest,
+                            review_in_place=str(plan["version_id"]))
+            profile = "evidence-v2:" + hashlib.sha256(encoded(snapshot).encode()).hexdigest()
+            conn.execute(text("""UPDATE document_versions SET status='uploaded',auto_publish=false,
+                processing_snapshot=CAST(:snapshot AS jsonb),processing_profile=:profile WHERE id=:v"""),
+                dict(v=plan["version_id"], snapshot=encoded(snapshot), profile=profile))
+            job_id = uuid4()
+            result = conn.execute(text("""INSERT INTO ingestion_jobs
+                (id,principal_id,kb_id,document_id,version_id,idempotency_key,request_sha256)
+                VALUES (:id,:actor,:kb,:d,:v,:key,:sha) RETURNING *"""),
+                dict(id=job_id, actor=principal.id, kb=plan["kb_id"], d=plan["document_id"],
+                     v=plan["version_id"], key=f"review:{plan_id}", sha=digest)).mappings().one()
+            job = self._job(result)
             conn.execute(text("UPDATE review_plans SET applied_job_id=:job WHERE id=:id"), {"id": plan_id, "job": job.id})
             return job
 
@@ -422,7 +455,8 @@ class ReviewOperations:
             rows = self._review_rows(conn, plan_id)
         digest = hashlib.sha256(encoded([r["current"] for r in rows]).encode()).hexdigest()
         if (digest != plan["manifest_sha256"] or digest != job["processing_snapshot"]["review_manifest_sha256"]
-                or plan["version_id"] != job["source_version_id"] or plan["document_id"] != job["document_id"]
+                or plan["version_id"] != (job["version_id"] if job["processing_snapshot"].get("review_in_place") == str(job["version_id"]) else job["source_version_id"])
+                or plan["document_id"] != job["document_id"]
                 or plan["kb_id"] != job["kb_id"]):
             raise ValueError("review_manifest_mismatch")
         all_chunks = [Chunk.model_validate(r["current"]) for r in rows]

@@ -73,7 +73,8 @@ class ProfileBinding(BaseModel):
     reranker_model: str | None
     config_revision: int | None
     active_generation: str | None
-    lexical_revision: Literal["scope-lexical-v2.3"] = LEXICAL_REVISION
+    # A valid older calibration is a binding mismatch, not a malformed file.
+    lexical_revision: str = Field(default=LEXICAL_REVISION, min_length=1, max_length=100)
     retrieval_path: Literal["hybrid", "exact", "related"] = "hybrid"
 
 

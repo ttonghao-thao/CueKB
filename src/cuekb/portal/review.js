@@ -1,7 +1,7 @@
 /* Source-backed choice review. No free-form JSON or source IDs in this flow. */
-const choiceState = {plan: null, page: null, offset: 0, entities: [], request: 0, csv: [], busy: false, selected: new Set(), selectionRevision: null};
+const choiceState = {plan: null, page: null, offset: 0, entities: [], request: 0, csv: [], busy: false, selected: new Set(), selectionRevision: null, products: new Map(), selectedFacts: new Map(), timer: null};
 const choiceReasons = {
-  mixed_subjects: "同一事实出现多个产品，需要确认拆分或比较关系",
+  mixed_subjects: "需要确认涉及的产品及适用范围",
   bundle_identity_missing: "识别出套件内容，请选择或新建套件身份",
   scope_not_identified: "尚不能确定产品归属，请选择产品或确认为通用资料",
   scope_conflict: "存在相互冲突的归属依据",
@@ -56,6 +56,10 @@ function choiceSyncCatalog(entities) {
 function choiceErrorMessage(error) {
   const code = error.message.split(" · trace")[0];
   const messages = {
+    shared_requires_explicit_common_scope: "这段包含分别赋值的规格，不能作为多个产品的共同结论。请拆分原文后分别确认，或稍后处理。",
+    shared_requires_all_explicit_subjects: "请勾选原文共同说明涉及的全部产品；若各产品结论不同，请按原文拆分。",
+    comparison_requires_all_explicit_subjects: "请勾选比较原文涉及的全部产品。",
+    review_requires_unpublished_draft: "已发布版本只读。需要更新时，请从文档管理导入新版本。",
     bundle_requires_bundle_identity: "选中记录中含套件或组合装，不能统一绑定到单品。请将单品与组合装分开审核，并为组合装选择对应类型的目录产品。",
     product_fact_cannot_be_general: "选中记录中含产品规格或套件内容，不能全部确认为通用资料。请缩小范围并分别确认产品。",
     mixed_fact_requires_split: "选中记录中含多个产品的混合事实，请先拆分或确认比较关系。"
@@ -68,10 +72,17 @@ async function openProcessingReview(documentId, versionId, resume = false) {
   try {
     const plan = await api(`/documents/${documentId}/versions/${versionId}/review-plans`, {method: "POST", body: "{}"});
     if (plan.kb_id !== state.currentKb?.id) throw new Error("请先切换到该文档所属知识库后重新打开审核");
+    if (plan.applied_job_id) {
+      const applied = await api(`/jobs/${plan.applied_job_id}`);
+      if (applied.version_id !== versionId) {
+        toast("该版本曾生成审核结果，已打开已有结果版本继续处理");
+        return openProcessingReview(documentId, applied.version_id);
+      }
+    }
     const entities = await choiceLoadEntities(plan.kb_id);
     if (request !== choiceState.request) return;
     const samePlan = choiceState.plan?.id === plan.id;
-    if (!samePlan) { choiceState.selected.clear(); choiceState.selectionRevision = null; }
+    if (!samePlan) { choiceState.selected.clear(); choiceState.selectedFacts.clear(); choiceState.products.clear(); choiceState.selectionRevision = null; }
     choiceState.plan = plan; choiceSyncCatalog(entities);
     if (!resume || !samePlan) choiceState.offset = 0;
     if (!resume || !samePlan) $("#choice-filter").value = "issues";
@@ -86,6 +97,7 @@ async function openProcessingReview(documentId, versionId, resume = false) {
       : `文档结构：${structure.revision} · ${structure.total}个节点${structure.status === "limited" ? ` · 存在待核对结构：${structure.issues.join("、")}` : " · 已保存原文层次与定位"}`;
     $("#choice-reparse-source").hidden = structure.status !== "legacy_unavailable";
     enterReviewPage("review", documentId, versionId);
+    if (choiceState.plan.applied_job_id && !["ready", "published", "superseded", "failed"].includes(choiceState.plan.version_status)) monitorReviewJob();
   } catch (error) { handleError(error, "读取导入审核失败"); }
 }
 
@@ -104,21 +116,46 @@ async function refreshChoiceReview() {
   }
   choiceState.selectionRevision = info.revision;
   choiceState.plan = info; choiceState.page = page;
+  if (page.total && choiceState.offset >= page.total) {
+    choiceState.offset = Math.floor((page.total - 1) / 25) * 25;
+    return refreshChoiceReview();
+  }
   if (page.revision !== info.revision) throw new Error("审核已被更新，请刷新后继续");
   const counts = info.counts;
   $("#choice-summary").textContent = `共 ${info.total} 条审核记录 · 自动确认 ${counts.rule_confirmed || 0} · 人工确认 ${counts.human_confirmed || 0} · 已确认通用 ${counts.confirmed_general || 0} · 阻塞 ${info.blocking} · 暂缓 ${counts.deferred || 0} · 排除 ${counts.excluded || 0}`;
-  $("#choice-error").textContent = info.status === "applied" ? "本次选择已冻结。请等待新版本处理完成，在新版本审核后发布。" : info.blocking ? "请处理待办，或明确排除本次不纳入检索的内容。已确认通用资料可以保留产品归属未知。" : "已确认结果可生成新版本。草稿选择不会修改当前发布内容。";
+  const preparing = !["ready", "published", "superseded", "failed"].includes(info.version_status);
+  const published = ["published", "superseded"].includes(info.version_status);
+  $("#choice-status").textContent = published ? "此版本已发布，审核记录只读。更新内容请通过文档管理导入新版本。"
+    : preparing ? "审核已保存，正在更新当前版本索引。完成后即可发布，无需再次审核。"
+    : info.version_status === "failed" ? "索引更新失败，审核结果已保留。可重试当前版本的索引准备。"
+    : info.blocking ? `还需处理 ${info.blocking} 项。逐条核对原文并选择产品；不需要的内容可选择不纳入检索。`
+    : info.status === "applied" || info.revision === 0 ? "当前版本已准备好，可直接发布。"
+    : "所有待办已处理。点击“完成审核，准备发布”更新当前草稿，再发布。";
+  $("#choice-error").textContent = "";
   $("#choice-items").innerHTML = page.items.map(renderChoiceFact).join("") || "当前范围没有待办。可切换到全部事实检查自动确认结果。";
   $("#choice-prev").disabled = page.offset === 0;
   $("#choice-next").disabled = page.offset + page.items.length >= page.total;
-  $("#choice-apply").disabled = !info.publish_eligible || info.status !== "draft";
-  $("#choice-publish").disabled = !current.publish_eligible || current.status !== "ready";
+  $("#choice-apply").hidden = published || (info.version_status === "ready" && (info.status === "applied" || (!info.blocking && info.revision === 0)));
+  $("#choice-apply").textContent = info.version_status === "failed" ? "重试索引准备" : "完成审核，准备发布";
+  $("#choice-apply").disabled = choiceState.busy || preparing || !info.publish_eligible;
+  $("#choice-publish").hidden = !current.publish_eligible || current.status !== "ready";
+  $("#choice-publish").disabled = choiceState.busy;
+  $("#choice-advanced").hidden = published || preparing || info.status === "applied";
   for (const checkbox of $$("#choice-items [data-select-fact]")) checkbox.addEventListener("change", () => {
     if (checkbox.checked && choiceState.selected.size >= 100 && !choiceState.selected.has(checkbox.dataset.selectFact)) {
       checkbox.checked = false; return toast("一次最多勾选100条，请先处理已选记录", "error");
     }
-    if (checkbox.checked) choiceState.selected.add(checkbox.dataset.selectFact); else choiceState.selected.delete(checkbox.dataset.selectFact);
+    if (checkbox.checked) {
+      choiceState.selected.add(checkbox.dataset.selectFact);
+      choiceState.selectedFacts.set(checkbox.dataset.selectFact, page.items.find(f => f.id === checkbox.dataset.selectFact));
+    } else {choiceState.selected.delete(checkbox.dataset.selectFact); choiceState.selectedFacts.delete(checkbox.dataset.selectFact);}
     choiceSelectionSummary();
+  });
+  for (const field of $$("#choice-items [data-product-choice]")) field.addEventListener("change", () => {
+    const card = field.closest("[data-fact]");
+    const selected = [...card.querySelectorAll("[data-product-choice]:checked")].map(input => input.value);
+    if (selected.length > 8) {field.checked = false; return toast("每段最多选择8个产品", "error");}
+    choiceState.products.set(card.dataset.fact, selected);
   });
   choiceSelectionSummary();
   for (const button of $$("#choice-items [data-review-action]")) button.addEventListener("click", () => choiceAction(button));
@@ -130,48 +167,82 @@ async function refreshChoiceReview() {
     $("#choice-new-kind").value = fact.fact_kind === "bundle" ? "bundle" : "product";
     $("#choice-new-product").parentElement.open = true;
   });
-  if (info.status === "applied") $$("#choice-items button, #choice-confirm-page, #choice-general-page").forEach(b => b.disabled = true);
+  if (!info.editable) $$("#choice-items button, #choice-items input, #choice-confirm-page, #choice-general-page").forEach(b => b.disabled = true);
+}
+
+const reviewCategories = {catalog_collision: "目录身份重叠", shared_scope: "多产品共同说明", product_scope: "产品归属待确认", separate_specifications: "多个产品分别赋值", comparison: "产品比较", bundle: "套件 / 组合装", general: "通用资料", dependency: "必要条件待补齐"};
+
+function choiceProductIds(fact) {
+  if (!choiceState.products.has(fact.id)) {
+    const confirmed = fact.review_state === "human_confirmed" ? fact.applicability.subjects.map(s => s.entity_id).filter(Boolean) : [];
+    choiceState.products.set(fact.id, confirmed.length ? confirmed : fact.category === "catalog_collision" ? []
+      : fact.candidates.length === 1 || ["shared_scope", "comparison"].includes(fact.category) ? fact.candidates.map(e => e.entity_id) : []);
+  }
+  return choiceState.products.get(fact.id);
 }
 
 function renderChoiceFact(fact) {
-  const query = $("#choice-product-search").value.trim().toLowerCase();
   const ids = new Set(fact.candidates.map(c => c.entity_id));
-  const choices = [...fact.candidates.map(c => ({...c, id: c.entity_id})),
-    ...choiceState.entities.filter(e => !ids.has(e.id) && (!query || [e.name, e.product_model, ...e.aliases].some(s => s?.toLowerCase().includes(query))))];
-  const scope = fact.applicability.subjects.map(s => `${s.display_name}${s.product_model ? ` (${s.product_model})` : ""}`).join("、") || "产品归属未知";
+  const choices = [...fact.candidates.map(c => ({...c, id: c.entity_id})), ...choiceState.entities.filter(e => !ids.has(e.id))]
+    .filter(e => fact.fact_kind !== "bundle" || e.kind === "bundle");
+  const selected = choiceProductIds(fact), actions = new Set(fact.allowed_actions);
+  const canChoose = ["assign", "shared", "comparison"].some(a => actions.has(a));
+  const button = (action, label) => actions.has(action) ? `<button class="${fact.recommended_action === action ? "primary" : "secondary"}" data-review-action="${action}">${label}</button>` : "";
   return `<article class="version-row review-card" data-fact="${escapeHtml(fact.id)}">
-    <label class="check-row"><input type="checkbox" data-select-fact="${escapeHtml(fact.id)}" ${choiceState.selected.has(fact.id) ? "checked" : ""} ${choiceState.plan.status !== "draft" ? "disabled" : ""}>选择此记录</label>
-    <strong>${escapeHtml(fact.title_path.join(" / ") || "原文片段")}</strong>
-    <p>${escapeHtml(reviewKindText[fact.fact_kind] || fact.fact_kind)} · ${escapeHtml(reviewStateText[fact.review_state])} · ${escapeHtml(scope)}</p>
+    <div class="review-card-heading"><strong>${escapeHtml(reviewCategories[fact.category] || "待确认事项")}</strong><span class="status">${escapeHtml(reviewStateText[fact.review_state])}</span>
+    <label class="check-row"><input type="checkbox" data-select-fact="${escapeHtml(fact.id)}" ${choiceState.selected.has(fact.id) ? "checked" : ""} ${!choiceState.plan.editable ? "disabled" : ""}>加入批量处理</label></div>
+    <p class="muted">${escapeHtml(fact.title_path.join(" / ") || "正文")} · ${escapeHtml(reviewKindText[fact.fact_kind] || fact.fact_kind)}</p>
     <pre class="review-source">${reviewHighlighted(fact.source_text)}</pre>
     <p class="muted">原文位置：${fact.anchor.page ? `第${fact.anchor.page}页` : "文本"}${fact.anchor.start_offset != null ? ` · 字符${fact.anchor.start_offset}–${fact.anchor.end_offset}` : ""}</p>
-    <p>${escapeHtml(choiceReasons[fact.reason] || fact.reason)}${fact.dependency_issues.length ? `；必要条件问题：${escapeHtml(fact.dependency_issues.join("、"))}` : ""}</p>
-    <label>选择产品<select data-product-choice><option value="">请选择产品（通用资料无需选择）</option>${choices.map((e, i) => `<option value="${escapeHtml(e.id)}" ${i === 0 && fact.candidates.length === 1 ? "selected" : ""}>${escapeHtml(reviewEntityLabel(e))}</option>`).join("")}</select></label>
-    <div class="version-actions"><button class="secondary" data-review-action="assign">确认所选产品</button><button class="secondary" data-review-action="general">确认为通用资料</button><button class="secondary" data-review-action="exclude">本次排除</button><button class="secondary" data-review-action="defer">稍后处理</button><button class="secondary" data-review-action="reset">撤回选择</button><button class="secondary" data-prefill-product="${escapeHtml(fact.id)}">产品不在目录</button>${fact.candidates.length > 1 && !["bundle","comparison"].includes(fact.fact_kind) ? '<button class="secondary" data-review-action="shared">确认同一结论适用这些产品</button>' : ""}${fact.fact_kind === "comparison" ? '<button class="secondary" data-review-action="comparison">确认比较事实及各产品</button>' : ""}${fact.split_suggestions.length ? '<button class="secondary" data-review-action="split">预览并采用逐项拆分</button>' : ""}</div>
-    ${fact.dependency_candidates.length ? `<label>必要条件候选<select data-target-choice>${fact.dependency_candidates.map(id => `<option value="${escapeHtml(id)}">${escapeHtml((fact.dependency_choices.find(c => c.id === id)?.title_path || []).join(" / "))}</option>`).join("")}</select></label><button class="secondary" data-review-action="dependency">查看并确认必要条件</button>` : ""}
+    <p class="review-guidance">${escapeHtml(fact.guidance)}</p>
+    ${canChoose ? `<fieldset class="review-products"><legend>所属产品（可多选，最多8个）</legend>${choices.map(e => `<label class="check-row" data-product-label><input type="checkbox" data-product-choice value="${escapeHtml(e.id)}" ${selected.includes(e.id) ? "checked" : ""}>${escapeHtml(reviewEntityLabel(e))}${ids.has(e.id) ? " · 原文候选" : ""}</label>`).join("") || '<p class="muted">目录暂无产品，可在下方添加。</p>'}</fieldset>
+    <button class="primary" data-review-action="confirm-products">${fact.category === "comparison" ? "确认比较涉及的产品" : "确认所选产品"}</button>` : ""}
+    ${fact.dependency_candidates.length ? `<label>必要条件候选<select data-target-choice>${fact.dependency_candidates.map(id => `<option value="${escapeHtml(id)}">${escapeHtml((fact.dependency_choices.find(c => c.id === id)?.title_path || []).join(" / "))}</option>`).join("")}</select></label>${button("dependency", "查看并确认必要条件")}` : ""}
+    <div class="version-actions">${button("general", "确认为通用资料")}${actions.has("split") && fact.split_suggestions.length ? button("split", "按原文拆分并分别确认") : ""}${button("defer", "稍后处理（仍阻塞发布）")}</div>
+    <details><summary>其他处理方式</summary><p>不纳入检索将保留原文和操作记录；准备发布前可撤回。若其他内容依赖本段，仍需先处理依赖。</p><div class="version-actions">${button("exclude", "本次不纳入检索")}${button("reset", "撤回处理")}${canChoose ? `<button class="secondary" data-prefill-product="${escapeHtml(fact.id)}">目录中缺少产品</button>` : ""}</div></details>
   </article>`;
+}
+
+function choiceProductDecision(fact) {
+  const ids = choiceProductIds(fact), actions = new Set(fact.allowed_actions);
+  if (!ids.length) throw new Error("请先勾选原文适用的产品");
+  const action = actions.has("comparison") ? "comparison" : ids.length > 1 ? "shared" : "assign";
+  if (!actions.has(action)) throw new Error(fact.guidance);
+  return {fact_id: fact.id, action, ...(action === "assign" ? {entity_id: ids[0]} : {entity_ids: ids})};
+}
+
+function choiceSetBusy(busy) {
+  choiceState.busy = busy;
+  $("#choice-items").inert = busy;
+  $("#choice-apply").disabled = busy || !choiceState.plan?.publish_eligible || !["ready", "failed"].includes(choiceState.plan?.version_status);
+  $("#choice-publish").disabled = busy;
+  $("#choice-batch-apply").disabled = busy || choiceState.plan?.editable === false;
+  choiceSelectionSummary();
 }
 
 async function choiceSubmit(decisions) {
   if (choiceState.busy) return;
-  choiceState.busy = true; $("#choice-items").inert = true;
+  choiceSetBusy(true);
   try {
     choiceState.plan = await api(`/review-plans/${choiceState.plan.id}/decisions`, {method: "POST", body: JSON.stringify({revision: choiceState.plan.revision, decisions})});
-    choiceState.selected.clear();
+    choiceState.selectionRevision = choiceState.plan.revision;
+    for (const decision of decisions) if (decision.action === "reset") choiceState.products.delete(decision.fact_id);
+    choiceState.selected.clear(); choiceState.selectedFacts.clear();
     await refreshChoiceReview();
+    toast("处理已保存");
   } catch (error) {
     const messages = {mixed_fact_requires_split:"这段包含多个产品，请先预览拆分再分别确认。",product_fact_cannot_be_general:"这段包含产品规格或套件身份，请确认产品、拆分或排除。",product_choice_conflicts_with_explicit_source:"所选产品与明确原文主体冲突，请核对目录或重新解析原件。",bundle_requires_bundle_identity:"套件组成需要选择套件类型的目录产品。",review_revision_changed_or_frozen:"审核结果已更新或冻结，请刷新后继续。",split_requires_preserving_dependencies:"拆分可能丢失必要条件，请使用高级配置保留关系后重新处理。"};
-    $("#choice-error").textContent = messages[error.message.split(" · trace")[0]] || error.message;
     if (error.status === 409) await refreshChoiceReview();
-  } finally { choiceState.busy = false; $("#choice-items").inert = false; }
+    $("#choice-error").textContent = messages[error.message.split(" · trace")[0]] || choiceErrorMessage(error);
+  } finally { choiceSetBusy(false); }
 }
 
 async function choiceAction(button) {
   const card = button.closest("[data-fact]"), fact = choiceState.page.items.find(f => f.id === card.dataset.fact);
   const action = button.dataset.reviewAction, decision = {fact_id: fact.id, action};
-  if (action === "assign") {
-    decision.entity_id = card.querySelector("[data-product-choice]").value;
-    if (!decision.entity_id) return toast("请先选择产品", "error");
+  if (action === "confirm-products") {
+    try { return await choiceSubmit([choiceProductDecision(fact)]); }
+    catch (error) {return toast(error.message, "error");}
   }
   if (action === "split") {
     const ranges = fact.split_suggestions;
@@ -192,28 +263,50 @@ $("#choice-filter").addEventListener("change", () => {choiceState.offset = 0; re
 for (const selector of ["#choice-reason-filter", "#choice-section-filter"]) $(selector).addEventListener("change", () => {choiceState.offset=0;refreshChoiceReview().catch(e => toast(e.message,"error"));});
 $("#choice-product-search").addEventListener("input", () => {
   // Preserve selections while narrowing the catalog choices.
-  $$("#choice-items [data-product-choice] option").forEach(option => {
-    option.hidden = !!option.value && !option.selected && !option.textContent.toLowerCase().includes($("#choice-product-search").value.toLowerCase());
+  $$("#choice-items [data-product-label]").forEach(label => {
+    label.hidden = !label.querySelector("input").checked && !label.textContent.toLowerCase().includes($("#choice-product-search").value.toLowerCase());
   });
 });
 $("#choice-prev").addEventListener("click", () => {choiceState.offset = Math.max(0, choiceState.offset - 25); refreshChoiceReview().catch(e => toast(e.message, "error"));});
 $("#choice-next").addEventListener("click", () => {choiceState.offset += 25; refreshChoiceReview().catch(e => toast(e.message, "error"));});
 $("#choice-confirm-page").addEventListener("click", () => {
-  const decisions = $$("#choice-items [data-fact]").map(card => ({fact_id: card.dataset.fact, action: "assign", entity_id: card.querySelector("[data-product-choice]").value})).filter(d => d.entity_id);
-  if (!decisions.length) return toast("本页尚未选择产品", "error");
-  if (confirm(`确认本页已选择的${decisions.length}项产品归属？`)) choiceSubmit(decisions);
+  try {
+    const decisions = choiceState.page.items.filter(f => choiceProductIds(f).length && f.allowed_actions.some(a => ["assign", "shared", "comparison"].includes(a))).map(choiceProductDecision);
+    if (!decisions.length) return toast("本页尚未选择可确认的产品", "error");
+    if (confirm(`确认本页 ${decisions.length} 项已勾选的产品归属？`)) choiceSubmit(decisions);
+  } catch (error) {toast(error.message, "error");}
 });
 $("#choice-general-page").addEventListener("click", () => {
-  const decisions = choiceState.page.items.map(f => ({fact_id: f.id, action: "general"}));
-  if (decisions.length && confirm(`将本页${decisions.length}项确认为通用资料？请核对它们不包含未解决的产品专属规格。`)) choiceSubmit(decisions);
+  const decisions = choiceState.page.items.filter(f => f.allowed_actions.includes("general")).map(f => ({fact_id: f.id, action: "general"}));
+  if (!decisions.length) return toast("本页没有可确认为通用资料的内容", "error");
+  if (confirm(`只将本页允许通用确认的 ${decisions.length} 项标为通用资料？产品规格不会被选入。`)) choiceSubmit(decisions);
 });
+async function monitorReviewJob() {
+  clearTimeout(choiceState.timer);
+  const plan = choiceState.plan;
+  if (!plan?.applied_job_id || state.view !== "review") return;
+  try {
+    const job = await api(`/jobs/${plan.applied_job_id}`);
+    if (choiceState.plan?.id !== plan.id || state.view !== "review") return;
+    if (["succeeded", "failed"].includes(job.status)) {
+      await refreshChoiceReview();
+      if (job.status === "failed") $("#choice-error").textContent = `索引准备失败：${job.error_code || "processing_failed"}。审核结果已保留，可重试。`;
+      return;
+    }
+    $("#choice-status").textContent = `正在准备当前版本 · ${job.progress}%；完成后可在本页发布。`;
+    choiceState.timer = setTimeout(monitorReviewJob, 1500);
+  } catch (error) {$("#choice-error").textContent = `读取任务状态失败：${error.message}。可刷新本页继续查看。`;}
+}
 $("#choice-apply").addEventListener("click", async () => {
+  if (choiceState.busy) return;
+  choiceSetBusy(true);
   try {
     const job = await api(`/review-plans/${choiceState.plan.id}/apply`, {method: "POST", body: JSON.stringify({revision: choiceState.plan.revision})});
-    state.jobs.set(job.id, {...job, filename: "审核后重处理"});
-    leaveReviewForUpload(); renderJobs();
-    pollJob(job.id); toast("已保存确认结果，正在生成新版本");
+    state.jobs.set(job.id, {...job, filename: "审核索引更新"}); renderJobs();
+    await refreshChoiceReview();
+    monitorReviewJob();
   } catch (error) { $("#choice-error").textContent = error.message; }
+  finally { choiceSetBusy(false); }
 });
 $("#choice-publish").addEventListener("click", async () => {
   await publishVersion(choiceState.plan.document_id, choiceState.plan.version_id);
@@ -307,7 +400,7 @@ $("#choice-batch-apply").addEventListener("click",async () => {
     const name=choiceState.entities.find(e=>e.id===operation.entity_id);
     if (!confirm(`已冻结${frozen.count}条记录，已完成${frozen.completed}条。\n操作：${labels[operation.action]}${name ? ` · ${reviewEntityLabel(name)}` : ""}\n请确认这些记录属于同一可审核范围。后续页面变化不会增加记录。`)) return;
     sessionStorage.setItem(key,JSON.stringify({id:frozen.id,operation}));
-    choiceState.busy=true;$("#choice-items").inert=true;
+    choiceSetBusy(true);
     for (let batch=0;batch<100 && frozen.completed<frozen.count;batch++) {
       frozen=await api(`/review-selections/${frozen.id}/apply`,{method:"POST",body:JSON.stringify(operation)});
       $("#choice-batch-progress").textContent=`已完成 ${frozen.completed} / ${frozen.count}；已完成批次已保存。`;
@@ -320,14 +413,15 @@ $("#choice-batch-apply").addEventListener("click",async () => {
       await refreshChoiceReview();
     }
     $("#choice-error").textContent=`跨页操作已停止，已完成批次保留。${choiceErrorMessage(error)}${error.status===422 ? "请调整筛选范围和操作后重新预览；不会继续执行原失败操作。" : ""}`;
-  } finally {choiceState.busy=false;$("#choice-items").inert=false;}
+  } finally { choiceSetBusy(false); }
 });
 
 function choiceSelectionSummary() {
   const selected = choiceState.selected;
   $("#choice-selected-count").textContent = `已选择${selected.size}条（最多100条）`;
-  $("#choice-selected-apply").disabled = !selected.size || choiceState.plan?.status !== "draft" || choiceState.busy;
+  $("#choice-selected-apply").disabled = !selected.size || choiceState.plan?.editable === false || choiceState.plan?.status !== "draft" || choiceState.busy;
   const rows = choiceState.page?.items || [];
+  $("#choice-confirm-page").disabled = choiceState.busy || choiceState.plan?.editable === false || !rows.some(f => f.allowed_actions?.some(a => ["assign", "shared", "comparison"].includes(a)));
   $("#choice-select-page").checked = rows.length > 0 && rows.every(f => selected.has(f.id));
   $("#choice-select-page").indeterminate = rows.some(f => selected.has(f.id)) && !$("#choice-select-page").checked;
 }
@@ -336,7 +430,10 @@ $("#choice-select-page").addEventListener("change", event => {
   if (event.target.checked && new Set([...selected, ...rows.map(f => f.id)]).size > 100) {
     event.target.checked = false; return toast("一次最多勾选100条，请先处理已选记录", "error");
   }
-  for (const fact of rows) {if (event.target.checked) selected.add(fact.id); else selected.delete(fact.id);}
+  for (const fact of rows) {
+    if (event.target.checked) {selected.add(fact.id); choiceState.selectedFacts.set(fact.id, fact);}
+    else {selected.delete(fact.id); choiceState.selectedFacts.delete(fact.id);}
+  }
   $$("#choice-items [data-select-fact]").forEach(field => field.checked = selected.has(field.dataset.selectFact));
   choiceSelectionSummary();
 });
@@ -348,6 +445,13 @@ $("#choice-selected-clear").addEventListener("click", () => {
 $("#choice-selected-apply").addEventListener("click", async () => {
   if (choiceState.busy || !choiceState.selected.size || choiceState.plan?.status !== "draft") return;
   const action = $("#choice-selected-action").value, entity = $("#choice-selected-product").value;
+  if (action === "per_record") {
+    try {
+      const decisions = [...choiceState.selected].map(id => choiceProductDecision(choiceState.selectedFacts.get(id)));
+      if (confirm(`按每条卡片勾选的产品确认 ${decisions.length} 条记录？`)) await choiceSubmit(decisions);
+    } catch (error) {toast(error.message, "error");}
+    return;
+  }
   if (action === "assign" && !entity) return toast("请选择要绑定的目录产品", "error");
   const labels = {assign: "绑定所选产品", general: "确认为通用资料", exclude: "本次排除", defer: "暂缓处理"};
   const product = choiceState.entities.find(e => e.id === entity);

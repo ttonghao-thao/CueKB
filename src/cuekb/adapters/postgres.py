@@ -943,6 +943,9 @@ class PostgreSQLRepository(DocumentGraphOperations, KnowledgeOperations, Generat
             raise KeyError("document_version_not_found")
         if row[1] not in {"ready", "published"}:
             raise ConflictError("version_not_ready")
+        if row[1] == "ready" and conn.execute(text("""SELECT 1 FROM review_plans
+                WHERE version_id=:v AND status='draft' AND revision>0"""), {"v": version_id}).scalar():
+            raise ConflictError("review_changes_not_applied")
         from cuekb.services.review_rules import blockers
         chunks = [PostgreSQLRepository._chunk(r) for r in conn.execute(text("""SELECT c.*,v.processing_profile FROM chunks c
             JOIN document_versions v ON v.id=c.version_id WHERE c.version_id=:v ORDER BY c.ordinal LIMIT 10001"""),

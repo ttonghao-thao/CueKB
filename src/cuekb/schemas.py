@@ -653,6 +653,10 @@ class ReviewFact(BaseModel):
     fact_kind: str
     review_state: str
     reason: str
+    category: str
+    recommended_action: str
+    allowed_actions: list[str]
+    guidance: str
     candidates: list[ReviewChoice] = Field(max_length=5)
     dependencies: list[UUID] = Field(default_factory=list, max_length=20)
     dependency_candidates: list[UUID] = Field(default_factory=list, max_length=5)
@@ -679,6 +683,8 @@ class ReviewPlanInfo(BaseModel):
     reason_counts: dict[str, int] = Field(default_factory=dict)
     sections: list[dict[str, str]] = Field(default_factory=list, max_length=1000)
     sections_truncated: bool = False
+    version_status: str = "ready"
+    editable: bool = True
 
 
 class ReviewFactPage(BaseModel):
@@ -695,9 +701,18 @@ class ReviewDecisionInput(BaseModel):
     fact_id: UUID
     action: Literal["accept", "assign", "general", "defer", "exclude", "reset", "split", "dependency", "comparison", "shared"]
     entity_id: UUID | None = None
+    entity_ids: list[UUID] = Field(default_factory=list, max_length=8)
     ranges: list[tuple[int, int]] = Field(default_factory=list, max_length=50)
     target_fact_id: UUID | None = None
     role: ContextRole = "condition"
+
+    @model_validator(mode="after")
+    def validate_product_choices(self):
+        if len(set(self.entity_ids)) != len(self.entity_ids):
+            raise ValueError("duplicate_product_choice")
+        if self.entity_ids and (self.action not in {"shared", "comparison"} or self.entity_id is not None):
+            raise ValueError("product_choices_do_not_match_action")
+        return self
 
 
 class ReviewDecisionsRequest(BaseModel):

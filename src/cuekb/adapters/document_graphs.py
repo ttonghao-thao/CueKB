@@ -204,9 +204,14 @@ class DocumentGraphOperations:
         from cuekb.domain.document_graph import bind_retrieval_units
 
         with self._read() as conn:
-            graph = self._load_document_graph(conn, job["source_version_id"])
+            in_place = job.get("processing_snapshot", {}).get("review_in_place") == str(job["version_id"])
+            graph = self._load_document_graph(conn, job["version_id"] if in_place else job["source_version_id"])
         if graph is None:
             return None
+        if in_place:
+            graph.edges = [e for e in graph.edges if e.type in {
+                "parent_of", "next_in_structure", "header_for", "footnote_for"}]
+            return bind_retrieval_units(graph, chunks)
         original = graph.version_id
         ids = {n.id: uuid5(job["version_id"], str(n.id)) for n in graph.nodes}
         for n in graph.nodes:

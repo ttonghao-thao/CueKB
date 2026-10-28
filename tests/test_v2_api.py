@@ -72,15 +72,20 @@ def test_adaptive_api_contract_and_bounded_facets(api):
     assert client.post("/v2/search", json=request).status_code == 422
 
 
-def test_bad_calibration_configuration_is_explicit_and_safe(api):
-    from cuekb.services.selection import RelevanceProfileInvalid
+def test_bad_calibration_configuration_is_explicit_and_safe(api, tmp_path):
     client, kb, app = api
-    def invalid():
-        raise RelevanceProfileInvalid("private-file-content")
-    app.dependency_overrides[retrieval_service_v2] = invalid
-    response = client.post("/v2/search", json={"query": "voltage", "kb_ids": [str(kb.id)]})
-    assert response.status_code == 409
-    assert response.json()["error_code"] == "RELEVANCE_PROFILE_INVALID"
+    original = app.dependency_overrides[retrieval_service_v2]()
+    path = tmp_path / 'bad-calibration.json'
+    path.write_text('private-file-content')
+    service = V2RetrievalService(original.repository, original.search,
+        original.settings.model_copy(update={'v2_relevance_profile_path': str(path)}))
+    app.dependency_overrides[retrieval_service_v2] = lambda: service
+    response = client.post("/v2/search", json={"query": "voltage", "kb_ids": [str(kb.id)],
+        "mode": "exact", "selection_mode": "adaptive"})
+    assert response.status_code == 200
+    assert "relevance_profile_invalid" in response.json()["degraded_reasons"]
+    assert response.json()['hits'] and response.json()['evidence_status'] == 'unassessed'
+    assert response.json()['diagnostics']['selection']['calibration_status'] == 'not_configured'
     assert "private-file-content" not in response.text
 
 

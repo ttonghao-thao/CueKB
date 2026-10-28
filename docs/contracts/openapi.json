@@ -2542,6 +2542,15 @@
             ],
             "title": "Entity Id"
           },
+          "entity_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Entity Ids",
+            "type": "array"
+          },
           "fact_id": {
             "format": "uuid",
             "title": "Fact Id",
@@ -2625,6 +2634,13 @@
       "ReviewFact": {
         "additionalProperties": false,
         "properties": {
+          "allowed_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
           "anchor": {
             "$ref": "#/components/schemas/SourceAnchor"
           },
@@ -2638,6 +2654,10 @@
             "maxItems": 5,
             "title": "Candidates",
             "type": "array"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
           },
           "dependencies": {
             "items": {
@@ -2678,6 +2698,10 @@
             "title": "Fact Kind",
             "type": "string"
           },
+          "guidance": {
+            "title": "Guidance",
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -2685,6 +2709,10 @@
           },
           "reason": {
             "title": "Reason",
+            "type": "string"
+          },
+          "recommended_action": {
+            "title": "Recommended Action",
             "type": "string"
           },
           "review_state": {
@@ -2736,6 +2764,10 @@
           "fact_kind",
           "review_state",
           "reason",
+          "category",
+          "recommended_action",
+          "allowed_actions",
+          "guidance",
           "candidates"
         ],
         "title": "ReviewFact",
@@ -2816,6 +2848,11 @@
             "title": "Document Id",
             "type": "string"
           },
+          "editable": {
+            "default": true,
+            "title": "Editable",
+            "type": "boolean"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -2876,6 +2913,11 @@
           "version_id": {
             "format": "uuid",
             "title": "Version Id",
+            "type": "string"
+          },
+          "version_status": {
+            "default": "ready",
+            "title": "Version Status",
             "type": "string"
           }
         },

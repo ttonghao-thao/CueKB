@@ -388,4 +388,9 @@ ALTER TABLE document_versions ALTER COLUMN processing_profile SET DEFAULT 'evide
 ALTER TABLE document_versions ALTER COLUMN processing_snapshot SET DEFAULT '{"approved_entities":[],"chunker_revision":"evidence-v2.5","dependency_bindings":[],"max_chunk_chars":1200,"parser_revision":"evidence-v2.5","profile_revision":"evidence-v2","scope_bindings":[],"structure_revision":"evidence-v2.5","window_token_budget":320,"window_tokenizer":"unicode-lexical-v1"}'::jsonb;
 
 INSERT INTO schema_revisions(revision,checksum) VALUES ('0002','ed1e38452388c77c6bf72abfd6c0fab136c25e942dc9bbb20b38c978d01c6072');
+-- Review facts retain complete immutable original JSON and append-only decisions.
+-- Their source identity outlives replacement of an unpublished draft projection.
+ALTER TABLE review_facts DROP CONSTRAINT IF EXISTS review_facts_source_chunk_id_fkey;
+
+INSERT INTO schema_revisions(revision,checksum) VALUES ('0003','29f6aa51b9a45dc386eb717b04999d447ad1f3a91fde505efc13a434efad91ed');
 COMMIT;

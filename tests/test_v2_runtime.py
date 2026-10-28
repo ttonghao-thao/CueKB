@@ -182,3 +182,57 @@ def test_worker_failure_diagnostics_do_not_persist_provider_or_sql_payload(monke
     assert worker._run_ingestion_once()
     assert recorded[0][1:3] == ("processing_failed", "processing_failed:ValueError")
     assert "private-document-or-provider-secret" not in caplog.text
+
+
+@pytest.mark.parametrize("marker", ["current", "source", "absent"])
+def test_worker_replaces_only_the_reviewed_draft_projection(monkeypatch, marker):
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from cuekb import worker
+    from cuekb.domain.models import Chunk, SourceAnchor
+
+    chunk = Chunk(kb_id=uuid4(), document_id=uuid4(), version_id=uuid4(), ordinal=0,
+                  source_text="Kept instruction.", search_text="Kept instruction.",
+                  anchor=SourceAnchor(type="text"))
+    events = []
+    snapshot = {} if marker == "absent" else {
+        "review_in_place": str(chunk.version_id if marker == "current" else uuid4())}
+    job = dict(id=uuid4(), document_id=chunk.document_id, version_id=chunk.version_id,
+               processing_snapshot=snapshot, attempt_count=0)
+    config = dict(embedding_base_url="http://fixture/v1", embedding_api_key="",
+                  embedding_model="fixture", reranker_base_url="", reranker_api_key="",
+                  reranker_model="", active_index=None, embedding_dimension=2, revision=1)
+    repository = SimpleNamespace(get_model_configuration=lambda: config,
+        claim_job=lambda *args: job,
+        save_ready=lambda *args, **kwargs: events.append("ready"),
+        fail_job=lambda *args, **kwargs: pytest.fail(str(args)))
+
+    class Search:
+        def __init__(self, *args):
+            self.index_name = "fixture"
+            self.client = SimpleNamespace(indices=SimpleNamespace(exists=lambda **kw: False),
+                close=lambda: None,
+                mget=lambda **kw: {"docs": [{"_id": str(chunk.id), "found": True,
+                    "_source": {"source_text": chunk.source_text, "search_text": chunk.search_text,
+                                "version_id": str(chunk.version_id)}}]},
+                count=lambda **kw: {"count": 1})
+        def ensure_index(self): pass
+        def delete_versions(self, document_id, versions):
+            assert document_id == chunk.document_id and versions == [chunk.version_id]
+            events.append("delete_draft")
+        def index(self, chunks, vectors):
+            assert chunks == [chunk] and vectors == [[1., 0.]]
+            events.append("index")
+
+    class Model:
+        def __init__(self, *args): pass
+        def embed(self, values, timeout): return [[1., 0.] for _ in values]
+        def close(self): pass
+
+    monkeypatch.setattr(worker, "runtime", lambda: worker.Runtime(repository, Search(), None, "fixture"))
+    monkeypatch.setattr(worker, "_process_outbox", lambda *args: False)
+    monkeypatch.setattr(worker, "OpenSearchBackend", Search)
+    monkeypatch.setattr(worker, "HttpModelClient", Model)
+    monkeypatch.setattr(worker, "materialize_chunks", lambda *args, **kwargs: [chunk])
+    assert worker._run_ingestion_once()
+    assert events == (["delete_draft"] if marker == "current" else []) + ["index", "ready"]

@@ -39,6 +39,7 @@ window.addEventListener("popstate", async event => {
 $$("[data-review-back]").forEach(button => button.addEventListener("click", returnFromReview));
 
 function resetReviewNavigation() {
+  clearTimeout(choiceState.timer); choiceState.products.clear(); choiceState.selectedFacts.clear();
   choiceState.request++;choiceState.selected.clear();choiceState.plan=null;choiceState.page=null;choiceState.selectionRevision=null;
   state.reviewRequest++;state.review=null;
   $("#choice-items").innerHTML="";

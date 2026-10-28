@@ -192,7 +192,9 @@
 </div></section>
       <section id="view-review" class="view review-page"><div id="choice-review">
 <button class="secondary review-back" data-review-back>← 返回上一次操作</button>
-    <h2>导入分析与待确认事项</h2>
+    <h2>文档审核与发布</h2>
+    <p>1. 逐项确认产品或通用资料 → 2. 完成审核并准备索引 → 3. 发布当前版本</p>
+    <p id="choice-status" class="review-guidance" role="status"></p>
     <p id="choice-structure" class="muted"></p><button id="choice-reparse-source" class="secondary" hidden>按当前结构重新解析原件</button>
     <p id="choice-summary" role="status"></p><p id="choice-error" class="error-text" role="alert"></p>
     <div class="field-grid">
@@ -201,23 +203,23 @@
       <label><span>章节</span><select id="choice-section-filter"><option value="">全部章节</option></select></label>
       <label><span>查找目录产品</span><input id="choice-product-search" placeholder="名称、型号或别名"></label>
     </div>
-    <div class="panel review-selection-tools">
+    <details class="panel review-selection-tools"><summary>批量处理（可选）</summary>
       <label class="check-row"><input id="choice-select-page" type="checkbox">勾选/取消本页</label>
       <span id="choice-selected-count" role="status">已选择0条（最多100条）</span>
-      <div class="field-grid"><label>对勾选记录执行<select id="choice-selected-action"><option value="assign">绑定指定产品</option><option value="general">确认为通用资料</option><option value="exclude">本次排除</option><option value="defer">暂缓处理</option></select></label><label>目标产品（仅绑定时）<select id="choice-selected-product"><option value="">请选择</option></select></label></div>
+      <div class="field-grid"><label>对勾选记录执行<select id="choice-selected-action"><option value="per_record">按每条卡片勾选的产品确认</option><option value="exclude">本次不纳入检索</option><option value="defer">稍后处理（仍阻塞发布）</option></select></label><label hidden>目标产品（仅绑定时）<select id="choice-selected-product"><option value="">请选择</option></select></label></div>
       <button id="choice-selected-apply" class="primary" disabled>预览并处理勾选记录</button><button id="choice-selected-clear" class="secondary">清空勾选</button>
       <p class="muted">勾选可跨页保留；最多100条一次提交，同批有错误则整批不保存。不会包含未勾选记录。</p>
-    </div>
+    </details>
     <div id="choice-items"></div>
-    <div class="version-actions"><button id="choice-prev" class="secondary">上一页</button><button id="choice-next" class="secondary">下一页</button><button id="choice-confirm-page" class="secondary">确认本页所选产品</button><button id="choice-general-page" class="secondary">本页确认为通用资料</button></div>
-    <details><summary>跨页处理当前筛选结果</summary><p>先冻结具体记录并查看数量；每批最多100项，进度保留。中途有人修改审核结果时停止，避免扩大范围。</p><div class="field-grid"><label>处理方式<select id="choice-batch-action"><option value="general">确认为通用资料</option><option value="assign">绑定指定产品</option><option value="exclude">本次排除</option><option value="defer">暂缓处理</option></select></label><label>指定产品（仅绑定时）<select id="choice-batch-product"><option value="">请选择</option></select></label></div><button id="choice-batch-apply" class="secondary">预览并确认跨页操作 / 继续已保存进度</button><p id="choice-batch-progress" role="status"></p></details>
+    <div class="version-actions"><button id="choice-prev" class="secondary">上一页</button><button id="choice-next" class="secondary">下一页</button><button id="choice-confirm-page" class="secondary">确认本页所选产品</button><button id="choice-general-page" class="secondary" hidden>本页通用资料确认</button></div>
+    <details><summary>跨页处理当前筛选结果</summary><p>先冻结具体记录并查看数量；每批最多100项，进度保留。中途有人修改审核结果时停止，避免扩大范围。</p><div class="field-grid"><label>处理方式<select id="choice-batch-action"><option value="defer">稍后处理（仍阻塞发布）</option><option value="exclude">本次不纳入检索</option></select></label><label hidden>指定产品（仅绑定时）<select id="choice-batch-product"><option value="">请选择</option></select></label></div><button id="choice-batch-apply" class="secondary">预览并确认跨页操作 / 继续已保存进度</button><p id="choice-batch-progress" role="status"></p></details>
     <details><summary>目录中缺少产品时新建</summary>
       <p class="muted">候选名称和型号会从所选原文预填；核对后保存，需要知识库管理员权限。</p>
       <form id="choice-new-product" class="form-panel"><div class="field-grid"><label><span>产品名称</span><input id="choice-new-name" maxlength="200" required></label><label><span>型号（如有）</span><input id="choice-new-model" maxlength="200"></label><label><span>类型</span><select id="choice-new-kind"><option value="product">单品</option><option value="bundle">套件 / 组合装</option></select></label></div><button class="secondary" type="submit">保存产品并加入选择</button></form>
     </details>
     <details><summary>产品目录批量导入</summary><p>CSV列：name,product_model,kind,aliases；aliases用分号分隔。先预览，再确认导入，每批最多100项。</p><input id="choice-csv" type="file" accept=".csv,text/csv"><pre id="choice-csv-preview"></pre><button id="choice-csv-import" class="secondary" disabled>确认导入目录</button></details>
     <details><summary>保存可复用的文档规则模板</summary><p>只影响未来选择此模板的处理任务；不会改写已发布事实。</p><form id="choice-template-form" class="form-panel"><label>模板名称<input id="choice-template-name" required maxlength="200"></label><label>确认属于通用资料的精确章节标题（每行一个）<textarea id="choice-template-headings"></textarea></label><label>本领域属性名称（每行一个，如电压、保质期）<textarea id="choice-template-terms"></textarea></label><button type="submit" class="secondary">预览并保存模板</button></form></details>
-    <div class="dialog-actions"><button id="choice-apply" class="primary">按已确认结果生成待发布版本</button><button id="choice-publish" class="secondary">发布当前版本</button><button id="choice-advanced" class="secondary">高级章节配置</button><button class="secondary" data-review-back>返回上一次操作</button></div>
+    <div class="dialog-actions"><button id="choice-apply" class="primary">完成审核，准备发布</button><button id="choice-publish" class="primary">发布当前版本</button><button id="choice-advanced" class="secondary">高级章节配置</button><button class="secondary" data-review-back>返回上一次操作</button></div>
 </div></section>
     </main>
   </div>

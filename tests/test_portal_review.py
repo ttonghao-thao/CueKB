@@ -111,14 +111,17 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
 const fields=new Map(),sent=[];let fail=false;
 const $=id=>{if(!fields.has(id))fields.set(id,{value:'',textContent:'',addEventListener(n,fn){this[n]=fn;}});return fields.get(id);};
 const context=vm.createContext({$, $$:()=>[],confirm:()=>true,toast(){},
- api:async(path,options)=>{sent.push(JSON.parse(options.body));if(fail)throw Object.assign(new Error('bundle_requires_bundle_identity'),{status:422});return {id:'plan',revision:2,status:'draft'};}});
+ api:async(path,options)=>{sent.push(JSON.parse(options.body));if(fail)throw Object.assign(new Error('bundle_requires_bundle_identity'),{status:422});return {id:'plan',revision:2,status:'draft',version_status:'ready',publish_eligible:true};}});
 vm.runInContext(fs.readFileSync('src/cuekb/portal/review.js','utf8'),context);
 (async()=>{
  await vm.runInContext(`(async()=>{choiceState.plan={id:'plan',revision:1,status:'draft'};
- choiceState.selected=new Set(['page1-checked','page2-checked']);refreshChoiceReview=async()=>{};
+ choiceState.selected=new Set(['page1-checked','page2-checked']);refreshChoiceReview=async()=>{ $('#choice-apply').disabled=choiceState.busy; $('#choice-publish').disabled=choiceState.busy; };
  $('#choice-selected-action').value='defer';await $('#choice-selected-apply').click();})()`,context);
  assert.deepEqual(sent[0].decisions.map(d=>d.fact_id),['page1-checked','page2-checked']);
  assert.equal(vm.runInContext('choiceState.selected.size',context),0);
+ assert.equal($('#choice-apply').disabled,false);
+ assert.equal($('#choice-publish').disabled,false);
+ assert.equal($('#choice-items').inert,false);
  fail=true;
  await vm.runInContext(`(async()=>{choiceState.selected.add('rejected');await $('#choice-selected-apply').click();})()`,context);
  assert.equal(vm.runInContext('choiceState.selected.has("rejected")',context),true);
@@ -132,3 +135,40 @@ vm.runInContext(fs.readFileSync('src/cuekb/portal/review.js','utf8'),context);
         check=True,
         timeout=10,
     )
+
+
+def test_product_checkboxes_keep_per_fact_selection_and_hide_invalid_actions():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node required')
+    script = r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const fields=new Map();
+const $=id=>{if(!fields.has(id))fields.set(id,{value:'',addEventListener(){}});return fields.get(id);};
+const ctx=vm.createContext({$, $$:()=>[],escapeHtml:s=>String(s).replaceAll('<','&lt;'),shortId:String});
+vm.runInContext(fs.readFileSync('src/cuekb/portal/review.js','utf8'),ctx);
+vm.runInContext(`
+choiceState.plan={id:'plan',status:'draft',editable:true};
+choiceState.entities=[{id:'a',name:'Alpha',kind:'product'},{id:'b',name:'Beta',kind:'product'}];
+const fact={id:'shared',source_text:'<script>Alpha and Beta common use</script>',title_path:[],anchor:{},
+ candidates:[{entity_id:'a',display_name:'Alpha'},{entity_id:'b',display_name:'Beta'}],
+ category:'shared_scope',fact_kind:'statement',review_state:'pending',applicability:{subjects:[]},
+ guidance:'Confirm common scope',recommended_action:'shared',allowed_actions:['shared','general','exclude','defer','reset'],
+ dependency_candidates:[],split_suggestions:[]};
+`,ctx);
+const html=vm.runInContext('renderChoiceFact(fact)',ctx);
+assert.match(html,/type="checkbox" data-product-choice/);
+assert.match(html,/多产品共同说明/);
+assert.match(html,/本次不纳入检索/); assert.match(html,/仍阻塞发布/);
+assert.ok(!html.includes('<script>'));
+const decision=JSON.parse(vm.runInContext('JSON.stringify(choiceProductDecision(fact))',ctx));
+assert.deepEqual(decision,{fact_id:'shared',action:'shared',entity_ids:['a','b']});
+vm.runInContext(`choiceState.products.set('shared',['b','a']); renderChoiceFact({...fact,id:'page-two'});`,ctx);
+assert.equal(vm.runInContext('choiceProductIds(fact).join(",")',ctx),'b,a');
+const mixed=vm.runInContext(`renderChoiceFact({...fact,id:'mixed',category:'separate_specifications',fact_kind:'specification',allowed_actions:['exclude','defer','reset']})`,ctx);
+assert.ok(!mixed.includes('data-product-choice')); assert.ok(!mixed.includes('data-review-action="general"'));
+const collision=vm.runInContext(`JSON.stringify(choiceProductIds({...fact,id:'collision',category:'catalog_collision'}))`,ctx);
+assert.equal(collision,'[]');
+"""
+    subprocess.run([node, '-e', script], cwd=Path(__file__).resolve().parents[1],
+                   capture_output=True, text=True, check=True, timeout=10)

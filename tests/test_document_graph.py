@@ -129,7 +129,7 @@ def test_legacy_schema_upgrade_preserves_documents_and_checksums(pg):
         ]:
             conn.execute(text(f"DROP TABLE {table} CASCADE"))
     result = upgrade(pg.engine)
-    assert result["revision"] == "0002" and pg.get_knowledge_base(kb.id).name == "preserve"
+    assert result["revision"] == "0003" and pg.get_knowledge_base(kb.id).name == "preserve"
     assert upgrade(pg.engine) == result
     with pg._write() as conn:
         conn.execute(
@@ -141,7 +141,7 @@ def test_legacy_schema_upgrade_preserves_documents_and_checksums(pg):
 
 def test_generated_empty_schema_is_the_migration_chain():
     assert Path("db/schema.sql").read_text() == render_schema()
-    assert [r for r, _ in migrations()] == ["0001", "0002"]
+    assert [r for r, _ in migrations()] == ["0001", "0002", "0003"]
 
 
 def test_review_derivation_preserves_source_tree_without_inventing_removed_facts(pg):
@@ -166,13 +166,14 @@ def test_review_derivation_preserves_source_tree_without_inventing_removed_facts
     )
     derived = pg.apply_review_plan(plan["id"], principal, plan["revision"])
     new = finish(pg, derived, source)
-    assert len(new) == 1 and new.document_graph.source_version_id == job.version_id
+    assert len(new) == 1 and derived.version_id == job.version_id
+    assert new.document_graph.source_version_id is None
     assert any(n.text == "Second instruction." for n in new.document_graph.nodes)
     assert len(new.document_graph.units) == 1
     assert new.document_graph.units[0].scope["source_mapping"] == "resolved"
     with pg._read() as conn:
         old = pg._load_document_graph(conn, job.version_id)
-        assert {n.id for n in old.nodes}.isdisjoint(n.id for n in new.document_graph.nodes)
+        assert {n.id for n in old.nodes} == {n.id for n in chunks.document_graph.nodes}
     # Restoring a version retains its canonical structure in a new identity space.
     pg.publish(job.document_id, derived.version_id, "default", principal)
     restored = pg.create_restore_job(
@@ -188,7 +189,7 @@ def test_review_derivation_preserves_source_tree_without_inventing_removed_facts
     reader = pg.authenticate(key)
     pg.grant(job.kb_id, reader_id, "read")
     with pytest.raises(PermissionError):
-        pg.document_graph_page(job.document_id, job.version_id, reader)
+        pg.document_graph_page(job.document_id, restored.version_id, reader)
     assert (
         pg.document_graph_page(job.document_id, derived.version_id, reader)["status"] == "complete"
     )
@@ -312,9 +313,9 @@ def test_migrations_empty_database_and_atomic_failure(pg, monkeypatch):
         assert conn.execute(text("SELECT to_regclass('schema_revisions')")).scalar() is None
         assert conn.execute(text("SELECT to_regclass('partial_write')")).scalar() is None
     monkeypatch.setattr(manager, "migrations", original)
-    assert manager.upgrade(pg.engine)["revision"] == "0002"
+    assert manager.upgrade(pg.engine)["revision"] == "0003"
     with pg._read() as conn:
-        assert manager.check_connection(conn)["revision"] == "0002"
+        assert manager.check_connection(conn)["revision"] == "0003"
 
 
 def test_required_closure_is_bounded_and_reported():

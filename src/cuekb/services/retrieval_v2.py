@@ -33,7 +33,7 @@ from cuekb.services.execution import (
 from cuekb.services.ranking import QueryRouter, rrf
 from cuekb.services.selection import (
     InformationSelector, LEXICAL_REVISION, SELECTION_REVISION, SELECTION_RULES_REVISION, accepts, chunk_identifiers,
-    identifiers, literal_coverage, load_profile, runtime_binding, tokens,
+    identifiers, literal_coverage, load_profile, runtime_binding, tokens, RelevanceProfileInvalid,
 )
 
 T = TypeVar("T")
@@ -108,7 +108,12 @@ class V2RetrievalService:
         self.reranker_configured = reranker_configured
         self.ranking_config = dict(ranking_config or {})
         self.router = QueryRouter(settings.exact_identifier_pattern)
-        self.relevance_profile = load_profile(settings.v2_relevance_profile_path)
+        self.relevance_profile_error = None
+        try:
+            self.relevance_profile = load_profile(settings.v2_relevance_profile_path)
+        except RelevanceProfileInvalid:
+            self.relevance_profile = None
+            self.relevance_profile_error = "relevance_profile_invalid"
 
     def search_evidence(
         self, request: V2SearchRequest, principal=None, execution: SearchExecution | None = None,
@@ -745,6 +750,7 @@ class V2RetrievalService:
             execution.checkpoint()
             state = _Attempt(
                 path=path, route_reason=route_reason,
+                degraded=[self.relevance_profile_error] if self.relevance_profile_error else [],
                 keyword_limit=min(100, self.settings.keyword_candidates),
                 vector_limit=min(100, self.settings.vector_candidates) if path != "exact" else 0,
                 relation_limit=min(50, self.settings.relation_candidates) if path == "related" else 0,
