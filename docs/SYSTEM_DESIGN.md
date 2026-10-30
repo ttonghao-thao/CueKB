@@ -1,6 +1,6 @@
 # 当前系统设计
 
-更新：2026-10-26。本文是当前架构与设计的主文档；接口字段在[接口规范](API_GUIDE.md)，验证方法在[验收方法](ACCEPTANCE.md)，实际需求复核/验证结果及未验收项只在[任务板](../TASK_BOARD.md)维护。全部CueKB接口、处理链与验证统一为V2。
+更新：2026-10-30。本文是当前架构与设计的主文档；接口字段在[接口规范](API_GUIDE.md)，验证方法在[验收方法](ACCEPTANCE.md)，实际需求复核/验证结果及未验收项只在[任务板](../TASK_BOARD.md)维护。全部CueKB接口、处理链与验证统一为V2。
 
 ## 1. 模块与权威边界
 
@@ -94,11 +94,11 @@ apply锁定计划、未发布版本并校验全部事实，冻结manifest摘要�
 
 动态选择在候选耗尽、无新收益或到达数量/字节/上下文预算时停止；deadline始终覆盖整个流程。诊断的字面facet观察与evidence_status均不认证问题已完整回答。可选selection_query补充原始问题的选择语境，实际召回仍使用query，不能从短query恢复被消费端省略的信息。
 
-`evidence_status`保持unassessed。去重、上下文、融合与多片段返回改善可用证据，不代表已证明全部属性齐备或冲突已裁决。关系supports/refutes保留来源立场，不决定事实真伪。
+`/v2/search`的`evidence_status`保持unassessed。去重、上下文、融合与多片段返回改善可用证据，不代表已证明全部属性齐备或冲突已裁决。关系supports/refutes保留来源立场，不决定事实真伪。回答资格由第10节独立问题级契约判断。
 
 ## 5. 异步、时限与隔离
 
-API在lifespan就绪前通过公开OpenAPI初始化完成惰性路由/依赖准备。`V2DeadlineMiddleware`直接包围`/v2/search`的完整下游ASGI调用，鉴权、模型配置依赖与endpoint共用同一SearchExecution。截止时取消实际异步调用，等待其finally清理；endpoint开始前再次checkpoint，防止同步依赖耗尽预算后仍启动检索。搜索响应暂存到下游完成并通过最终checkpoint后才提交，不能在预算耗尽后发送成功证据。冷启动、慢依赖和在途检索须分别验证，不能用预热掩盖取消漏洞。
+API在lifespan就绪前通过公开OpenAPI初始化完成惰性路由/依赖准备。`V2DeadlineMiddleware`直接包围`/v2/search`及`/v2/evidence/query`的完整下游ASGI调用，鉴权、模型配置依赖与endpoint共用同一SearchExecution。截止时取消实际异步调用，等待其finally清理；endpoint开始前再次checkpoint，防止同步依赖耗尽预算后仍启动检索。响应暂存到下游完成并通过最终checkpoint后才提交，不能在预算耗尽后发送成功证据。冷启动、慢依赖和在途检索须分别验证，不能用预热掩盖取消漏洞。
 
 V2模型和OS请求使用原生httpx.AsyncClient，按配置修订复用；切配置不关闭仍在使用的旧transport，退出后回收。单API进程默认16个active lease，超过直接503，最多4个同时存活修订；不是跨Worker/进程的模型配额。
 
@@ -145,4 +145,16 @@ PG持久化document_graphs/document_nodes/evidence_edges/retrieval_units/retriev
 
 上传content_kind=general声明非产品文档，未存在明确产品/套件冲突的正文可规则确认，不要求逐片段绑定产品；范围断言保存product not_applicable，搜索原有applicability仍unknown以兼容严格V2客户端。source_metadata保存语言、负责人、生效区间及来源策略引用；声明不自动提高权威或授予访问权限。
 
-Worker在save_ready的同一事务保存事实、树、范围和单元映射；发布记录publication_snapshots中的图摘要与处理修订。未发布草稿审核保留完整源树及节点身份，替换检索单元；显式派生/恢复重映射节点/边/切片ID并保存source_version_id，排除事实不再生成检索单元。旧扁平版本返回legacy_unavailable，必须从保留原件重新解析，不能由现有块拼出声称完整的源树。新树不触发旧版本自动发布。跨文档业务推断、通用隐含条件识别和问题级证据交付仍按S2/S3演进。
+Worker在save_ready的同一事务保存事实、树、范围和单元映射；发布记录publication_snapshots中的图摘要与处理修订。未发布草稿审核保留完整源树及节点身份，替换检索单元；显式派生/恢复重映射节点/边/切片ID并保存source_version_id，排除事实不再生成检索单元。旧扁平版本返回legacy_unavailable，必须从保留原件重新解析，不能由现有块拼出声称完整的源树。新树不触发旧版本自动发布。跨文档业务推断与通用隐含条件识别仍按S2演进；问题级交付见第10节。
+
+## 10. S3问题级证据引擎
+
+`services/evidence_query.py`在同一进程组合现有V2检索，不做内部HTTP绕行。QueryPlanner保留完整question及最多8个精确facet，以确认实体生成局部产品过滤；V2检索执行混合召回、adaptive选择和内部一次补召回。Assembler把主事实、必要条件和S1源节点组成组；Assessor只认证结构可证明的direct，歧义主体、同条件冲突、缺失和无法评估分开；Selector按尚未覆盖facet、原排序与1—5组上限选择。`/v2/search`原契约与语义保持不变。
+
+候选选择后再打开一个PG REPEATABLE READ快照，复验API Key、KB read、content/acl revision、当前发布版本、每个主块/必要块正文及retrieval_unit_nodes。第一次检索后发生变化时共享deadline有界重跑一次，第二次仍变化返回409；旧正文、删除版本和无源节点候选不能成为direct。最终snapshot_id由修订和选中来源生成，不以OpenSearch分数代替权威身份。
+
+`structured-support-1`先做Unicode形态归一及受控storage/shipping概念归一，然后要求facet业务词全部出现在主事实与必要上下文中。主体须来自确认binding、问题显式主体或通用资料；单个问题出现多个有依据主体时clarify。同主体、相同限定下数值或极性不兼容时conflict。支持校准器尚未配置，因此entailed保留在契约但当前不输出；部分词相似、旧结构、依赖或出处不足均为unassessed。
+
+Delivery先形成完整审计组，再生成只含decision、facet映射、必要条件和missing的model_view。标准视图用固定内置tokenizer；voice视图从只读部署目录加载与目标镜像一致的tokenizer JSON。选择器按`canonical-json-v1`对完整model_view排序键、保留Unicode且无空白序列化后精确计数，超预算整组回退并同步改变facet状态，不裁剪条件。没有不同检索计划，continuation保持false，防止消费者把缺项解释为自动二次调用许可。
+
+响应包用API Key pepper签名，绑定principal/API Key、KB、request ID、input revision、内容/ACL修订、快照及短期过期时间。`/v2/evidence/validate`复验签名、原request ID、调用主体、权限和当前修订，返回valid/stale，不返回旧正文；篡改、跨请求和跨主体均拒绝。该门禁降低查询到正式回答之间的撤权窗口，已经注入模型或播放的内容仍由消费者取消/会话机制负责。

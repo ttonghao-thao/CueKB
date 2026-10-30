@@ -28,6 +28,8 @@ x-app-env: &app-env
   CUEKB_RERANK_ENABLED: ${CUEKB_RERANK_ENABLED:-true}
   CUEKB_V2_MAX_INFLIGHT: ${CUEKB_V2_MAX_INFLIGHT:-16}
   CUEKB_V2_MAX_EVIDENCE_BYTES: ${CUEKB_V2_MAX_EVIDENCE_BYTES:-128000}
+  CUEKB_EVIDENCE_PACKAGE_TTL_SECONDS: ${CUEKB_EVIDENCE_PACKAGE_TTL_SECONDS:-30}
+  CUEKB_EVIDENCE_RESPONSE_MAX_BYTES: ${CUEKB_EVIDENCE_RESPONSE_MAX_BYTES:-256000}
 
 x-logging: &default-logging
   driver: json-file
@@ -98,12 +100,20 @@ services:
       CUEKB_API_KEY_PEPPER: ${CUEKB_API_KEY_PEPPER:?set CUEKB_API_KEY_PEPPER}
       CUEKB_BOOTSTRAP_API_KEY: ${CUEKB_BOOTSTRAP_API_KEY:?set CUEKB_BOOTSTRAP_API_KEY}
       CUEKB_V2_RELEVANCE_PROFILE_PATH: ${CUEKB_V2_RELEVANCE_PROFILE_PATH:-}
+      CUEKB_EVIDENCE_VOICE_TOKENIZER_PATH: ${CUEKB_EVIDENCE_VOICE_TOKENIZER_PATH:-}
+      CUEKB_EVIDENCE_VOICE_TOKENIZER_ID: ${CUEKB_EVIDENCE_VOICE_TOKENIZER_ID:-}
     ports: ["0.0.0.0:8085:8080"]
     volumes:
       - cuekb_files:/data/originals
       - type: bind
         source: ./deploy/relevance
         target: /etc/cuekb/relevance
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./deploy/tokenizers
+        target: /etc/cuekb/tokenizers
         read_only: true
         bind:
           create_host_path: false

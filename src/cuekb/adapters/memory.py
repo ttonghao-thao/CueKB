@@ -35,6 +35,8 @@ class InMemoryRepository:
         self.versions: dict[UUID, DocumentVersion] = {}
         self.jobs: dict[UUID, Job] = {}
         self.chunks: dict[UUID, Chunk] = {}
+        self.entities: dict[UUID, dict] = {}
+        self.evidence_nodes: dict[UUID, list[UUID]] = {}
 
     def create_knowledge_base(self, kb: KnowledgeBase) -> KnowledgeBase:
         with self._lock:
@@ -181,6 +183,31 @@ class InMemoryRepository:
         return sorted(candidates, key=lambda c: (c.id != chunk.id, c.id not in links,
             abs(c.ordinal - chunk.ordinal), c.ordinal))[:max(limit, len(links) + 1)]
 
+    def evidence_authority_snapshot(
+        self, principal, kb_ids, chunk_ids, entity_ids=(),
+    ):
+        del principal
+        if any(kb_id not in self.knowledge_bases for kb_id in kb_ids):
+            raise KeyError("knowledge_base_not_found")
+        entities = [self.entities[item] for item in entity_ids if item in self.entities
+                    and self.entities[item]["kb_id"] in kb_ids]
+        if len(entities) != len(set(entity_ids)):
+            raise ValueError("context_binding_not_found_in_authorized_scope")
+        chunks = self.load_chunks(chunk_ids, kb_ids)
+        if len(chunks) != len(set(chunk_ids)):
+            raise ValueError("evidence_snapshot_changed")
+        return {
+            "chunks": chunks,
+            "node_ids": {item: list(self.evidence_nodes.get(item, [])) for item in chunk_ids},
+            "entities": entities,
+            "content_revisions": {
+                str(item): self.knowledge_bases[item].content_revision for item in kb_ids
+            },
+            "authorization_revisions": {
+                str(item): self.knowledge_bases[item].acl_revision for item in kb_ids
+            },
+        }
+
     def related_chunks(self, request, seed_ids, limit, timeout_ms):
         return []
 
@@ -262,6 +289,12 @@ def _matches(chunk: Chunk, filters: dict) -> bool:
     return (
         (not document_ids or chunk.document_id in set(document_ids))
         and (not filters.get("category") or chunk.metadata.get("category") == filters["category"])
-        and scope_matches(chunk, filters.get("product_model"), filters.get("software_version"), filters.get("product_entity_id"))
+        and scope_matches(
+            chunk,
+            filters.get("product_model"),
+            filters.get("software_version"),
+            filters.get("product_entity_id"),
+            filters.get("product_entity_ids") or (),
+        )
         and (not query_ids or bool(query_ids & chunk_identifiers(chunk)))
     )

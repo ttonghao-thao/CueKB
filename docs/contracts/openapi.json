@@ -1070,6 +1070,235 @@
         "title": "ErrorResponse",
         "type": "object"
       },
+      "EvidenceAssessment": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Id"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "method_revision": {
+            "const": "structured-support-1",
+            "default": "structured-support-1",
+            "title": "Method Revision",
+            "type": "string"
+          },
+          "scope": {
+            "const": "authorized_sources_for_this_question",
+            "default": "authorized_sources_for_this_question",
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "title": "EvidenceAssessment",
+        "type": "object"
+      },
+      "EvidenceClarification": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceClarificationOption"
+            },
+            "maxItems": 8,
+            "minItems": 2,
+            "title": "Options",
+            "type": "array"
+          },
+          "question": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "options"
+        ],
+        "title": "EvidenceClarification",
+        "type": "object"
+      },
+      "EvidenceClarificationOption": {
+        "additionalProperties": false,
+        "properties": {
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id",
+          "label"
+        ],
+        "title": "EvidenceClarificationOption",
+        "type": "object"
+      },
+      "EvidenceConflict": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 2,
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "facet_id": {
+            "title": "Facet Id",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "incompatible_values",
+              "opposite_polarity"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "facet_id",
+          "evidence_ids",
+          "reason"
+        ],
+        "title": "EvidenceConflict",
+        "type": "object"
+      },
+      "EvidenceContextBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "confirmed_conversation_context",
+              "user_selection"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id",
+          "source"
+        ],
+        "title": "EvidenceContextBinding",
+        "type": "object"
+      },
+      "EvidenceContinuation": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed": {
+            "default": false,
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "reason": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "maxLength": 16384,
+                "minLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "EvidenceContinuation",
+        "type": "object"
+      },
+      "EvidenceDelivery": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_count": {
+            "maximum": 131072.0,
+            "minimum": 2.0,
+            "title": "Byte Count",
+            "type": "integer"
+          },
+          "profile": {
+            "enum": [
+              "standard",
+              "voice"
+            ],
+            "title": "Profile",
+            "type": "string"
+          },
+          "serialization": {
+            "const": "canonical-json-v1",
+            "default": "canonical-json-v1",
+            "title": "Serialization",
+            "type": "string"
+          },
+          "token_budget": {
+            "maximum": 4096.0,
+            "minimum": 32.0,
+            "title": "Token Budget",
+            "type": "integer"
+          },
+          "token_count": {
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "Token Count",
+            "type": "integer"
+          },
+          "tokenizer_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Tokenizer Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "tokenizer_id",
+          "byte_count",
+          "token_count",
+          "token_budget"
+        ],
+        "title": "EvidenceDelivery",
+        "type": "object"
+      },
       "EvidenceEdge": {
         "additionalProperties": false,
         "properties": {
@@ -1127,6 +1356,651 @@
         "title": "EvidenceEdge",
         "type": "object"
       },
+      "EvidenceFacetInput": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+            "title": "Id",
+            "type": "string"
+          },
+          "question_span": {
+            "items": {
+              "maximum": 2000.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Question Span",
+            "type": "array"
+          },
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "question_span"
+        ],
+        "title": "EvidenceFacetInput",
+        "type": "object"
+      },
+      "EvidenceFacetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "support": {
+            "enum": [
+              "direct",
+              "entailed",
+              "absent",
+              "ambiguous",
+              "conflicting",
+              "unassessed"
+            ],
+            "title": "Support",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "support"
+        ],
+        "title": "EvidenceFacetResult",
+        "type": "object"
+      },
+      "EvidenceGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "completeness": {
+            "enum": [
+              "complete",
+              "incomplete"
+            ],
+            "title": "Completeness",
+            "type": "string"
+          },
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Conditions",
+            "type": "array"
+          },
+          "id": {
+            "pattern": "^E[1-5]$",
+            "title": "Id",
+            "type": "string"
+          },
+          "match_basis": {
+            "items": {
+              "enum": [
+                "confirmed_subject",
+                "explicit_subject",
+                "general_scope",
+                "explicit_attribute",
+                "exact_value",
+                "necessary_context"
+              ],
+              "type": "string"
+            },
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Match Basis",
+            "type": "array"
+          },
+          "priority": {
+            "enum": [
+              "primary",
+              "supporting"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "rank": {
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "required_context": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Required Context",
+            "type": "array"
+          },
+          "statement": {
+            "$ref": "#/components/schemas/EvidenceStatement"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/EvidenceSubject"
+          },
+          "supports": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Supports",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "priority",
+          "rank",
+          "supports",
+          "subject",
+          "statement",
+          "completeness",
+          "match_basis"
+        ],
+        "title": "EvidenceGroup",
+        "type": "object"
+      },
+      "EvidenceModelItem": {
+        "additionalProperties": false,
+        "properties": {
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 40,
+            "title": "Conditions",
+            "type": "array"
+          },
+          "for": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "For",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 16000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "for",
+          "text"
+        ],
+        "title": "EvidenceModelItem",
+        "type": "object"
+      },
+      "EvidenceModelView": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "enum": [
+              "answer",
+              "partial_answer",
+              "clarify",
+              "insufficient",
+              "conflict"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceModelItem"
+            },
+            "maxItems": 5,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Missing",
+            "type": "array"
+          },
+          "search": {
+            "const": "finished",
+            "default": "finished",
+            "title": "Search",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "EvidenceModelView",
+        "type": "object"
+      },
+      "EvidencePackage": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 16384,
+            "minLength": 20,
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expires_at"
+        ],
+        "title": "EvidencePackage",
+        "type": "object"
+      },
+      "EvidenceQueryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "context_bindings": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceContextBinding"
+            },
+            "maxItems": 8,
+            "title": "Context Bindings",
+            "type": "array"
+          },
+          "contract_revision": {
+            "const": "cuekb.evidence/2.1",
+            "default": "cuekb.evidence/2.1",
+            "title": "Contract Revision",
+            "type": "string"
+          },
+          "delivery_profile": {
+            "default": "standard",
+            "enum": [
+              "standard",
+              "voice"
+            ],
+            "title": "Delivery Profile",
+            "type": "string"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/V2SearchFilters"
+          },
+          "input_revision": {
+            "default": 1,
+            "maximum": 2147483647.0,
+            "minimum": 1.0,
+            "title": "Input Revision",
+            "type": "integer"
+          },
+          "kb_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Kb Ids",
+            "type": "array"
+          },
+          "max_groups": {
+            "default": 5,
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Max Groups",
+            "type": "integer"
+          },
+          "question": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "requested_facets": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceFacetInput"
+            },
+            "maxItems": 8,
+            "title": "Requested Facets",
+            "type": "array"
+          },
+          "search_query": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search Query"
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 100.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Ms"
+          },
+          "token_budget": {
+            "default": 120,
+            "maximum": 4096.0,
+            "minimum": 32.0,
+            "title": "Token Budget",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "question",
+          "kb_ids"
+        ],
+        "title": "EvidenceQueryRequest",
+        "type": "object"
+      },
+      "EvidenceQueryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "assessment": {
+            "$ref": "#/components/schemas/EvidenceAssessment"
+          },
+          "authorization_revisions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Authorization Revisions",
+            "type": "object"
+          },
+          "clarification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceClarification"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceConflict"
+            },
+            "maxItems": 8,
+            "title": "Conflicts",
+            "type": "array"
+          },
+          "content_revisions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Content Revisions",
+            "type": "object"
+          },
+          "continuation": {
+            "$ref": "#/components/schemas/EvidenceContinuation"
+          },
+          "contract_revision": {
+            "const": "cuekb.evidence/2.1",
+            "default": "cuekb.evidence/2.1",
+            "title": "Contract Revision",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "answer",
+              "partial_answer",
+              "clarify",
+              "insufficient",
+              "conflict"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/EvidenceDelivery"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceGroup"
+            },
+            "maxItems": 5,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "facets": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceFacetResult"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Facets",
+            "type": "array"
+          },
+          "input_revision": {
+            "minimum": 1.0,
+            "title": "Input Revision",
+            "type": "integer"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Missing",
+            "type": "array"
+          },
+          "model_view": {
+            "$ref": "#/components/schemas/EvidenceModelView"
+          },
+          "package": {
+            "$ref": "#/components/schemas/EvidencePackage"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "retrieval": {
+            "$ref": "#/components/schemas/EvidenceRetrievalSummary"
+          },
+          "sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EvidenceSourceRef"
+            },
+            "maxProperties": 105,
+            "title": "Sources",
+            "type": "object"
+          },
+          "timings_ms": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Timings Ms",
+            "type": "object"
+          },
+          "trace_id": {
+            "format": "uuid",
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "input_revision",
+          "decision",
+          "assessment",
+          "facets",
+          "continuation",
+          "delivery",
+          "model_view",
+          "retrieval",
+          "content_revisions",
+          "authorization_revisions",
+          "timings_ms",
+          "package"
+        ],
+        "title": "EvidenceQueryResponse",
+        "type": "object"
+      },
+      "EvidenceRetrievalSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_groups": {
+            "maximum": 20.0,
+            "minimum": 0.0,
+            "title": "Candidate Groups",
+            "type": "integer"
+          },
+          "resolved_entity_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Resolved Entity Ids",
+            "type": "array"
+          },
+          "selected_groups": {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Selected Groups",
+            "type": "integer"
+          },
+          "snapshot_id": {
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RetrievalStatus"
+          }
+        },
+        "required": [
+          "status",
+          "candidate_groups",
+          "selected_groups",
+          "snapshot_id"
+        ],
+        "title": "EvidenceRetrievalSummary",
+        "type": "object"
+      },
+      "EvidenceSourceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/SourceAnchor"
+          },
+          "chunk_id": {
+            "format": "uuid",
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "node_id": {
+            "format": "uuid",
+            "title": "Node Id",
+            "type": "string"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chunk_id",
+          "document_id",
+          "version_id",
+          "node_id",
+          "anchor"
+        ],
+        "title": "EvidenceSourceRef",
+        "type": "object"
+      },
+      "EvidenceStatement": {
+        "additionalProperties": false,
+        "properties": {
+          "source_refs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 21,
+            "minItems": 1,
+            "title": "Source Refs",
+            "type": "array"
+          },
+          "text": {
+            "maxLength": 16000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "source_refs"
+        ],
+        "title": "EvidenceStatement",
+        "type": "object"
+      },
       "EvidenceStatus": {
         "enum": [
           "unassessed",
@@ -1136,6 +2010,148 @@
         ],
         "title": "EvidenceStatus",
         "type": "string"
+      },
+      "EvidenceSubject": {
+        "additionalProperties": false,
+        "properties": {
+          "entity_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "resolution": {
+            "enum": [
+              "known",
+              "general",
+              "ambiguous",
+              "unknown"
+            ],
+            "title": "Resolution",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resolution"
+        ],
+        "title": "EvidenceSubject",
+        "type": "object"
+      },
+      "EvidenceValidateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_revision": {
+            "const": "cuekb.evidence/2.1",
+            "default": "cuekb.evidence/2.1",
+            "title": "Contract Revision",
+            "type": "string"
+          },
+          "package_id": {
+            "maxLength": 16384,
+            "minLength": 20,
+            "title": "Package Id",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "required": [
+          "package_id"
+        ],
+        "title": "EvidenceValidateRequest",
+        "type": "object"
+      },
+      "EvidenceValidateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authorization_revisions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Authorization Revisions",
+            "type": "object"
+          },
+          "content_revisions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Content Revisions",
+            "type": "object"
+          },
+          "contract_revision": {
+            "const": "cuekb.evidence/2.1",
+            "default": "cuekb.evidence/2.1",
+            "title": "Contract Revision",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "status": {
+            "enum": [
+              "valid",
+              "stale"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trace_id": {
+            "format": "uuid",
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "validated_at": {
+            "format": "date-time",
+            "title": "Validated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "status",
+          "content_revisions",
+          "authorization_revisions",
+          "validated_at"
+        ],
+        "title": "EvidenceValidateResponse",
+        "type": "object"
       },
       "GenerationCreate": {
         "properties": {
@@ -4161,6 +5177,15 @@
               }
             ],
             "title": "Product Entity Id"
+          },
+          "product_entity_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Product Entity Ids",
+            "type": "array"
           },
           "product_model": {
             "anyOf": [
@@ -9585,6 +10610,718 @@
         "summary": "Document Structure",
         "tags": [
           "processing-v2"
+        ]
+      }
+    },
+    "/v2/evidence/query": {
+      "post": {
+        "operationId": "evidence_query_v2_evidence_query_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceQueryResponse"
+                }
+              }
+            },
+            "description": "Successful Response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway Timeout",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyBearer": []
+          }
+        ],
+        "summary": "Evidence Query",
+        "tags": [
+          "evidence-v2.1"
+        ]
+      }
+    },
+    "/v2/evidence/validate": {
+      "post": {
+        "operationId": "validate_evidence_package_v2_evidence_validate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceValidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceValidateResponse"
+                }
+              }
+            },
+            "description": "Successful Response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Gateway Timeout",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence and processing responses are not cacheable.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "X-Trace-ID": {
+                "description": "Server trace; matches trace_id when present in the body.",
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyBearer": []
+          }
+        ],
+        "summary": "Validate Evidence Package",
+        "tags": [
+          "evidence-v2.1"
         ]
       }
     },

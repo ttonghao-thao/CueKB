@@ -1,6 +1,6 @@
 # 验收与评测方法
 
-更新：2026-10-26。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
+更新：2026-10-30。本文定义如何验证；本轮实际执行结果仅在[任务板](../TASK_BOARD.md)维护。这里不预填预期Recall或P95为已达成。
 
 ## 1. V2完整验证
 
@@ -219,7 +219,6 @@ docker compose --env-file .env.production images api worker
 
 **需要回传**：cuekb-s1-report.json、两应用运行镜像信息、上述5项结果；出错时附错误原文/trace和相关任务ID即可。不回传.env、Authorization、Cookie或私有整库内容。开发者根据报告分别记录代码/部署/格式/门户通过、失败或证据不足；发布质量与语音SLO仍由后续S2–S6验收，本批不以功能测试宣称Nano时延已达标。
 
-
 ### 7.6 分类审核、原草稿发布与校准故障修复验收
 
 部署步骤和schema要求以[操作手册第8节](OPERATIONS.md#8-s1保留数据升级验证与回退)为准。本批升级后刷新门户，使用隔离测试知识库验证以下项目；不对生产文档作故障注入。
@@ -234,3 +233,49 @@ docker compose --env-file .env.production images api worker
 | 校准故障 | 测试环境配置无效校准文件，exact/hybrid及ranked/adaptive请求仍返回HTTP 200与relevance_profile_invalid诊断；原有ACL和最终可见性检查不放宽；恢复有效匹配文件后检查校准状态 |
 
 回传应用提交/镜像、schema check输出、版本前后ID和数量、审核/任务结果及查询trace即可，不回传校准文件中的私有数据或凭据。真实OpenSearch、模型与原始业务文档的成功结果，才计入现场验收。
+
+### 7.7 S3问题级证据部署验收
+
+S3本身不新增数据库迁移、Worker处理修订或OpenSearch mapping。若部署基线早于`8a5aacc`，须先按第7.6节部署含0003迁移的API与Worker并执行当前schema升级；已部署该版本且`cuekb-db check`通过时，本批只需重建API。前提是S1升级、原件重处理、审核和发布已经完成；旧扁平版本缺少源节点时会正确返回`unassessed`，不能为了得到`direct`跳过S1。部署与回退命令见[操作手册第9节](OPERATIONS.md#9-s3问题级证据部署与回退)。voice profile还须把VoiceChat运行镜像实际使用的Hugging Face `tokenizer.json`只读挂载到API，并将配置ID固定为模型/文件不可变revision。
+
+先在宿主CueKB仓库记录运行身份；以下命令不读取或输出API Key：
+
+```bash
+mkdir -p cuekb-s3-evidence
+git rev-parse HEAD > cuekb-s3-evidence/cuekb-commit.txt
+docker compose --env-file .env.production images api > cuekb-s3-evidence/api-image.txt
+docker compose --env-file .env.production exec -T api python -c \
+  'import importlib.metadata as m; print(m.version("cuekb")); print(m.version("tokenizers"))' \
+  > cuekb-s3-evidence/runtime-packages.txt
+sha256sum deploy/tokenizers/tokenizer.json > cuekb-s3-evidence/voice-tokenizer.sha256
+curl --fail --silent --show-error http://127.0.0.1:8085/v2/ready \
+  > cuekb-s3-evidence/ready.json
+```
+
+若生产文件名不是`tokenizer.json`，对实际挂载源文件计算hash。镜像、commit、`tokenizers`版本、tokenizer hash或ready不符合本次发布矩阵时停止质量验收，先修正部署身份。`ready=200`只证明依赖就绪，不证明问题级结果正确。
+
+以[金标模板](examples/evidence-gold-v2.example.json)复制出受控的`/secure/cuekb-s3-gold.json`，替换真实已发布KB、实体、问题和预期结果；不要把私有语料或Key提交到仓库。文件采用严格`cuekb.s3.gold/1`，每项必须给出decision、全部facet状态、missing、continuation、预期tokenizer ID、禁止出现的其他产品实体和已批准的单请求上限。至少包含下列独立用例：
+
+1. Golden完整组合问题、shelf-life/storage拆分表达及带`it`的确认实体跟进；
+2. `Golden Yolk/Golden-Yolk/golden yoke`三个已审核ASR别名；
+3. Golden与Black Pig双向隔离，`forbidden_entity_ids`写入另一产品ID；
+4. shipping无证据为absent，不能由sealed/giftable推断；
+5. 密封45天、最佳15天、开封冷藏3天分别保持条件；
+6. 无绑定多产品为clarify，同主体重叠条件不同值为conflict；
+7. 必要源节点/依赖缺失及预算移除为unassessed/partial或insufficient；
+8. standard和voice各至少一项，voice预期ID必须等于实际VoiceChat tokenizer revision。
+
+把专用read Key保存为权限0600的宿主文件并执行；验证器不会把Key、query或证据正文写入报告。`--repeat 20`顺序重复每项，适合核对低并发稳定性和P95，不替代S5目标到达率并发/GPU/听音测试：
+
+```bash
+.venv/bin/python scripts/validate-evidence-api.py \
+  --base-url http://127.0.0.1:8085 \
+  --api-key-file /secure/cuekb-s3-read.key \
+  --cases /secure/cuekb-s3-gold.json \
+  --repeat 20 --timeout 10 \
+  --output cuekb-s3-evidence/evidence-report.json
+```
+
+每次查询后脚本立即用相同request ID复验签名包，严格解析响应，检查decision/facets/missing、禁止产品、组数、token预算、tokenizer ID、continuation及valid状态；错误、stale、字段漂移、任一轮超过金标`max_query_ms`均退出1。报告为0600，包含每轮trace、状态、组数、token、查询墙钟时延、服务阶段时序及总体P50/P95/max，不含正文。另用测试Key执行一次撤权或KB ACL修订：旧包必须403或stale；恢复后重新query，不复用旧包。篡改包、不同request ID和不同Key须返回409/403，不能返回500或valid。
+
+通过条件是所有轮次退出0、禁止跨产品证据为零、全部facet/decision与业务金标一致、voice token不超预算、低并发时延不超每题已批准阈值。回传`cuekb-s3-evidence/`五项身份文件和`evidence-report.json`；失败时附对应trace和HTTP错误码，不回传Key、Cookie、私有正文或整库日志。CueKB S3通过仍只证明证据接口；voice-service-agent的严格DTO、终态状态机、工具调用次数和Nano端到端时延属于S4/S5，必须另行验收。

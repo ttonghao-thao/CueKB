@@ -1,0 +1,125 @@
+{
+  "assessment": {
+    "calibration_id": null,
+    "limitations": [],
+    "method_revision": "structured-support-1",
+    "scope": "authorized_sources_for_this_question"
+  },
+  "authorization_revisions": {
+    "11111111-1111-4111-8111-111111111111": 0
+  },
+  "clarification": null,
+  "conflicts": [],
+  "content_revisions": {
+    "11111111-1111-4111-8111-111111111111": 0
+  },
+  "continuation": {
+    "allowed": false,
+    "reason": "answered",
+    "token": null
+  },
+  "contract_revision": "cuekb.evidence/2.1",
+  "decision": "answer",
+  "delivery": {
+    "byte_count": 173,
+    "profile": "standard",
+    "serialization": "canonical-json-v1",
+    "token_budget": 300,
+    "token_count": 75,
+    "tokenizer_id": "cuekb-unicode-lexical-v1"
+  },
+  "evidence": [
+    {
+      "completeness": "complete",
+      "conditions": [],
+      "id": "E1",
+      "match_basis": [
+        "confirmed_subject",
+        "explicit_attribute",
+        "exact_value"
+      ],
+      "priority": "primary",
+      "rank": 1,
+      "required_context": [],
+      "statement": {
+        "source_refs": [
+          "S6cb95aa8e1a6"
+        ],
+        "text": "A100 input voltage is 12 V."
+      },
+      "subject": {
+        "entity_id": "22222222-2222-4222-8222-222222222222",
+        "name": "Product A",
+        "resolution": "known"
+      },
+      "supports": [
+        "input_voltage"
+      ]
+    }
+  ],
+  "facets": [
+    {
+      "evidence_ids": [
+        "E1"
+      ],
+      "id": "input_voltage",
+      "support": "direct",
+      "text": "What is Product A input voltage?"
+    }
+  ],
+  "input_revision": 1,
+  "missing": [],
+  "model_view": {
+    "decision": "answer",
+    "evidence": [
+      {
+        "conditions": [],
+        "for": "What is Product A input voltage?",
+        "id": "E1",
+        "text": "A100 input voltage is 12 V."
+      }
+    ],
+    "missing": [],
+    "search": "finished"
+  },
+  "package": {
+    "expires_at": "2026-10-30T00:00:30Z",
+    "id": "eyJhciI6eyIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiOjB9LCJjciI6eyIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiOjB9LCJleHAiOjE3OTMzMTg0MzAsImlucHV0X3JldmlzaW9uIjoxLCJrYiI6WyIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiXSwia2V5IjpudWxsLCJyZXF1ZXN0Ijoidm9pY2UtaW5wdXQtZXhhbXBsZSIsInNuYXBzaG90Ijoic2hhMjU2OmM2ODVkNjYyZDYyY2Q0ZWRhMzc3YzA5MmZiOTc3ZDY4MzM0OTA3OTc2ZWU2NzMwMTVlMTg3OTI5YThhMjA5MjciLCJzdWIiOm51bGwsInYiOiJjdWVrYi5ldmlkZW5jZS8yLjEifQ.eDcC8GqmcVMpTJOw1YLXtf2Vt4bka0_KwFzEwuCiKBo"
+  },
+  "request_id": "voice-input-example",
+  "retrieval": {
+    "candidate_groups": 1,
+    "resolved_entity_ids": [
+      "22222222-2222-4222-8222-222222222222"
+    ],
+    "selected_groups": 1,
+    "snapshot_id": "sha256:c685d662d62cd4eda377c092fb977d68334907976ee673015e187929a8a20927",
+    "status": "ok"
+  },
+  "sources": {
+    "S6cb95aa8e1a6": {
+      "anchor": {
+        "bbox": null,
+        "end_offset": 27,
+        "heading_path": [],
+        "page": null,
+        "start_offset": 0
+      },
+      "chunk_id": "55555555-5555-4555-8555-555555555555",
+      "document_id": "33333333-3333-4333-8333-333333333333",
+      "node_id": "66666666-6666-4666-8666-666666666666",
+      "version_id": "44444444-4444-4444-8444-444444444444"
+    }
+  },
+  "timings_ms": {
+    "authority": 0.0,
+    "context": 0.0,
+    "dedup": 0.0,
+    "evidence_assessment": 0.0,
+    "final_validation": 0.0,
+    "fusion": 0.0,
+    "keyword": 0.0,
+    "total": 0.0
+  },
+  "trace_id": "77777777-7777-4777-8777-777777777777"
+}

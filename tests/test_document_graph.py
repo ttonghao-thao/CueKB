@@ -89,6 +89,14 @@ def test_general_document_publish_graph_and_acl(pg, monkeypatch):
     assert chunks.document_graph and len(chunks.document_graph.units) == len(chunks)
     assert all(c.evidence_structure.fact_kind == "general" for c in chunks)
     assert pg.save_ready(job.id, "graph-test", chunks)
+    with pg.read_snapshot() as snapshot:
+        authority = snapshot.evidence_authority_snapshot(
+            principal, [kb.id], [chunks[0].id]
+        )
+    assert authority["chunks"][0].source_text == chunks[0].source_text
+    assert authority["node_ids"][chunks[0].id]
+    assert authority["content_revisions"][str(kb.id)] >= 1
+    assert authority["authorization_revisions"][str(kb.id)] >= 0
     with pg._read() as conn:
         saved = pg._load_document_graph(conn, job.version_id)
         assert saved.digest() == chunks.document_graph.digest()

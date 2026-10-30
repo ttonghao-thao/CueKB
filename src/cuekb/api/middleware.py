@@ -9,7 +9,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from cuekb.api.errors import ErrorResponse
 from cuekb.config import get_settings
 from cuekb.services.execution import (
-    SearchDeadlineExceeded, SearchExecution, activate_execution,
+    SearchDeadlineExceeded,
+    SearchExecution,
+    activate_execution,
 )
 
 
@@ -18,7 +20,9 @@ class V2DeadlineMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["path"] != "/v2/search":
+        if scope["type"] != "http" or scope["path"] not in {
+            "/v2/search", "/v2/evidence/query"
+        }:
             await self.app(scope, receive, send)
             return
 

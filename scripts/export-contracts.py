@@ -5,15 +5,32 @@ import json
 from pathlib import Path
 
 from cuekb.main import create_app
-from cuekb.schemas import V2SearchRequest, V2SearchResponse
+from cuekb.schemas import (
+    EvidenceQueryRequest,
+    EvidenceQueryResponse,
+    EvidenceValidateRequest,
+    EvidenceValidateResponse,
+    V2SearchRequest,
+    V2SearchResponse,
+)
 
 
 def examples():
     from uuid import UUID
+
     from cuekb.adapters.memory import InMemoryRepository, InMemorySearchBackend
     from cuekb.config import Settings
-    from cuekb.domain.models import (Applicability, ApplicableSubject, Chunk, Document,
-        DocumentVersion, EvidenceStructure, KnowledgeBase, SourceAnchor, SourceSpan)
+    from cuekb.domain.models import (
+        Applicability,
+        ApplicableSubject,
+        Chunk,
+        Document,
+        DocumentVersion,
+        EvidenceStructure,
+        KnowledgeBase,
+        SourceAnchor,
+        SourceSpan,
+    )
     from cuekb.services.execution import SearchExecution
     from cuekb.services.retrieval_v2 import V2RetrievalService, encode_v2_response
     kb_id = UUID("11111111-1111-4111-8111-111111111111")
@@ -50,7 +67,102 @@ def examples():
             "search-v2-response.json": json.loads(encode_v2_response(result)),
             "search-v2-adaptive-request.json": adaptive_request.model_dump(mode="json"),
             "search-v2-adaptive-response.json": json.loads(encode_v2_response(adaptive)),
+            **evidence_examples(),
             **dependency_examples()}
+
+
+def evidence_examples():
+    import asyncio
+    from datetime import UTC, datetime
+    from uuid import UUID
+
+    from cuekb.adapters.memory import InMemoryRepository, InMemorySearchBackend
+    from cuekb.config import Settings
+    from cuekb.domain.models import (
+        Applicability,
+        ApplicableSubject,
+        Chunk,
+        Document,
+        DocumentVersion,
+        EvidenceStructure,
+        KnowledgeBase,
+        SourceAnchor,
+    )
+    from cuekb.schemas import EvidenceFacetInput
+    from cuekb.services.evidence_query import EvidenceQueryService
+    from cuekb.services.execution import SearchExecution
+    from cuekb.services.retrieval_v2 import V2RetrievalService
+
+    kb_id = UUID("11111111-1111-4111-8111-111111111111")
+    entity_id = UUID("22222222-2222-4222-8222-222222222222")
+    doc_id = UUID("33333333-3333-4333-8333-333333333333")
+    version_id = UUID("44444444-4444-4444-8444-444444444444")
+    chunk_id = UUID("55555555-5555-4555-8555-555555555555")
+    node_id = UUID("66666666-6666-4666-8666-666666666666")
+    repo, backend = InMemoryRepository(), InMemorySearchBackend()
+    repo.create_knowledge_base(KnowledgeBase(id=kb_id, name="Evidence contract fixture"))
+    repo.documents[doc_id] = Document(id=doc_id, kb_id=kb_id, name="Product A manual")
+    repo.versions[version_id] = DocumentVersion(
+        id=version_id, document_id=doc_id, content_sha256="a" * 64, status="published"
+    )
+    repo.entities[entity_id] = {
+        "id": entity_id, "kb_id": kb_id, "name": "Product A", "kind": "product",
+        "product_model": "A100", "software_version": None,
+    }
+    body = "A100 input voltage is 12 V."
+    chunk = Chunk(
+        id=chunk_id, kb_id=kb_id, document_id=doc_id, version_id=version_id,
+        ordinal=0, source_text=body, search_text=body, title_path=["Product A"],
+        anchor=SourceAnchor(start_offset=0, end_offset=len(body)),
+        processing_profile="evidence-v2:" + "b" * 64,
+        evidence_structure=EvidenceStructure(
+            source_unit_id="unit:evidence-example",
+            applicability=Applicability(status="resolved", subjects=[
+                ApplicableSubject(
+                    entity_id=entity_id, display_name="Product A", product_model="A100",
+                    source_kind="curated",
+                )
+            ]),
+        ),
+    )
+    repo.chunks[chunk.id] = chunk
+    repo.evidence_nodes[chunk.id] = [node_id]
+    backend.index([chunk])
+    question = "What is Product A input voltage?"
+    request = EvidenceQueryRequest(
+        question=question, search_query="A100", kb_ids=[kb_id],
+        request_id="voice-input-example",
+        context_bindings=[{
+            "entity_id": entity_id, "source": "confirmed_conversation_context",
+        }],
+        requested_facets=[EvidenceFacetInput(
+            id="input_voltage", text=question, question_span=[0, len(question)]
+        )],
+        token_budget=300,
+    )
+    fixed = datetime(2026, 10, 30, tzinfo=UTC)
+    execution = SearchExecution.create(
+        10000, UUID("77777777-7777-4777-8777-777777777777")
+    )
+    service = EvidenceQueryService(
+        V2RetrievalService(repo, backend, Settings()), Settings(), clock=lambda: fixed
+    )
+    response = asyncio.run(service.query(request, execution=execution))
+    response.timings_ms = {key: 0.0 for key in response.timings_ms}
+    validate_request = EvidenceValidateRequest(
+        package_id=response.package.id, request_id=request.request_id
+    )
+    validate_response = asyncio.run(service.validate_package(
+        response.package.id, None,
+        UUID("88888888-8888-4888-8888-888888888888"),
+        validate_request.request_id,
+    ))
+    return {
+        "evidence-query-v2-request.json": request.model_dump(mode="json"),
+        "evidence-query-v2-response.json": response.model_dump(mode="json", by_alias=True),
+        "evidence-validate-v2-request.json": validate_request.model_dump(mode="json"),
+        "evidence-validate-v2-response.json": validate_response.model_dump(mode="json"),
+    }
 
 
 def dependency_examples():
@@ -58,9 +170,15 @@ def dependency_examples():
     import hashlib
     from types import SimpleNamespace
     from uuid import UUID
+
     from cuekb.adapters.memory import InMemoryRepository, InMemorySearchBackend
     from cuekb.config import Settings
-    from cuekb.domain.models import Document, DocumentVersion, KnowledgeBase, default_processing_snapshot
+    from cuekb.domain.models import (
+        Document,
+        DocumentVersion,
+        KnowledgeBase,
+        default_processing_snapshot,
+    )
     from cuekb.services.execution import SearchExecution
     from cuekb.services.retrieval_v2 import V2RetrievalService, encode_v2_response
     from cuekb.worker import materialize_chunks
@@ -98,6 +216,10 @@ def contracts():
         "openapi.json": create_app().openapi(),
         "search-v2-request.schema.json": V2SearchRequest.model_json_schema(),
         "search-v2-response.schema.json": V2SearchResponse.model_json_schema(),
+        "evidence-query-v2-request.schema.json": EvidenceQueryRequest.model_json_schema(),
+        "evidence-query-v2-response.schema.json": EvidenceQueryResponse.model_json_schema(),
+        "evidence-validate-v2-request.schema.json": EvidenceValidateRequest.model_json_schema(),
+        "evidence-validate-v2-response.schema.json": EvidenceValidateResponse.model_json_schema(),
     }
 
 

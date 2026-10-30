@@ -7,25 +7,59 @@ import json
 from contextlib import suppress
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import Response
-from starlette.concurrency import run_in_threadpool
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from cuekb.adapters.postgres import ConflictError, PostgreSQLRepository
 from cuekb.api.dependencies import current_principal, repository
 from cuekb.api.errors import ErrorResponse, ServiceError
-from cuekb.api.v2_dependencies import retrieval_service_v2
 from cuekb.api.routes import _queue
+from cuekb.api.v2_dependencies import retrieval_service_v2
 from cuekb.config import get_settings
-from cuekb.domain.models import Job, Principal
 from cuekb.domain.document_graph import DocumentStructurePage
-from cuekb.schemas import ProcessingReview, ReprocessRequest, RestoreRequest, V2DocumentDetail, V2DocumentMetadata, V2DocumentVersionInfo, V2SearchRequest, V2SearchResponse
-from cuekb.schemas import ReviewPlanCreate, ReviewPlanInfo, ReviewFactPage, ReviewDecisionsRequest, ReviewApplyRequest
-from cuekb.schemas import ReviewSelectionCreate, ReviewSelectionApply, ReviewSelectionInfo
+from cuekb.domain.models import Job, Principal
+from cuekb.schemas import (
+    EvidenceQueryRequest,
+    EvidenceQueryResponse,
+    EvidenceValidateRequest,
+    EvidenceValidateResponse,
+    ProcessingReview,
+    ReprocessRequest,
+    RestoreRequest,
+    ReviewApplyRequest,
+    ReviewDecisionsRequest,
+    ReviewFactPage,
+    ReviewPlanCreate,
+    ReviewPlanInfo,
+    ReviewSelectionApply,
+    ReviewSelectionCreate,
+    ReviewSelectionInfo,
+    V2DocumentDetail,
+    V2DocumentMetadata,
+    V2DocumentVersionInfo,
+    V2SearchRequest,
+    V2SearchResponse,
+)
+from cuekb.services.evidence_query import (
+    EvidencePackageInvalid,
+    EvidenceQueryService,
+    EvidenceSnapshotChanged,
+)
 from cuekb.services.execution import current_execution
 from cuekb.services.retrieval_v2 import V2RetrievalService, encode_v2_response
-
+from cuekb.services.token_budget import TokenizerUnavailable
 
 ERROR_RESPONSES = {status: {"model": ErrorResponse} for status in (400, 401, 403, 404, 409, 413, 415, 422, 500, 503, 504)}
 router = APIRouter(prefix="/v2", responses=ERROR_RESPONSES)
@@ -116,6 +150,82 @@ async def search(
         if not task.done():
             with suppress(asyncio.CancelledError):
                 await task
+
+
+@router.post("/evidence/query", response_model=EvidenceQueryResponse, tags=["evidence-v2.1"])
+async def evidence_query(
+    body: EvidenceQueryRequest,
+    request: Request,
+    principal: Principal | None = Depends(current_principal),
+    retrieval: V2RetrievalService = Depends(retrieval_service_v2),
+) -> Response:
+    request.state.request_id = body.request_id
+    execution = current_execution()
+    if execution:
+        execution.checkpoint()
+    task = asyncio.create_task(
+        EvidenceQueryService(retrieval, get_settings()).query(
+            body, principal=principal, execution=execution
+        )
+    )
+
+    async def disconnect() -> None:
+        while not task.done():
+            if await request.is_disconnected():
+                task.cancel()
+                return
+            await asyncio.sleep(0.05)
+
+    watcher = asyncio.create_task(disconnect())
+    try:
+        try:
+            result = await task
+        except TokenizerUnavailable as exc:
+            raise ServiceError(str(exc), str(exc).upper(), 409) from exc
+        except EvidenceSnapshotChanged as exc:
+            raise ServiceError(str(exc), "EVIDENCE_SNAPSHOT_CHANGED", 409) from exc
+        except ValueError as exc:
+            if str(exc) == "token_budget_cannot_fit_terminal_view":
+                raise ServiceError(str(exc), "TOKEN_BUDGET_TOO_SMALL", 422) from exc
+            if str(exc) == "context_binding_not_found_in_authorized_scope":
+                raise ServiceError(str(exc), "CONTEXT_BINDING_INVALID", 422) from exc
+            raise
+        encoded = result.model_dump_json(by_alias=True).encode()
+        if len(encoded) > get_settings().evidence_response_max_bytes:
+            raise ServiceError(
+                "evidence_response_limit_exceeded", "EVIDENCE_RESPONSE_LIMIT_EXCEEDED"
+            )
+        return Response(encoded, media_type="application/json", headers={"Cache-Control": "no-store"})
+    finally:
+        watcher.cancel()
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await watcher
+        if not task.done():
+            with suppress(asyncio.CancelledError):
+                await task
+
+
+@router.post("/evidence/validate", response_model=EvidenceValidateResponse, tags=["evidence-v2.1"])
+async def validate_evidence_package(
+    body: EvidenceValidateRequest,
+    request: Request,
+    principal: Principal | None = Depends(current_principal),
+) -> EvidenceValidateResponse:
+    request.state.request_id = body.request_id
+    service = EvidenceQueryService(
+        None, get_settings(), repository=repository()
+    )
+    try:
+        return await service.validate_package(
+            body.package_id,
+            principal,
+            request.state.trace_id,
+            body.request_id,
+        )
+    except EvidencePackageInvalid as exc:
+        raise ServiceError(str(exc), "EVIDENCE_PACKAGE_INVALID", 409) from exc
 
 
 def _management(principal: Principal | None, document_id: UUID) -> PostgreSQLRepository:

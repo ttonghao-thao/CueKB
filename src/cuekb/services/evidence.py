@@ -34,10 +34,16 @@ def _subject_keys(scope: Applicability) -> frozenset[tuple[str, str | None, str 
 
 def scope_matches(
     chunk: Chunk, product_model: str | None = None, software_version: str | None = None,
-    product_entity_id=None,
+    product_entity_id=None, product_entity_ids=(),
 ) -> bool:
     """V2 exact local applicability filter; document metadata is not a fallback."""
-    if product_model is None and software_version is None and product_entity_id is None:
+    entity_ids = {str(item) for item in product_entity_ids}
+    if (
+        product_model is None
+        and software_version is None
+        and product_entity_id is None
+        and not entity_ids
+    ):
         return True
     scope = chunk.evidence_structure.applicability
     if scope.status != "resolved":
@@ -47,6 +53,7 @@ def scope_matches(
         (product_model is None or subject.product_model == product_model)
         and (software_version is None or subject.software_version == software_version)
         and (product_entity_id is None or str(subject.entity_id) == str(product_entity_id))
+        and (not entity_ids or str(subject.entity_id) in entity_ids)
         for subject in scope.subjects
     )
 
@@ -221,7 +228,6 @@ def resolve_applicability(
         name = entity.get("display_name", entity.get("name"))
         if not name:
             raise ValueError("approved_entity_missing_display_name")
-        names = {str(name).casefold(), *(str(a).casefold() for a in entity.get("aliases", []))}
         matched = [nearest] if nearest and str(entity.get("entity_id", name)) in matched_entities else []
         if matched:
             spans = [span for span in source_spans

@@ -9,8 +9,8 @@ from cuekb.domain.models import (
     Applicability,
     ContextLink,
     ContextProvenance,
-    DependencyIssue,
     ContextRole,
+    DependencyIssue,
     EvidenceStatus,
     RetrievalMode,
     RetrievalStatus,
@@ -87,8 +87,17 @@ class SearchFilters(BaseModel):
     document_ids: list[UUID] = Field(default_factory=list)
     product_model: str | None = None
     product_entity_id: UUID | None = None
+    product_entity_ids: list[UUID] = Field(default_factory=list, max_length=20)
     software_version: str | None = None
     category: str | None = None
+
+    @model_validator(mode="after")
+    def valid_product_entities(self):
+        if self.product_entity_id is not None and self.product_entity_ids:
+            raise ValueError("product_entity_filters_are_mutually_exclusive")
+        if len(set(self.product_entity_ids)) != len(self.product_entity_ids):
+            raise ValueError("product_entity_ids_must_not_contain_duplicates")
+        return self
 
 
 class HealthResponse(BaseModel):
@@ -431,6 +440,342 @@ class V2SearchResponse(BaseModel):
     ranking_version: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     diagnostics: V2SearchDiagnostics
     hits: list[V2SearchHit] = Field(max_length=20)
+
+
+EVIDENCE_CONTRACT_REVISION = "cuekb.evidence/2.1"
+
+
+class EvidenceFacetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+    text: str = Field(min_length=1, max_length=500)
+    question_span: list[Annotated[int, Field(ge=0, le=2000)]] = Field(
+        min_length=2, max_length=2
+    )
+
+    @model_validator(mode="after")
+    def valid_span(self):
+        if self.question_span[0] >= self.question_span[1]:
+            raise ValueError("facet_question_span_invalid")
+        if not self.text.strip():
+            raise ValueError("facet_text_must_not_be_blank")
+        return self
+
+
+class EvidenceContextBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity_id: UUID
+    source: Literal["confirmed_conversation_context", "user_selection"]
+
+
+class EvidenceQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_revision: Literal["cuekb.evidence/2.1"] = EVIDENCE_CONTRACT_REVISION
+    question: str = Field(min_length=1, max_length=2000)
+    search_query: str | None = Field(default=None, min_length=1, max_length=2000)
+    kb_ids: list[UUID] = Field(min_length=1, max_length=50)
+    filters: V2SearchFilters = Field(default_factory=V2SearchFilters)
+    context_bindings: list[EvidenceContextBinding] = Field(default_factory=list, max_length=8)
+    requested_facets: list[EvidenceFacetInput] = Field(default_factory=list, max_length=8)
+    delivery_profile: Literal["standard", "voice"] = "standard"
+    max_groups: int = Field(default=5, ge=1, le=5)
+    token_budget: int = Field(default=120, ge=32, le=4096)
+    timeout_ms: int | None = Field(default=None, ge=100, le=10000)
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    input_revision: int = Field(default=1, ge=1, le=2147483647)
+
+    @model_validator(mode="after")
+    def validate_query(self):
+        if not self.question.strip() or (
+            self.search_query is not None and not self.search_query.strip()
+        ):
+            raise ValueError("evidence_query_must_not_be_blank")
+        if len(set(self.kb_ids)) != len(self.kb_ids):
+            raise ValueError("kb_ids_must_not_contain_duplicates")
+        facet_ids = [facet.id for facet in self.requested_facets]
+        if len(set(facet_ids)) != len(facet_ids):
+            raise ValueError("facet_ids_must_not_contain_duplicates")
+        for facet in self.requested_facets:
+            start, end = facet.question_span
+            if end > len(self.question) or self.question[start:end] != facet.text:
+                raise ValueError("facet_text_must_match_question_span")
+        entities = [binding.entity_id for binding in self.context_bindings]
+        if len(set(entities)) != len(entities):
+            raise ValueError("context_bindings_must_not_contain_duplicates")
+        if self.filters.product_entity_id is not None and entities and (
+            len(entities) != 1 or entities[0] != self.filters.product_entity_id
+        ):
+            raise ValueError("context_binding_conflicts_with_product_filter")
+        if self.filters.product_entity_ids and entities and (
+            set(entities) != set(self.filters.product_entity_ids)
+        ):
+            raise ValueError("context_binding_conflicts_with_product_filter")
+        return self
+
+
+EvidenceSupport = Literal[
+    "direct", "entailed", "absent", "ambiguous", "conflicting", "unassessed"
+]
+
+
+class EvidenceAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method_revision: Literal["structured-support-1"] = "structured-support-1"
+    calibration_id: str | None = None
+    scope: Literal["authorized_sources_for_this_question"] = (
+        "authorized_sources_for_this_question"
+    )
+    limitations: list[str] = Field(default_factory=list, max_length=20)
+
+
+class EvidenceFacetResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    text: str
+    support: EvidenceSupport
+    evidence_ids: list[str] = Field(default_factory=list, max_length=5)
+
+
+class EvidenceSubject(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity_id: UUID | None = None
+    name: str | None = Field(default=None, max_length=200)
+    resolution: Literal["known", "general", "ambiguous", "unknown"]
+
+
+class EvidenceStatement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=16000)
+    source_refs: list[str] = Field(min_length=1, max_length=21)
+
+
+class EvidenceGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^E[1-5]$")
+    priority: Literal["primary", "supporting"]
+    rank: int = Field(ge=1, le=5)
+    supports: list[str] = Field(min_length=1, max_length=8)
+    subject: EvidenceSubject
+    statement: EvidenceStatement
+    required_context: list[str] = Field(default_factory=list, max_length=20)
+    conditions: list[str] = Field(default_factory=list, max_length=20)
+    completeness: Literal["complete", "incomplete"]
+    match_basis: list[
+        Literal[
+            "confirmed_subject", "explicit_subject", "general_scope",
+            "explicit_attribute", "exact_value", "necessary_context",
+        ]
+    ] = Field(min_length=1, max_length=6)
+
+
+class EvidenceSourceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: UUID
+    document_id: UUID
+    version_id: UUID
+    node_id: UUID
+    anchor: SourceAnchor
+
+
+class EvidenceConflict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    facet_id: str
+    evidence_ids: list[str] = Field(min_length=2, max_length=5)
+    reason: Literal["incompatible_values", "opposite_polarity"]
+
+
+class EvidenceClarificationOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity_id: UUID
+    label: str = Field(min_length=1, max_length=200)
+
+
+class EvidenceClarification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=500)
+    options: list[EvidenceClarificationOption] = Field(min_length=2, max_length=8)
+
+
+class EvidenceContinuation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allowed: bool = False
+    reason: str = Field(min_length=1, max_length=100)
+    token: str | None = Field(default=None, min_length=20, max_length=16384)
+
+    @model_validator(mode="after")
+    def token_matches_permission(self):
+        if self.allowed != (self.token is not None):
+            raise ValueError("continuation_token_must_match_allowed")
+        return self
+
+
+class EvidenceDelivery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile: Literal["standard", "voice"]
+    serialization: Literal["canonical-json-v1"] = "canonical-json-v1"
+    tokenizer_id: str = Field(min_length=1, max_length=200)
+    byte_count: int = Field(ge=2, le=131072)
+    token_count: int = Field(ge=1, le=4096)
+    token_budget: int = Field(ge=32, le=4096)
+
+
+class EvidenceModelItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    for_: str = Field(alias="for", serialization_alias="for", min_length=1, max_length=4000)
+    text: str = Field(min_length=1, max_length=16000)
+    conditions: list[str] = Field(default_factory=list, max_length=40)
+
+
+class EvidenceModelView(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    decision: Literal["answer", "partial_answer", "clarify", "insufficient", "conflict"]
+    evidence: list[EvidenceModelItem] = Field(default_factory=list, max_length=5)
+    missing: list[str] = Field(default_factory=list, max_length=8)
+    search: Literal["finished"] = "finished"
+
+
+class EvidenceRetrievalSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: RetrievalStatus
+    resolved_entity_ids: list[UUID] = Field(default_factory=list, max_length=8)
+    candidate_groups: int = Field(ge=0, le=20)
+    selected_groups: int = Field(ge=0, le=5)
+    snapshot_id: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+
+
+class EvidencePackage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=20, max_length=16384)
+    expires_at: datetime
+
+
+class EvidenceQueryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_revision: Literal["cuekb.evidence/2.1"] = EVIDENCE_CONTRACT_REVISION
+    trace_id: UUID
+    request_id: str | None = None
+    input_revision: int = Field(ge=1)
+    decision: Literal["answer", "partial_answer", "clarify", "insufficient", "conflict"]
+    assessment: EvidenceAssessment
+    facets: list[EvidenceFacetResult] = Field(min_length=1, max_length=8)
+    evidence: list[EvidenceGroup] = Field(default_factory=list, max_length=5)
+    missing: list[str] = Field(default_factory=list, max_length=8)
+    conflicts: list[EvidenceConflict] = Field(default_factory=list, max_length=8)
+    clarification: EvidenceClarification | None = None
+    continuation: EvidenceContinuation
+    sources: dict[str, EvidenceSourceRef] = Field(default_factory=dict, max_length=105)
+    delivery: EvidenceDelivery
+    model_view: EvidenceModelView
+    retrieval: EvidenceRetrievalSummary
+    content_revisions: dict[str, int]
+    authorization_revisions: dict[str, int]
+    timings_ms: dict[str, float]
+    package: EvidencePackage
+
+    @model_validator(mode="after")
+    def consistent_evidence(self):
+        facet_ids = {facet.id for facet in self.facets}
+        groups = {group.id: group for group in self.evidence}
+        if len(groups) != len(self.evidence):
+            raise ValueError("evidence_group_ids_must_be_unique")
+        if any(
+            support not in groups
+            for facet in self.facets
+            for support in facet.evidence_ids
+        ):
+            raise ValueError("facet_evidence_reference_missing")
+        if any(
+            facet.support in {"direct", "entailed"} and not facet.evidence_ids
+            for facet in self.facets
+        ):
+            raise ValueError("supported_facet_requires_evidence")
+        if any(
+            facet.support not in {"direct", "entailed", "ambiguous", "conflicting"}
+            and facet.evidence_ids
+            for facet in self.facets
+        ):
+            raise ValueError("unsupported_facet_must_not_reference_evidence")
+        if any(
+            facet not in facet_ids or source not in self.sources
+            for group in self.evidence
+            for facet in group.supports
+            for source in group.statement.source_refs
+        ):
+            raise ValueError("evidence_group_reference_missing")
+        if any(
+            set(facet.evidence_ids) != {
+                group.id for group in self.evidence if facet.id in group.supports
+            }
+            for facet in self.facets
+        ):
+            raise ValueError("facet_and_group_support_must_match")
+        referenced_sources = {
+            source
+            for group in self.evidence
+            for source in group.statement.source_refs
+        }
+        if referenced_sources != set(self.sources):
+            raise ValueError("sources_must_match_selected_evidence")
+        if self.decision == "answer" and any(
+            facet.support not in {"direct", "entailed"} for facet in self.facets
+        ):
+            raise ValueError("answer_requires_all_facets_supported")
+        if self.model_view.decision != self.decision or self.model_view.missing != self.missing:
+            raise ValueError("model_view_must_match_decision")
+        model_items = {item.id: item for item in self.model_view.evidence}
+        if (
+            len(model_items) != len(self.model_view.evidence)
+            or set(model_items) != set(groups)
+            or any(
+                model_items[group_id].text != group.statement.text
+                or model_items[group_id].conditions != list(dict.fromkeys([
+                    *group.conditions, *group.required_context,
+                ]))
+                for group_id, group in groups.items()
+            )
+        ):
+            raise ValueError("model_view_evidence_must_match_selected_groups")
+        return self
+
+
+class EvidenceValidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_revision: Literal["cuekb.evidence/2.1"] = EVIDENCE_CONTRACT_REVISION
+    package_id: str = Field(min_length=20, max_length=16384)
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class EvidenceValidateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_revision: Literal["cuekb.evidence/2.1"] = EVIDENCE_CONTRACT_REVISION
+    trace_id: UUID
+    request_id: str | None = None
+    status: Literal["valid", "stale"]
+    content_revisions: dict[str, int]
+    authorization_revisions: dict[str, int]
+    validated_at: datetime
 
 
 class CuratedSubjectInput(BaseModel):

@@ -1,6 +1,6 @@
 # 第三方接入与使用说明
 
-更新：2026-10-26。所有CueKB接口均使用`/v2`，包括知识库、Key、Job和发布管理。配合[接口规范](API_GUIDE.md)、[系统约束](SYSTEM_CONSTRAINTS.md)及[OpenAPI](contracts/openapi.json)使用。本文不要求调用方安装CueKB服务代码。
+更新：2026-10-30。所有CueKB接口均使用`/v2`，包括知识库、Key、Job和发布管理。回答系统使用问题级`cuekb.evidence/2.1`契约；`/v2/search`保留给搜索与调试。配合[接口规范](API_GUIDE.md)、[系统约束](SYSTEM_CONSTRAINTS.md)及[OpenAPI](contracts/openapi.json)使用。
 
 ## 1. 获取接入资料
 
@@ -181,7 +181,7 @@ docker compose --env-file .env.production exec -T api \
 | Base URL | 必需；从第三方服务器可达的 CueKB 根地址，不带 `/v2` 或 `/portal/`；远程生产使用 HTTPS 或受控加密链路 |
 | 业务 API Key | 必需；已对目标 KB 授权，放在 `Authorization: Bearer <api_key>`；不要把 Key ID 或 `principal_id` 当密钥 |
 | 知识库 UUID 列表 | 必需；放入 `kb_ids`，例如 `["11111111-1111-4111-8111-111111111111"]`；使用实际 ID，名称仅供展示 |
-| 接口和契约 | 新接入为 `POST /v2/search`；提供 [OpenAPI](contracts/openapi.json)、[接口规范](API_GUIDE.md)及[接入说明](INTEGRATION_GUIDE.md) |
+| 接口和契约 | 回答接入为`POST /v2/evidence/query`及提交前`POST /v2/evidence/validate`；`POST /v2/search`用于搜索/评测；提供OpenAPI及四份问题级JSON Schema |
 | 运行预算 | 提供服务端检索时限和建议客户端超时，约定 `top_k` 与消费端证据预算；默认值与上限见[系统约束](SYSTEM_CONSTRAINTS.md) |
 | 选择策略与校准 | 建议新客户端显式使用 `selection_mode=adaptive`，升级严格DTO后启用；确认运行方是否提供匹配的相关性校准，未校准不能保证低相关拒收 |
 | 知识库名称、描述 | 可选展示信息，不参与权限判断或按名路由 |
@@ -205,3 +205,28 @@ docker compose --env-file .env.production exec -T api \
 删除文档后，门户导入页同步移除该文档全部版本的进度卡片并停止轮询；删除期间返回的旧轮询不会重建卡片。服务器任务与审核审计保留，不等于删除审计记录。
 
 非产品制度/流程在上传“文档内容类型”选择相应选项；产品手册保持自动或产品模式。旧版本缺规范树时子页显示提示，可点“按当前结构重新解析原件”，产生新版本后审核发布；原发布版本及旧草稿保留。升级/格式验证命令统一见[验收7.5](ACCEPTANCE.md#75-s1文档核心与门户本批部署验收)。
+
+## 8. 问题级证据接入
+
+回答系统每个稳定的`input_item_id + input_revision`调用一次`POST /v2/evidence/query`。传完整ASR问题；可提供用于召回的search_query，但不能删除产品、属性、条件、否定和用户限定。已经由会话或用户确认的目录实体放入context_bindings；模型猜测不得标成confirmed。多个已确认实体会作为一个候选过滤集合并在最终权威快照复验；问题没有明确指出其中哪个主体时仍返回clarify，不能任选一个。可可靠拆分的子问题逐项放入requested_facets，并保留原问题精确span；无法可靠拆分时省略，由CueKB保守地按明确问号/分号处理。
+
+```sh
+curl --fail --silent --show-error "$CUEKB_BASE_URL/v2/evidence/query" \
+  -H "Authorization: Bearer $CUEKB_API_KEY" \
+  -H 'Content-Type: application/json' --data-binary @evidence-request.json
+```
+
+客户端严格校验`contract_revision=cuekb.evidence/2.1`及完整嵌套DTO。只把响应`model_view`注入回答模型；按`delivery.serialization=canonical-json-v1`序列化时应得到相同token计数，不要重新把完整evidence/sources/timings拼入模型，也不要按top-k、score或候选顺序二次决定答案。按decision终结本次工具调用：answer/partial_answer回答一次；clarify只提响应给出的澄清；insufficient/conflict明确说明限制或冲突。`continuation.allowed=false`时禁止为同一输入改写查询再次调用。
+
+在提交模型回答或开始正式语音前，用相同业务Key复验package：
+
+```sh
+curl --fail --silent --show-error "$CUEKB_BASE_URL/v2/evidence/validate" \
+  -H "Authorization: Bearer $CUEKB_API_KEY" \
+  -H 'Content-Type: application/json' \
+  --data-binary "{\"package_id\":\"$EVIDENCE_PACKAGE_ID\",\"request_id\":\"$REQUEST_ID\"}"
+```
+
+`REQUEST_ID`必须沿用query中的同一值。valid才可提交；stale重新执行当前input revision的一次问题级请求，旧包和已生成未播放正文丢弃。403/409/429/503/504是权限、契约、容量或依赖故障，不转换成“知识库没有资料”。客户端timeout应覆盖服务器上限与网络余量，但取消或超时后不能并发发起多个语义等价请求。
+
+voice请求必须由运行方先登记与实际VoiceChat镜像一致的tokenizer revision。调用方记录CueKB trace、input revision、decision、facet状态、model_view实际token、查询耗时、复验状态和工具调用次数；不记录API Key或私有完整正文。CueKB编码通过不代表voice-service-agent已经切换状态机，调用方适配及真实GPU/音频验收仍按其任务板执行。

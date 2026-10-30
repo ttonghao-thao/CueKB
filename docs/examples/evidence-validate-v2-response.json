@@ -1,0 +1,13 @@
+{
+  "authorization_revisions": {
+    "11111111-1111-4111-8111-111111111111": 0
+  },
+  "content_revisions": {
+    "11111111-1111-4111-8111-111111111111": 0
+  },
+  "contract_revision": "cuekb.evidence/2.1",
+  "request_id": "voice-input-example",
+  "status": "valid",
+  "trace_id": "88888888-8888-4888-8888-888888888888",
+  "validated_at": "2026-10-30T00:00:00Z"
+}

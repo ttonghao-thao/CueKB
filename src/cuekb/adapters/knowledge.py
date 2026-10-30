@@ -5,15 +5,16 @@ Mixed into the authoritative repository; never queries OpenSearch for permission
 
 import asyncio
 import json
-from contextvars import ContextVar, copy_context
 from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
 from copy import copy
 from datetime import UTC, datetime
 from threading import Event, Lock, Thread
 from typing import Any
 
 from sqlalchemy import event, text
-from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeout
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from cuekb.schemas import EntityWrite, RelationWrite
 from cuekb.services.execution import SearchDeadlineExceeded, current_execution
@@ -186,6 +187,61 @@ class KnowledgeOperations:
             chunk, candidate, required=links[candidate.id].required if candidate.id in links else False,
             role=links[candidate.id].role if candidate.id in links else None,
         )]
+
+    def evidence_authority_snapshot(
+        self: Any, principal, kb_ids, chunk_ids, entity_ids=(),
+    ):
+        """Revalidate a question package in one PostgreSQL authority snapshot."""
+        if principal and principal.api_key_id:
+            self.assert_api_key_active(principal.api_key_id)
+        self.require_role(principal, kb_ids, "read")
+        with self._read() as conn:
+            kb_rows = list(
+                conn.execute(
+                    text(
+                        "SELECT id,content_revision,acl_revision FROM knowledge_bases "
+                        "WHERE id=ANY(CAST(:ids AS uuid[])) ORDER BY id"
+                    ),
+                    {"ids": list(kb_ids)},
+                ).mappings()
+            )
+            if len(kb_rows) != len(set(kb_ids)):
+                raise KeyError("knowledge_base_not_found")
+            entities = list(
+                conn.execute(
+                    text(
+                        "SELECT id,kb_id,name,kind,product_model,software_version FROM entities "
+                        "WHERE id=ANY(CAST(:ids AS uuid[])) AND kb_id=ANY(CAST(:kb AS uuid[])) "
+                        "ORDER BY id"
+                    ),
+                    {"ids": list(entity_ids), "kb": list(kb_ids)},
+                ).mappings()
+            ) if entity_ids else []
+            if len(entities) != len(set(entity_ids)):
+                raise ValueError("context_binding_not_found_in_authorized_scope")
+            chunks = self.load_chunks(chunk_ids, kb_ids)
+            if len(chunks) != len(set(chunk_ids)):
+                raise ValueError("evidence_snapshot_changed")
+            nodes = {}
+            if chunk_ids:
+                for row in conn.execute(
+                    text(
+                        "SELECT run.chunk_id,run.node_id FROM retrieval_unit_nodes run "
+                        "JOIN retrieval_units ru ON ru.chunk_id=run.chunk_id "
+                        "JOIN chunks c ON c.id=ru.chunk_id " + VISIBLE +
+                        " WHERE run.chunk_id=ANY(CAST(:ids AS uuid[])) "
+                        "AND c.kb_id=ANY(CAST(:kb AS uuid[])) ORDER BY run.chunk_id,run.node_id"
+                    ),
+                    {"ids": list(chunk_ids), "kb": list(kb_ids)},
+                ).mappings():
+                    nodes.setdefault(row["chunk_id"], []).append(row["node_id"])
+        return {
+            "chunks": chunks,
+            "node_ids": nodes,
+            "entities": [dict(row) for row in entities],
+            "content_revisions": {str(row["id"]): row["content_revision"] for row in kb_rows},
+            "authorization_revisions": {str(row["id"]): row["acl_revision"] for row in kb_rows},
+        }
 
     def put_entity(self: Any, kb_id, entity_id, request: EntityWrite):
         with self._write() as conn:
@@ -383,7 +439,9 @@ class KnowledgeOperations:
                 from cuekb.services.evidence import scope_matches
 
                 allowed = {c.id for c in self.load_chunks([r["chunk_id"] for r in result], request.kb_ids)
-                           if scope_matches(c, request.filters.product_model, request.filters.software_version, request.filters.product_entity_id)}
+                           if scope_matches(c, request.filters.product_model, request.filters.software_version,
+                                            request.filters.product_entity_id,
+                                            request.filters.product_entity_ids)}
                 result = [r for r in result if r["chunk_id"] in allowed]
             return result
 
@@ -443,7 +501,10 @@ class KnowledgeOperations:
 
             chunks = {c.id: c for c in self.load_chunks([r["chunk_id"] for r in result], request.kb_ids)}
             return [r for r in result if r["chunk_id"] in chunks and (
-                scope_matches(chunks[r["chunk_id"]], request.filters.product_model, request.filters.software_version, request.filters.product_entity_id)
+                scope_matches(chunks[r["chunk_id"]], request.filters.product_model,
+                              request.filters.software_version,
+                              request.filters.product_entity_id,
+                              request.filters.product_entity_ids)
                 if hasattr(request, "max_evidence_bytes") else all(
                     value is None or chunks[r["chunk_id"]].metadata.get(field) == value
                     for field, value in (("product_model", request.filters.product_model),

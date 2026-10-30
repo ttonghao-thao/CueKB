@@ -347,6 +347,12 @@ class OpenSearchBackend:
                     {"product_model": "applicable_product_models", "software_version": "applicable_software_versions", "product_entity_id": "applicable_entity_ids"}.get(key, key)
                 )
                 result.append({"term": {field: str(filters[key]) if key == "product_entity_id" else filters[key]}})
+        if filters.get("product_entity_ids"):
+            result.append(
+                {"terms": {"applicable_entity_ids": [
+                    str(value) for value in filters["product_entity_ids"]
+                ]}}
+            )
         result.append({"bool": {"must_not": [{"term": {"block_kind": "heading"}}]}})
         if filters.get("_query_identifiers"):
             result.append({"terms": {"identifier_terms": filters["_query_identifiers"]}})

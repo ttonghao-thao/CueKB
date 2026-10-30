@@ -192,7 +192,13 @@ class V2RetrievalService:
         return (
             (not filters.document_ids or chunk.document_id in filters.document_ids)
             and (not filters.category or chunk.metadata.get("category") == filters.category)
-            and scope_matches(chunk, filters.product_model, filters.software_version, filters.product_entity_id)
+            and scope_matches(
+                chunk,
+                filters.product_model,
+                filters.software_version,
+                filters.product_entity_id,
+                filters.product_entity_ids,
+            )
             and (request.selection_mode != "adaptive"
                  or not identifiers(request.selection_query or request.query)
                  or bool(identifiers(request.selection_query or request.query) & chunk_identifiers(chunk)))

@@ -1,11 +1,12 @@
 # CueKB 第三方接口规范
 
-更新：2026-10-26。本文描述当前代码契约，不是性能或模型质量承诺。全部CueKB接口使用`/v2`，检索、处理和管理采用同一契约版本。
+更新：2026-10-30。本文描述当前代码契约，不是性能或模型质量承诺。全部CueKB接口使用`/v2`；问题级证据契约单独固定为`cuekb.evidence/2.1`。
 
 ## 1. 契约文件与通用约定
 
 - [完整OpenAPI 3.1](contracts/openapi.json)：全部HTTP方法、路径、请求体、响应、字段类型、枚举、必填项和默认值。
 - [V2请求JSON Schema](contracts/search-v2-request.schema.json)、[V2响应JSON Schema](contracts/search-v2-response.schema.json)：可用于第三方生成类型或严格校验，嵌套类型在`$defs`。
+- [问题级请求Schema](contracts/evidence-query-v2-request.schema.json)、[问题级响应Schema](contracts/evidence-query-v2-response.schema.json)、[复验请求](contracts/evidence-validate-v2-request.schema.json)与[复验响应](contracts/evidence-validate-v2-response.schema.json)：外部回答系统的首选严格契约。
 - [接入步骤与代码](INTEGRATION_GUIDE.md)、[系统约束](SYSTEM_CONSTRAINTS.md)、[操作手册](OPERATIONS.md)。
 
 部署base URL由运行方提供，例如私网`http://host:8085`；生产远程集成应由运行方提供HTTPS或受控加密链路。JSON使用UTF-8、`Content-Type: application/json`，时间为含时区ISO 8601，ID为UUID。`null`表示没有可用值，不伪造名称、版本或时间。
@@ -46,6 +47,8 @@
 | query_facets | [] | 仅adaptive；最多8项、每项1—200字符且不能全为空白。调用方关心的子项；字面命中用于选择和一次补召回触发，不是通用语义充分性判定 |
 | filters.document_ids | [] | 最多100个UUID，只在这些文档中检索 |
 | filters.product_model | null | 精确、区分大小写的**局部已确认产品型号**；不匹配随意上传的全篇标签或未知归属 |
+| filters.product_entity_id | null | 单个已确认目录实体UUID；与product_entity_ids互斥 |
+| filters.product_entity_ids | [] | 最多20个不重复的已确认目录实体UUID，按任一实体匹配；问题级接口用它在OpenSearch候选和PG复验中约束多个确认绑定 |
 | filters.software_version | null | 已确认局部软件版本；与产品条件同时给出时须属于同一个subject，不是document business_version |
 | filters.category | null | 上传scope.category分类标签的精确匹配 |
 | include_context | true | V2中只控制可选近邻；已知必要归属、表头和条件仍属于证据组 |
@@ -242,7 +245,7 @@ decision包含fact_id及action：assign/accept选择entity_id；general确认通
 {"revision":0,"decisions":[{"fact_id":"55555555-5555-4555-8555-555555555555","action":"assign","entity_id":"66666666-6666-4666-8666-666666666666"}]}
 ```
 
-filters.product_entity_id为稳定产品UUID，可用于没有型号的食品或服务产品；与product_model/software_version同时指定时，三个条件必须属于同一已确定主体，提及或套件组件关系不授予身份。
+filters.product_entity_id为稳定产品UUID，可用于没有型号的食品或服务产品；多个已确认目录实体使用product_entity_ids，二者互斥。实体过滤与product_model/software_version同时指定时，全部条件必须属于同一已确定主体，提及或套件组件关系不授予身份。
 
 KB目录仍用entities接口，kind=product/model/bundle参与自动产品识别；term不参与。实体增加product_model、software_version。POST `/v2/knowledge-bases/{kb}/entities/import`接收{rows:[{id,name,kind,product_model,aliases,...}]}，KB admin，最多100项，冲突整批回滚；门户提供CSV预览后调用，不发送CSV至解析模型。
 
@@ -302,9 +305,9 @@ detail为字符串或校验错误列表（仅loc/msg/type，不回显input/ctx�
 | 401 | INVALID_API_KEY |
 | 403 | ACCESS_DENIED |
 | 404/405 | NOT_FOUND / METHOD_NOT_ALLOWED |
-| 409 | CONFLICT、INDEX_MAINTENANCE_IN_PROGRESS、INDEX_UPGRADE_REQUIRED、SEARCH_CONFIGURATION_CHANGED；detail区分重复版本、幂等payload冲突、缺Embedding配置或未完成审核/索引等 |
-| 413/415/422 | FILE_TOO_LARGE / UNSUPPORTED_FILE_TYPE / INVALID_REQUEST |
-| 503 | DATABASE_UNAVAILABLE、SEARCH_BACKEND_UNAVAILABLE、SEARCH_CAPACITY_EXCEEDED、MODEL_CONFIGURATION_BUSY、SEARCH_RESPONSE_LIMIT_EXCEEDED |
+| 409 | CONFLICT、INDEX_MAINTENANCE_IN_PROGRESS、INDEX_UPGRADE_REQUIRED、SEARCH_CONFIGURATION_CHANGED、EVIDENCE_SNAPSHOT_CHANGED、EVIDENCE_PACKAGE_INVALID及VOICE_TOKENIZER_*；detail区分重复版本、幂等payload冲突、缺Embedding配置、未完成审核/索引及证据修订问题 |
+| 413/415/422 | FILE_TOO_LARGE / UNSUPPORTED_FILE_TYPE / INVALID_REQUEST / TOKEN_BUDGET_TOO_SMALL / CONTEXT_BINDING_INVALID |
+| 503 | DATABASE_UNAVAILABLE、SEARCH_BACKEND_UNAVAILABLE、SEARCH_CAPACITY_EXCEEDED、MODEL_CONFIGURATION_BUSY、SEARCH_RESPONSE_LIMIT_EXCEEDED、EVIDENCE_RESPONSE_LIMIT_EXCEEDED |
 | 504 | SEARCH_DEADLINE_EXCEEDED；不返回未完成最终复验的正文 |
 | 500 | INTERNAL_ERROR；无驱动/模型密钥或完整请求回显 |
 
@@ -319,3 +322,47 @@ detail为字符串或校验错误列表（仅loc/msg/type，不回显input/ctx�
 顶层字段包含document_id/version_id、revision、status、source_hash、source_version_id、digest、issues、metadata、scope_counts、total/offset/limit、nodes及edges。节点包含id/parent_id/kind/ordinal/text/title_path/source_spans/parse_quality/parser_key/attributes、必要闭包dependencies。边包含id/source_id/target_id/type/required/provenance。必要闭包state为complete/limited，列出已核验node_ids及超限/循环原因；结构边不自动升级为必要条件。
 
 status=complete表示已识别规范结构已保存，仍不认证OCR/语义充分性；limited明确报告结构/依赖问题；legacy_unavailable表示旧版本没有规范树，返回reparse_original_required，不能把旧chunks冒充完整源树。跨请求分页需固定version_id，节点ordinal按父先子后，重复同名章节ID不同。图digest标识源树、来源和处理映射，权限不冻结在摘要中。新接口不改变/v2/search的响应字段或unassessed语义。
+
+## 9. 问题级证据接口
+
+`POST /v2/evidence/query`是外部回答系统的回答资格接口，要求KB read。它在一次有界请求内复用BM25、向量、adaptive选择和最多一次内部扩大召回，再逐问题项检查主体、必要上下文、S1源节点、条件、冲突和最终权限快照。它不生成自然语言回答。`POST /v2/search`仍用于搜索、调试和检索评测，其`evidence_status=unassessed`不替代本接口。
+
+严格、可运行的合成夹具见[请求](examples/evidence-query-v2-request.json)和[响应](examples/evidence-query-v2-response.json)。请求主要字段：
+
+| 字段 | 规则 |
+| --- | --- |
+| contract_revision | 可省略，默认且只接受`cuekb.evidence/2.1`；不兼容值422 |
+| question / search_query | question为完整当前问题，最长2000字符；search_query可省略，不能用它改变问题项含义 |
+| kb_ids / filters | 沿用授权KB与V2过滤；服务端先鉴权再检索 |
+| context_bindings | 最多8个已确认目录实体；source只接受confirmed_conversation_context或user_selection；实体须存在于本次授权KB。单个绑定下推product_entity_id，多个绑定下推product_entity_ids，并在PG最终复验同一集合 |
+| requested_facets | 最多8项，id唯一；question_span是Python/Unicode code point的半开区间`[start,end)`，text必须与该区间对应文本完全一致；省略时按显式问号/分号有界拆分，无法拆分则整句一个facet |
+| delivery_profile | standard或voice；只改变交付视图tokenizer，不改变事实判断 |
+| max_groups / token_budget | 最多1—5组；完整model_view按登记tokenizer精确计数，预算32—4096；不能切掉半组或必要条件 |
+| timeout_ms | 可选100—10000，只能缩短服务器总deadline |
+| request_id / input_revision | 调用链和当前输入修订；不参与授权 |
+
+响应的`facets[].support`只可能为`direct/entailed/absent/ambiguous/conflicting/unassessed`。当前`structured-support-1`没有已配置的支持校准模型，因此不会产生`entailed`：`direct`要求原文/受控词法概念明确覆盖问题项、主体已确认或在问题中明确、必要依赖完整，并且每个证据块有当前S1源节点；语义近似但无法证明时为`unassessed`。`absent`仅表示本次授权来源与有界检索计划没有可采纳支持。技术降级、旧版无源树或预算不足不会伪装成absent。
+
+`decision`消费动作如下：
+
+| decision | 调用方动作 |
+| --- | --- |
+| answer | 所有facet为direct/entailed；按model_view回答一次 |
+| partial_answer | 只回答已有证据项，明确model_view.missing；本次为终态 |
+| clarify | 使用clarification向用户确认主体；不要让模型自行继续搜 |
+| insufficient | 说明当前无法确认；区分assessment.limitations与知识缺失 |
+| conflict | 展示conflicts对应证据，不任选一个值 |
+
+`evidence`是完整审计组，包含主体、原文statement、required_context、conditions、完整性和来源短ID；`sources`把短ID映射到当前document/version/chunk/node/anchor。`model_view`是可直接注入模型的精简视图，不含UUID、排序分数和调试候选。任何因token预算移除的组会同步从facet引用中移除并将该项降为unassessed。`delivery.serialization=canonical-json-v1`表示对`model_view`按UTF-8、Unicode原字符、对象键排序、无额外空白的紧凑JSON计数；`delivery.byte_count/token_count`分别是该完整字符串的UTF-8字节数和精确token数，后者必须小于等于请求预算。`retrieval.resolved_entity_ids`回显本次已核验的确认绑定，不包含模型猜测候选。
+
+`delivery_profile=standard`固定使用`cuekb-unicode-lexical-v1`。voice必须由运行方登记实际VoiceChat `tokenizer.json`和不可变revision；未配置、文件损坏或不可读分别返回409 `VOICE_TOKENIZER_NOT_CONFIGURED/VOICE_TOKENIZER_INVALID/VOICE_TOKENIZER_UNAVAILABLE`，不会用字符数冒充Nano token。当前词法支持器含少量受控形态与storage/shipping概念归一；其他同义改写可能保守返回unassessed，必须通过标注集扩展并重新验收，不能把高相关分数升级为direct。
+
+`continuation.allowed`当前始终false。服务内部已经完成允许的一次扩大召回；没有不同且受约束的后续计划时返回`answered`或`no_distinct_retrieval_plan`，调用方不能自行构造token或重复调用同一输入。
+
+成功响应带短期`package.id`和expires_at。正式提交回答前调用`POST /v2/evidence/validate`：
+
+```json
+{"contract_revision":"cuekb.evidence/2.1","package_id":"<query响应package.id>","request_id":"delivery-check"}
+```
+
+成功体的status为valid或stale，只返回当前content/authorization revisions，不返回旧正文；包过期、内容或ACL修订变化为stale。复验`request_id`存在时必须与原query一致。签名损坏、不兼容包或请求不匹配返回409 `EVIDENCE_PACKAGE_INVALID`；不同principal/API Key使用包返回403。夹具见[复验请求](examples/evidence-validate-v2-request.json)和[复验响应](examples/evidence-validate-v2-response.json)。复验只能说明当前权限/修订仍匹配，无法撤回已经发送或播放的内容。

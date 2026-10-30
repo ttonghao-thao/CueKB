@@ -1,6 +1,6 @@
 # 文档导航
 
-当前规范更新于2026-10-26。源码、初始化schema和生成契约共同描述实现；测试结论以[任务板](../TASK_BOARD.md)为准。
+当前规范更新于2026-10-30。源码、初始化schema和生成契约共同描述实现；测试结论以[任务板](../TASK_BOARD.md)为准。
 
 | 阅读目的 | 主文档 |
 | --- | --- |
@@ -19,8 +19,8 @@
 | 规则导入、选择式审核与事实级检索改进 | [当前设计](SYSTEM_DESIGN.md#32-规则导入与选择式审核)、[批准稿入口](IMPORT_REVIEW_DESIGN.md) |
 | 自动关联独立离线实验 | [实验说明](../experiments/associations/README.md) |
 | 已接受的架构决策 | [DECISIONS](../DECISIONS.md) |
-| 机器可读契约 | [OpenAPI](contracts/openapi.json)、[V2请求Schema](contracts/search-v2-request.schema.json)、[V2响应Schema](contracts/search-v2-response.schema.json) |
-| 可校验的合成示例 | [请求](examples/search-v2-request.json)、[响应](examples/search-v2-response.json) |
+| 机器可读契约 | [OpenAPI](contracts/openapi.json)、[搜索请求](contracts/search-v2-request.schema.json)、[搜索响应](contracts/search-v2-response.schema.json)、[问题级证据请求](contracts/evidence-query-v2-request.schema.json)、[问题级证据响应](contracts/evidence-query-v2-response.schema.json) |
+| 可校验的合成示例 | [搜索请求](examples/search-v2-request.json)、[搜索响应](examples/search-v2-response.json)、[问题级请求](examples/evidence-query-v2-request.json)、[问题级响应](examples/evidence-query-v2-response.json)、[S3金标模板](examples/evidence-gold-v2.example.json) |
 
 已被实现替代的审查方案和使用旧源码基线的关联研究方案已删除，当前能力与操作以上表主文档为准；独立离线实验保留实际可运行说明。历史设计用Git追溯，不再维护与当前实现冲突的副本。每项事实只在其主文档维护。
 

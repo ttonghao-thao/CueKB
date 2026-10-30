@@ -3,6 +3,7 @@
     "category": null,
     "document_ids": [],
     "product_entity_id": null,
+    "product_entity_ids": [],
     "product_model": null,
     "software_version": null
   },

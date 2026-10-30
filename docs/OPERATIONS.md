@@ -1,6 +1,6 @@
 # 部署与操作手册
 
-更新：2026-10-27。下列是部署与保留数据升级的运行步骤，不是本轮已部署的证据。真实环境执行记录在[任务板](../TASK_BOARD.md)。
+更新：2026-10-30。下列是部署与保留数据升级的运行步骤，不是本轮已部署的证据。真实环境执行记录在[任务板](../TASK_BOARD.md)。
 
 ## 1. 环境与配置
 
@@ -11,6 +11,7 @@ Python 3.11以上；Docker镜像基于Python 3.12，Compose使用PostgreSQL 17.6
 - `CUEKB_API_KEY_PEPPER`至少32字符，`CUEKB_BOOTSTRAP_API_KEY`至少24字符；bootstrap拥有系统管理员权限，只作初始化和管理。
 - `CUEKB_MODEL_CONFIG_KEY`至少32字符，用于PG模型凭据加密，API/Worker必须相同且长期备份。更换后旧凭据不可读，不能仅靠PG备份恢复。
 - 模型地址、API Key与model由门户系统管理员配置，不能直接用任意Embedding模型覆盖既有向量。缺配置时API可启动，但相关操作明确阻断。
+- voice问题级请求需把实际VoiceChat镜像使用的Hugging Face `tokenizer.json`放到宿主`deploy/tokenizers/`，设置`CUEKB_EVIDENCE_VOICE_TOKENIZER_PATH=/etc/cuekb/tokenizers/<文件>`及不可变`CUEKB_EVIDENCE_VOICE_TOKENIZER_ID`。两项必须同时为空或同时有效；文件只读加载，不提交模型资产到Git。
 - 默认API宿主端口8085；PG/OS不映射宿主端口。OS security plugin关闭，只应在隔离内部网络访问。Compose不提供TLS；对外访问由反向代理/网络层提供HTTPS与受控访问。
 
 检索候选、时限与容量的默认值见[系统约束](SYSTEM_CONSTRAINTS.md)和env示例。调大deadline不是性能证明；应按目标硬件和服务延迟测量。多API进程容量会叠加，Worker模型任务不受V2进程内配额约束。
@@ -138,3 +139,32 @@ CUEKB_API_IMAGE=cuekb-api:before-s1 CUEKB_WORKER_IMAGE=cuekb-worker:before-s1 do
 rollback-check必须成功且pending_jobs=0；旧Worker不能处理新修订的待执行任务。升级失败且新API尚未启动时，直接用旧镜像启动命令恢复即可，schema仍为事务前状态。回退应用后保留新扩展表、原件和备份；恢复历史业务事实依然通过restore产生新版本，不靠恢复旧ACL。整库备份恢复只用于灾难演练/隔离库，不在正常应用回退时覆盖生产新数据。
 
 PDF/OCR仍需部署环境中可用的Docling解析/OCR资源；CPU运行不等于无需模型文件。预置缓存并验证下载网络；TXT/DOCX通过不替代PDF验证。现场执行与回传统一见[验收7.5](ACCEPTANCE.md#75-s1文档核心与门户本批部署验收)，提供容器内采集命令。
+
+## 9. S3问题级证据部署与回退
+
+S3本身没有新增数据库迁移，也不改变OpenSearch mapping。若当前部署早于审核修复提交`8a5aacc`，先按第8节构建同一提交之后的API与Worker并执行0003升级；不能只替换S3 API却保留旧Worker/schema。已部署该版本、`cuekb-db check`通过且文档已用S1重处理/发布时，无需再次升级、重建Worker或generation。本批增加API代码、tokenizers运行依赖、OpenAPI和只读tokenizer目录，因此必须重建并重新创建API容器；只重启旧容器不会加载新接口或挂载。
+
+部署前从实际VoiceChat运行镜像确认tokenizer文件和不可变revision。不要从名称相似的公开模型猜文件；文件hash、VoiceChat镜像/提交与配置ID一起记录。若暂不验证voice，可保持两项配置为空，standard请求可用，voice请求预期409。部署命令：
+
+```bash
+set -e
+git pull --ff-only origin main
+s3_api_container=$(docker compose --env-file .env.production ps -q api)
+docker image tag "$(docker inspect --format '{{.Image}}' "$s3_api_container")" cuekb-api:before-s3
+docker build --target api -t cuekb-api:latest .
+docker compose --env-file .env.production up -d --no-build --no-deps --force-recreate api
+docker compose --env-file .env.production exec -T api cuekb-db check
+curl --fail --silent --show-error http://127.0.0.1:8085/v2/ready
+```
+
+自定义API镜像标签时把构建目标改为`.env.production`中`CUEKB_API_IMAGE`的实际值。Compose将宿主`deploy/tokenizers`只读挂载到`/etc/cuekb/tokenizers`；目录随仓库存在，文件须让容器UID10001可读。配置变化需要`force-recreate api`。`CUEKB_EVIDENCE_PACKAGE_TTL_SECONDS`默认30、范围5—300；`CUEKB_EVIDENCE_RESPONSE_MAX_BYTES`默认256000、范围16384—1048576，调大不替代消费预算或负载验收。
+
+应用回退不改数据库：
+
+```bash
+docker compose --env-file .env.production stop api
+CUEKB_API_IMAGE=cuekb-api:before-s3 docker compose --env-file .env.production up -d --no-build --no-deps --force-recreate api
+curl --fail --silent --show-error http://127.0.0.1:8085/v2/ready
+```
+
+回退后voice-service-agent必须继续使用尚未切换的问题级契约版本，或按联合发布矩阵回退消费者；未知路径/契约不得静默改为重复`/v2/search`。现场金标、package复验、tokenizer身份与时延采集见[验收7.7](ACCEPTANCE.md#77-s3问题级证据部署验收)。

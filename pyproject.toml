@@ -15,6 +15,7 @@ dependencies = [
   "psycopg[binary]>=3.2,<4",
   "opensearch-py>=2.8,<4",
   "httpx>=0.28,<1",
+  "tokenizers>=0.23,<1",
 ]
 
 [project.optional-dependencies]

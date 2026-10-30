@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "contract_revision": {
+      "const": "cuekb.evidence/2.1",
+      "default": "cuekb.evidence/2.1",
+      "title": "Contract Revision",
+      "type": "string"
+    },
+    "package_id": {
+      "maxLength": 16384,
+      "minLength": 20,
+      "title": "Package Id",
+      "type": "string"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Request Id"
+    }
+  },
+  "required": [
+    "package_id"
+  ],
+  "title": "EvidenceValidateRequest",
+  "type": "object"
+}

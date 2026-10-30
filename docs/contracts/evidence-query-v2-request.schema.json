@@ -1,0 +1,260 @@
+{
+  "$defs": {
+    "EvidenceContextBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": {
+          "format": "uuid",
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "confirmed_conversation_context",
+            "user_selection"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "source"
+      ],
+      "title": "EvidenceContextBinding",
+      "type": "object"
+    },
+    "EvidenceFacetInput": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "question_span": {
+          "items": {
+            "maximum": 2000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Question Span",
+          "type": "array"
+        },
+        "text": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "question_span"
+      ],
+      "title": "EvidenceFacetInput",
+      "type": "object"
+    },
+    "V2SearchFilters": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Category"
+        },
+        "document_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Document Ids",
+          "type": "array"
+        },
+        "product_entity_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Product Entity Id"
+        },
+        "product_entity_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Product Entity Ids",
+          "type": "array"
+        },
+        "product_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Product Model"
+        },
+        "software_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Software Version"
+        }
+      },
+      "title": "V2SearchFilters",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "context_bindings": {
+      "items": {
+        "$ref": "#/$defs/EvidenceContextBinding"
+      },
+      "maxItems": 8,
+      "title": "Context Bindings",
+      "type": "array"
+    },
+    "contract_revision": {
+      "const": "cuekb.evidence/2.1",
+      "default": "cuekb.evidence/2.1",
+      "title": "Contract Revision",
+      "type": "string"
+    },
+    "delivery_profile": {
+      "default": "standard",
+      "enum": [
+        "standard",
+        "voice"
+      ],
+      "title": "Delivery Profile",
+      "type": "string"
+    },
+    "filters": {
+      "$ref": "#/$defs/V2SearchFilters"
+    },
+    "input_revision": {
+      "default": 1,
+      "maximum": 2147483647,
+      "minimum": 1,
+      "title": "Input Revision",
+      "type": "integer"
+    },
+    "kb_ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "maxItems": 50,
+      "minItems": 1,
+      "title": "Kb Ids",
+      "type": "array"
+    },
+    "max_groups": {
+      "default": 5,
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Max Groups",
+      "type": "integer"
+    },
+    "question": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Question",
+      "type": "string"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Request Id"
+    },
+    "requested_facets": {
+      "items": {
+        "$ref": "#/$defs/EvidenceFacetInput"
+      },
+      "maxItems": 8,
+      "title": "Requested Facets",
+      "type": "array"
+    },
+    "search_query": {
+      "anyOf": [
+        {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Search Query"
+    },
+    "timeout_ms": {
+      "anyOf": [
+        {
+          "maximum": 10000,
+          "minimum": 100,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Timeout Ms"
+    },
+    "token_budget": {
+      "default": 120,
+      "maximum": 4096,
+      "minimum": 32,
+      "title": "Token Budget",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "question",
+    "kb_ids"
+  ],
+  "title": "EvidenceQueryRequest",
+  "type": "object"
+}

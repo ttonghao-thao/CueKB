@@ -1,6 +1,6 @@
 # 外部模型接入
 
-更新：2026-10-26。CueKB只调用Embedding和可选Reranker，不调用生成式答案模型。管理员通过`GET/PUT /v2/model-configuration`或门户配置，字段Schema以[OpenAPI](contracts/openapi.json)为准。
+更新：2026-10-30。CueKB只调用Embedding和可选Reranker，不调用生成式答案模型。管理员通过`GET/PUT /v2/model-configuration`或门户配置，字段Schema以[OpenAPI](contracts/openapi.json)为准。
 
 ## 1. Embedding协议
 
@@ -47,3 +47,9 @@ V2模型transport按配置修订复用并原生异步调用，连接/读取受�
 模型会收到query及候选/文档检索文本。运行方须自行确定模型服务的数据边界与权限，不能为了测试擅自上传私有文档到公共付费服务。模型Key加密保存在PG，接口不回显明文，日志不输出Key或正文。
 
 接入先在获授权的非私有合成数据上验证index回序、维度、finite校验、超时和取消，再用固定真实语料做无Reranker/有Reranker对照。默认BGE类模型是既有质量基线选择，不代表所有硬件、语言或文档的效果保证。
+
+## 5. 问题级证据的注册tokenizer
+
+`delivery_profile=standard`使用内置`cuekb-unicode-lexical-v1`，只用于通用CPU交付预算。`delivery_profile=voice`不会调用外部模型，但必须在API容器只读挂载与实际VoiceChat镜像完全相同的Hugging Face `tokenizer.json`，并配置不可变revision ID。运行时只加载服务端登记文件，请求不能指定路径、代码或任意模型。
+
+`delivery.serialization=canonical-json-v1`表示完整`model_view`先按对象键排序、Unicode原字符、无额外空白的紧凑JSON序列化，再以登记tokenizer且`add_special_tokens=false`计数。该数字不含VoiceChat系统提示、聊天模板和其他会话token；调用方仍须测量最终注入总量与GPU时延。文件缺失、损坏或未登记会明确拒绝voice请求，不能回退到字符数。挂载与环境变量见[操作手册](OPERATIONS.md#9-s3问题级证据部署与回退)，生产金标见[验收7.7](ACCEPTANCE.md#77-s3问题级证据部署验收)。

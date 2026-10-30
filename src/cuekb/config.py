@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     v2_max_inflight: int = Field(default=16, ge=1, le=128)
     v2_refill_min_remaining_ms: int = Field(default=180, ge=10, le=5000)
     v2_relevance_profile_path: str = ""
+    evidence_voice_tokenizer_path: str = ""
+    evidence_voice_tokenizer_id: str = ""
+    evidence_package_ttl_seconds: int = Field(default=30, ge=5, le=300)
+    evidence_response_max_bytes: int = Field(default=256000, ge=16384, le=1048576)
     exact_identifier_pattern: str = (
         r"^(?:[A-Za-z][A-Za-z0-9_.:/+-]*\d[A-Za-z0-9_.:/+-]*|[A-Z][A-Z0-9_./:-]{2,})$"
     )
@@ -67,6 +71,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "production requires CUEKB_MODEL_CONFIG_KEY with at least 32 characters"
             )
+        if bool(self.evidence_voice_tokenizer_path) != bool(self.evidence_voice_tokenizer_id):
+            raise ValueError(
+                "CUEKB_EVIDENCE_VOICE_TOKENIZER_PATH and "
+                "CUEKB_EVIDENCE_VOICE_TOKENIZER_ID must be configured together"
+            )
+        if len(self.evidence_voice_tokenizer_id) > 200:
+            raise ValueError("evidence voice tokenizer id is too long")
         return self
 
 

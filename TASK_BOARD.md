@@ -1,8 +1,8 @@
 # CueKB 任务板
 
-## 当前修复：导入审核与发布可用性（2026-10-28，编码完成/待部署验收）
+## 上期：导入审核与发布可用性（2026-10-28，已提交/待部署验收）
 
-用户现场反馈：多产品片段无法确认、批量通用确认被拒绝、审核应用重复生成待发布版本，以及检索返回`relevance_profile_invalid`。本轮授权包含方案完善、编码与验证，不包含提交、推送或生产部署。
+用户现场反馈：多产品片段无法确认、批量通用确认被拒绝、审核应用重复生成待发布版本，以及检索返回`relevance_profile_invalid`。该批修复已经提交至`main`（`8a5aacc`），生产部署与现场验收仍待执行。
 
 | 里程碑 | 状态 | 工作与验收 |
 | --- | --- | --- |
@@ -24,7 +24,28 @@
 
 ### 部署与下一步
 
-本轮未提交、未推送、未部署。升级必须使用含0003迁移的新API与Worker镜像，操作步骤见[保留数据升级](docs/OPERATIONS.md#8-s1保留数据升级验证与回退)。部署后按[审核修复验收](docs/ACCEPTANCE.md#76-分类审核原草稿发布与校准故障修复验收)回传结果；生产校准文件的实际内容/权限问题仍需现场诊断，不把本地故障注入当作现场根因取证。
+已提交至`main`，尚未部署。升级必须使用含0003迁移的新API与Worker镜像，操作步骤见[保留数据升级](docs/OPERATIONS.md#8-s1保留数据升级验证与回退)。部署后按[审核修复验收](docs/ACCEPTANCE.md#76-分类审核原草稿发布与校准故障修复验收)回传结果；生产校准文件的实际内容/权限问题仍需现场诊断，不把本地故障注入当作现场根因取证。
+
+## 本期：S3问题级证据接口（2026-10-30，编码完成/待部署验收）
+
+输入来自voice-service-agent现场验证需求：一次请求内完成完整问题召回、逐问题项支持判断、最小闭合证据选择和终态决策，避免消费端自行拆分及重复检索。本批实现独立`cuekb.evidence/2.1`严格契约、`POST /v2/evidence/query`、短期证据包复验、精简模型视图、真实tokenizer预算门禁及provider fixture；`/v2/search`继续保留且不把其`unassessed`升级为答案充分性。
+
+安全边界：无校准支持模型时只允许可由原文、可信主体、S1源节点和完整必要关系证明的`direct`；不产生`entailed`。语义近似候选保留`unassessed`，技术降级不伪装为知识缺失。voice profile未登记真实tokenizer时拒绝请求，不用字符/词数冒充目标模型token。
+
+### S3本批已实现
+
+- 新增严格`cuekb.evidence/2.1`请求/响应及provider JSON Schema/OpenAPI/真实序列化fixture；新增`POST /v2/evidence/query`和`POST /v2/evidence/validate`，未知字段、修订和枚举拒绝。
+- 一次请求复用V2混合召回、adaptive选择和服务内一次补召回；最多8 facet、5证据组。逐项返回direct/absent/ambiguous/conflicting/unassessed及全局answer/partial_answer/clarify/insufficient/conflict；当前不输出未经校准的entailed，continuation不授权重复检索。
+- 确认实体在检索前核验并参与产品过滤；单实体使用product_entity_id，多实体使用product_entity_ids集合下推OpenSearch并在PG复验。多个确认实体下问题仍未指明主体时返回clarify，不任选一个。最终PG快照再次核验Key/ACL、内容和ACL修订、当前发布正文、必要块及S1 node映射。变化有界重跑一次；无源节点/依赖不完整不能认证direct。
+- 完整审计组与精简model_view同时返回；预算不足整组移除并同步降级facet。standard使用固定tokenizer；voice必须从只读目录加载真实Hugging Face tokenizer JSON及ID，否则409。
+- 短期签名包绑定principal/API Key、KB、request ID、input revision、内容/ACL修订与快照；validate只返回valid/stale，篡改、跨请求及跨principal拒绝，不回传旧正文。
+- 新增严格生产金标验证器与模板：逐题检查decision/facet/missing、禁止产品、组数、tokenizer/预算、continuation及即时包复验，可重复采集脱敏trace、阶段时序和查询P50/P95/max；具体部署/回传见ACCEPTANCE 7.7。
+
+### 本轮开发验证与现场边界
+
+- 新增14项问题级单元/HTTP测试通过：Golden/Black隔离，组合问题部分回答与shipping absent，必要限定保留，未绑定及多确认主体clarify，多主体OpenSearch过滤，同产品数值conflict，无S1节点unassessed，包内容修订stale与50 KB边界，权威快照变化有界重选，签名篡改/跨主体/跨请求拒绝，整组预算回退同步，voice真实tokenizer/进程缓存门禁及闭合请求契约。
+- 隔离真实PostgreSQL 17.6/OpenSearch 3.0.0执行完整回归：306 passed、1 skipped、0 failed（2条既有弃用警告）；skip为当前环境未配置用户月饼原件路径，不解释为语料通过。真实PG确认retrieval_unit_nodes、content/acl revision及当前发布正文在同一权威快照返回，真实OpenSearch传输验证多实体terms过滤。契约生成及freshness、Ruff F/E9、compileall、门户JS语法、金标模板解析、wheel源码清单、API target镜像构建及镜像内tokenizers 0.23.2与问题级路由检查通过；实际部署身份和生产语义质量仍须现场验收。
+- 尚未使用原月饼全文、生产OpenSearch/Embedding、实际VoiceChat tokenizer、真实consumer或GPU/音频验收；本地规则通过不代表自动answer质量、P95或重复工具调用目标达标。S3部署后须按ACCEPTANCE第7.7节回传固定金标和时延报告，失败再修复。
 
 ## 本期：S1文档核心与门户操作（2026-10-27，编码完成/待部署验收）
 
@@ -50,7 +71,7 @@
 | 数据演进 | 包内0001/0002 SQL迁移+checksum，空库SQL同链导出；旧完整基线核对表/列类型/索引/枚举后升级；有待执行导入拒绝升级；事务失败回滚；保留扩展schema的应用回退检查 |
 | 部署验证入口 | cuekb-db upgrade/check/rollback-check及cuekb-validate-s1；合成TXT/MD/DOCX/PDF经真实API/Worker验证并导出报告；操作、回退、采集与门户用例已落地 |
 
-S1是文档核心和本批门户能力，尚未交付S2通用隐含关系/异常问题队列、S3问题级证据决策、S4消费状态机、S5真实语音性能或S6上线替换。现有/v2/search仍返回unassessed，不把源树complete标成答案充分。词法预算不是目标模型精确token计数。
+S1是文档核心和本批门户能力。S3问题级证据决策已由上节交付，但尚待生产语料验收；仍未交付S2通用隐含关系/异常问题队列、S4消费状态机、S5真实语音性能或S6上线替换。现有/v2/search仍返回unassessed，不把源树complete标成答案充分。
 
 ### 开发验证与现场边界
 
@@ -63,4 +84,4 @@ S1是文档核心和本批门户能力，尚未交付S2通用隐含关系/异常
 
 ### 后续
 
-收到本批部署报告后逐项记录通过、失败或证据不足；失败针对修复，不要求用户自行诊断。代码推送不等于生产验收；S2–S6仍按计划推进，S0现场基线缺项需另行补采。
+收到部署报告后逐项记录通过、失败或证据不足；失败针对修复，不要求用户自行诊断。代码推送不等于生产验收；S2、S4–S6仍按计划推进，S0现场基线缺项需另行补采。

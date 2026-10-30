@@ -46,6 +46,7 @@ def test_native_async_model_protocol_and_finite_validation(monkeypatch):
 def test_native_async_opensearch_projection_and_local_filter(monkeypatch):
     import json
     chunk_id, kb_id = uuid4(), uuid4()
+    product_ids = [uuid4(), uuid4()]
     bodies = []
     projection = "evidence-v2"
     async def handler(request):
@@ -67,6 +68,7 @@ def test_native_async_opensearch_projection_and_local_filter(monkeypatch):
             await search.validate_v2_projection_async()
             rows = await search.keyword_search_async("A", [kb_id], {
                 "product_model": "A",
+                "product_entity_ids": product_ids,
             }, 20, phrase=True)
             assert rows == [(chunk_id, 1.5)]
             assert await search.vector_search_async([.1, .2], [kb_id], {}, 20) == rows
@@ -78,6 +80,9 @@ def test_native_async_opensearch_projection_and_local_filter(monkeypatch):
     asyncio.run(run())
     assert bodies[0]["_source"] is False
     assert "applicable_product_models" in str(bodies[0])
+    assert {"terms": {"applicable_entity_ids": [str(item) for item in product_ids]}} in (
+        bodies[0]["query"]["bool"]["filter"]
+    )
     assert "source_text^3" in str(bodies[0])
 
 

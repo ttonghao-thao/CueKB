@@ -12,10 +12,14 @@ COPY src/ ./src/
 
 FROM builder AS api-builder
 RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=secret,id=proxy_ca,required=false \
+    if [ -f /run/secrets/proxy_ca ]; then export PIP_CERT=/run/secrets/proxy_ca; fi; \
     python -m pip install --constraint requirements.lock '.[api]'
 
 FROM builder AS worker-builder
 RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=secret,id=proxy_ca,required=false \
+    if [ -f /run/secrets/proxy_ca ]; then export PIP_CERT=/run/secrets/proxy_ca; fi; \
     python -m pip install --constraint requirements.lock \
         --index-url https://download.pytorch.org/whl/cpu \
         --no-deps torch \

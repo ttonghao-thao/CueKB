@@ -1,0 +1,64 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "authorization_revisions": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Authorization Revisions",
+      "type": "object"
+    },
+    "content_revisions": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Content Revisions",
+      "type": "object"
+    },
+    "contract_revision": {
+      "const": "cuekb.evidence/2.1",
+      "default": "cuekb.evidence/2.1",
+      "title": "Contract Revision",
+      "type": "string"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Request Id"
+    },
+    "status": {
+      "enum": [
+        "valid",
+        "stale"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "trace_id": {
+      "format": "uuid",
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "validated_at": {
+      "format": "date-time",
+      "title": "Validated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "trace_id",
+    "status",
+    "content_revisions",
+    "authorization_revisions",
+    "validated_at"
+  ],
+  "title": "EvidenceValidateResponse",
+  "type": "object"
+}

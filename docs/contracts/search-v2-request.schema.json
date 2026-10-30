@@ -104,6 +104,15 @@
           "default": null,
           "title": "Product Entity Id"
         },
+        "product_entity_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Product Entity Ids",
+          "type": "array"
+        },
         "product_model": {
           "anyOf": [
             {
